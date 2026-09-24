@@ -4,6 +4,8 @@ import os
 import sqlite3
 import time
 
+from .categories import CATEGORIES
+
 DB_PATH = os.environ.get("DEALS_DB", "/opt/deals/data/deals.db")
 
 SCHEMA = """
@@ -12,7 +14,9 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS searches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   query TEXT NOT NULL UNIQUE,
-  enabled INTEGER NOT NULL DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1,
+  category TEXT NOT NULL DEFAULT 'utv4',
+  last_run INTEGER                  -- last Facebook run (unix)
 );
 
 CREATE TABLE IF NOT EXISTS listings (
@@ -36,9 +40,10 @@ CREATE TABLE IF NOT EXISTS listings (
   last_checked INTEGER,             -- last item-page status check
   -- LLM-parsed
   parsed INTEGER NOT NULL DEFAULT 0,
-  relevant INTEGER,                 -- 1 = a 4+ seat UTV actually for sale
+  relevant INTEGER,                 -- 1 = a complete machine in one of our categories, for sale
+  category TEXT,                    -- see categories.py
   year INTEGER, make TEXT, model TEXT, family TEXT, trim TEXT,
-  seats INTEGER, hours INTEGER, miles INTEGER, turbo INTEGER,
+  seats INTEGER, hours INTEGER, miles INTEGER, turbo INTEGER, deck_in INTEGER, engine TEXT,
   is_dealer INTEGER, is_new INTEGER, motivated INTEGER, extras TEXT, red_flags TEXT, summary TEXT,
   -- scoring
   expected INTEGER, comps INTEGER, deal_pct REAL, score INTEGER, reasons TEXT,
@@ -48,6 +53,7 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 CREATE INDEX IF NOT EXISTS listings_family ON listings(family, year);
 CREATE INDEX IF NOT EXISTS listings_status ON listings(status);
+
 
 CREATE TABLE IF NOT EXISTS price_history (
   listing_id TEXT NOT NULL, ts INTEGER NOT NULL, price INTEGER NOT NULL
@@ -75,15 +81,12 @@ DEFAULT_SETTINGS = {
     "max_price": "",
     "min_year": "",
     "active_hours": "6-23",        # local hours the scanner runs
+    # per category: {"utv4": {"enabled": true, "max_price": "", "min_year": ""}, ...}
+    "alert_rules": json.dumps({c: {"enabled": True, "max_price": "", "min_year": ""} for c in CATEGORIES}),
+    "seed_version": "1",
 }
 
-DEFAULT_SEARCHES = [
-    "rzr xp 4", "rzr 4 seater", "rzr pro xp 4", "ranger crew", "ranger xp 1000 crew",
-    "can am defender max", "can am maverick max", "can am commander max",
-    "honda pioneer 1000-5", "kawasaki teryx4", "teryx krx4", "polaris general 4",
-    "yamaha wolverine x4", "4 seat side by side", "crew utv",
-]
-
+SEED_VERSION = 2   # bump when categories.py gains default searches
 
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -94,22 +97,44 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def _add_columns(con, table, cols: dict):
+    have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+    for name, decl in cols.items():
+        if name not in have:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init() -> None:
     con = connect()
     con.executescript(SCHEMA)
-    have = {r["name"] for r in con.execute("PRAGMA table_info(listings)")}
-    if "is_new" not in have:
-        con.execute("ALTER TABLE listings ADD COLUMN is_new INTEGER")
+    _add_columns(con, "listings", {"is_new": "INTEGER", "category": "TEXT",
+                                   "deck_in": "INTEGER", "engine": "TEXT"})
+    _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER"})
+    con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     for k, v in DEFAULT_SETTINGS.items():
         con.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
-    if con.execute("SELECT COUNT(*) FROM searches").fetchone()[0] == 0:
-        con.executemany("INSERT INTO searches(query) VALUES (?)", [(q,) for q in DEFAULT_SEARCHES])
+    seeded = int(con.execute("SELECT value FROM settings WHERE key='seed_version'").fetchone()[0])
+    if seeded < SEED_VERSION or con.execute("SELECT COUNT(*) FROM searches").fetchone()[0] == 0:
+        for cat, c in CATEGORIES.items():
+            for q in c["searches"]:
+                con.execute("INSERT OR IGNORE INTO searches(query, category) VALUES (?, ?)", (q, cat))
+        con.execute("UPDATE settings SET value = ? WHERE key = 'seed_version'", (str(SEED_VERSION),))
     con.commit()
     con.close()
 
 
 def settings(con) -> dict:
     return {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM settings")}
+
+
+def alert_rules(st: dict) -> dict:
+    try:
+        rules = json.loads(st.get("alert_rules") or "{}")
+    except ValueError:
+        rules = {}
+    for c in CATEGORIES:
+        rules.setdefault(c, {"enabled": True, "max_price": "", "min_year": ""})
+    return rules
 
 
 def now() -> int:

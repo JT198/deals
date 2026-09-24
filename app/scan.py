@@ -17,14 +17,17 @@ import httpx
 from playwright.async_api import async_playwright
 
 from . import db, geo, notify, parse, score
+from .categories import cfg
 from .sources import craigslist
 from .sources.facebook import Facebook, pause
 
 MAX_ALERTS_PER_RUN = 6
-FB_DETAILS_PER_RUN = 30
+FB_SEARCHES_PER_RUN = 16      # keeps a run inside the 20-minute timer slot
+FB_DETAILS_PER_RUN = 40
 FB_RECHECKS_PER_RUN = 12
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
+PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
 STALE_AFTER = 5 * 86400
 
 
@@ -91,8 +94,15 @@ async def run(force=False, backfill=False) -> None:
         return
     radius = int(st.get("radius_mi") or 100)
     boost = 5 if backfill else 1   # catch-up runs take bigger bites
-    queries = [r["query"] for r in con.execute("SELECT query FROM searches WHERE enabled = 1")]
-    random.shuffle(queries)
+    searches = [dict(r) for r in con.execute("SELECT * FROM searches WHERE enabled = 1")]
+    random.shuffle(searches)
+    # Facebook: each search runs on its category's cadence (4-seat UTVs + mowers every run, others hourly)
+    t0 = db.now()
+    due = [s for s in searches if backfill or not s["last_run"]
+           or s["last_run"] <= t0 - cfg(s["category"])["every_min"] * 60 + 180]
+    due.sort(key=lambda s: s["last_run"] or 0)
+    if not backfill:
+        due = due[:FB_SEARCHES_PER_RUN]
     # we hold the lock, so any unfinished run was killed part-way
     con.execute("""UPDATE runs SET finished = started, errors = '["interrupted"]' WHERE finished IS NULL""")
     run_id = con.execute("INSERT INTO runs(started, source) VALUES (?, 'all')", (db.now(),)).lastrowid
@@ -102,9 +112,11 @@ async def run(force=False, backfill=False) -> None:
 
     async with craigslist.client() as http:
         # --- Craigslist search
-        for q in queries:
+        for srch in searches:
+            q = srch["query"]
             try:
-                items = await craigslist.search(http, q, st.get("home_zip", "55447"), radius)
+                items = await craigslist.search(http, q, st.get("home_zip", "55446"), radius,
+                                                cfg(srch["category"])["cl_cat"])
                 found += len(items)
                 new += sum(upsert(con, "craigslist", i) for i in items)
                 con.commit()
@@ -116,18 +128,20 @@ async def run(force=False, backfill=False) -> None:
         try:
             async with async_playwright() as pw, Facebook(pw) as fb:
                 empty = 0
-                for q in queries:
+                for srch in due:
+                    q = srch["query"]
                     try:
-                        items = await fb.search(q, st.get("fb_location", "minneapolis"), radius,
+                        items = await fb.search(q, st.get("fb_location", "plymouth-mn"), radius,
                                                 sort="best_match" if backfill else "newest")
                         found += len(items)
                         empty += not items
                         new += sum(upsert(con, "facebook", i) for i in items)
+                        con.execute("UPDATE searches SET last_run = ? WHERE id = ?", (db.now(), srch["id"]))
                         con.commit()
                     except Exception as e:
                         errors.append(f"fb '{q}': {e}")
                     await pause()
-                if empty == len(queries):
+                if due and empty == len(due):
                     errors.append("facebook returned nothing for every search (login wall?)")
 
                 todo = con.execute(
@@ -165,17 +179,21 @@ async def run(force=False, backfill=False) -> None:
             """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
                  AND (detail_fetched = 1 OR first_seen < ?)
                ORDER BY first_seen DESC LIMIT ?""", (db.now() - 3600, PARSES_PER_RUN * boost)).fetchall()
-        for r in rows:
-            try:
-                p = await parse.parse(http, dict(r))
-            except Exception as e:
-                errors.append(f"parse {r['id']}: {e}")
-                continue
+        gate = asyncio.Semaphore(PARSE_CONCURRENCY)
+
+        async def parse_one(r):
+            async with gate:
+                try:
+                    p = await parse.parse(http, dict(r))
+                except Exception as e:
+                    errors.append(f"parse {r['id']}: {e}")
+                    return
             if p is None:
-                continue
+                return
             cols = ", ".join(f"{k} = ?" for k in p)
             con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
             con.commit()
+        await asyncio.gather(*(parse_one(r) for r in rows))
 
         # listings we haven't seen or confirmed in a while are probably gone
         con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
@@ -205,13 +223,14 @@ async def send_alerts(con, http, st, quiet=False) -> int:
     args: list = [threshold]
     if st.get("alert_private_only") == "1":
         sql += " AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
-    if st.get("max_price"):
-        sql += " AND price <= ?"
-        args.append(int(st["max_price"]))
-    if st.get("min_year"):
-        sql += " AND year >= ?"
-        args.append(int(st["min_year"]))
-    rows = con.execute(sql + " ORDER BY score DESC", args).fetchall()
+    rules = db.alert_rules(st)
+
+    def wanted(r):
+        rule = rules.get(r["category"]) or {}
+        return (rule.get("enabled")
+                and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
+                and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
+    rows = [r for r in con.execute(sql + " ORDER BY score DESC", args).fetchall() if wanted(r)]
     if not rows:
         return 0
     sent = 0

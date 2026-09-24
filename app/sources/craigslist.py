@@ -1,6 +1,6 @@
 """Craigslist: the no-JS search page lists every hit as plain HTML.
 
-Searches the "atvs, utvs, snowmobiles" category (owner + dealer) within
+Searches a category (sna = atvs/utvs/snowmobiles, grd = farm & garden; owner + dealer) within
 radius_mi of the home zip; posting pages supply the date, body, image and
 whether it was posted by owner or dealer.
 """
@@ -28,8 +28,9 @@ def client() -> httpx.AsyncClient:
     return httpx.AsyncClient(headers={"User-Agent": UA}, timeout=30, follow_redirects=True)
 
 
-async def search(http: httpx.AsyncClient, query: str, zip_code: str, radius_mi: int) -> list[dict]:
-    url = (f"https://minneapolis.craigslist.org/search/sna?query={quote(query)}"
+async def search(http: httpx.AsyncClient, query: str, zip_code: str, radius_mi: int,
+                 cat: str = "sna") -> list[dict]:
+    url = (f"https://minneapolis.craigslist.org/search/{cat}?query={quote(query)}"
            f"&search_distance={radius_mi}&postal={zip_code}")
     r = await http.get(url)
     r.raise_for_status()

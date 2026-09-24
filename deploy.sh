@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Push code + units to the deals LXC (116, 10.10.10.82). Never touches /opt/deals/.env or data/.
+# Push code + units to the deals LXC (ct 116 on pveai). Never touches /opt/deals/.env or data/.
+# Goes through the Proxmox host (pct push/exec) so it works even if the LXC's LAN IP is unreachable.
 set -euo pipefail
-HOST=root@10.10.10.82
+PVE=root@10.10.10.251
+CT=116
 cd "$(dirname "$0")"
 python3 -m py_compile app/*.py app/sources/*.py
-rsync -a --delete --exclude __pycache__ app/ "$HOST":/opt/deals/app/
-scp -q deploy/*.service deploy/*.timer "$HOST":/etc/systemd/system/
-scp -q deploy/nginx-deals.conf "$HOST":/etc/nginx/sites-available/deals
-scp -q deploy/logrotate-deals "$HOST":/etc/logrotate.d/deals
-ssh "$HOST" 'systemctl daemon-reload && nginx -t -q && systemctl reload nginx && systemctl restart deals-web && sleep 2 && curl -fsS -o /dev/null http://127.0.0.1/api/status && echo "deployed OK"'
+tar --exclude=__pycache__ -czf - app deploy | ssh "$PVE" "cat > /tmp/deals-deploy.tgz && pct push $CT /tmp/deals-deploy.tgz /tmp/deals-deploy.tgz && rm /tmp/deals-deploy.tgz"
+ssh "$PVE" "pct exec $CT -- bash -c '
+  set -e; rm -rf /tmp/deals-new && mkdir /tmp/deals-new && tar -xzf /tmp/deals-deploy.tgz -C /tmp/deals-new
+  rm -rf /opt/deals/app && mv /tmp/deals-new/app /opt/deals/app
+  cp /tmp/deals-new/deploy/*.service /tmp/deals-new/deploy/*.timer /etc/systemd/system/
+  cp /tmp/deals-new/deploy/nginx-deals.conf /etc/nginx/sites-available/deals
+  cp /tmp/deals-new/deploy/logrotate-deals /etc/logrotate.d/deals
+  systemctl daemon-reload && nginx -t -q && systemctl reload nginx && systemctl restart deals-web
+  sleep 2 && curl -fsS -o /dev/null http://127.0.0.1/api/status && echo deployed OK'"

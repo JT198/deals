@@ -8,31 +8,33 @@ import math
 import statistics
 import time
 
-DEPRECIATION = 0.08          # per model year, used to line up +/-1 year comps
+from .categories import cfg
+
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
 
 
 def _comps(con) -> dict[str, list[tuple]]:
+    """family -> [(id, year|None, price, deck_in|None)] of used asking prices."""
     rows = con.execute(
-        """SELECT id, family, year, price FROM listings
-           WHERE relevant = 1 AND family IS NOT NULL AND year IS NOT NULL
-             AND COALESCE(is_new, 0) = 0 AND price >= 1500 AND last_seen >= ?""",
+        """SELECT id, family, year, price, deck_in FROM listings
+           WHERE relevant = 1 AND family IS NOT NULL
+             AND COALESCE(is_new, 0) = 0 AND price >= 300 AND last_seen >= ?""",
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[tuple]] = {}
     for r in rows:
-        by_fam.setdefault(r["family"], []).append((r["id"], r["year"], r["price"]))
+        by_fam.setdefault(r["family"], []).append((r["id"], r["year"], r["price"], r["deck_in"]))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
-        med = statistics.median(p for _, _, p in lst)
+        med = statistics.median(c[2] for c in lst)
         by_fam[fam] = [c for c in lst if c[2] >= 0.3 * med]
     return by_fam
 
 
 def _fit(comps):
     """log(price) = a + b*year, least squares, slope clipped to a sane range."""
-    xs = [y for _, y, _ in comps]
-    ys = [math.log(p) for _, _, p in comps]
+    xs = [c[1] for c in comps]
+    ys = [math.log(c[2]) for c in comps]
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     var = sum((x - mx) ** 2 for x in xs)
     b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / var if var else 0.08
@@ -42,17 +44,26 @@ def _fit(comps):
 
 def expected_price(listing, comps_by_fam) -> tuple[int | None, int]:
     fam, year = listing["family"], listing["year"]
-    if not fam or not year:
+    if not fam:
         return None, 0
-    others = [c for c in comps_by_fam.get(fam, []) if c[0] != listing["id"]]
-    near = [c for c in others if abs(c[1] - year) <= 1]
+    c = cfg(listing["category"])
+    others = [x for x in comps_by_fam.get(fam, []) if x[0] != listing["id"]]
+    deck = listing["deck_in"]
+    if deck:   # mowers: a 42" and a 60" of the same series are different machines
+        same_deck = [x for x in others if x[3] and abs(x[3] - deck) <= 6]
+        if len(same_deck) >= 4:
+            others = same_deck
+    if not year:
+        return (int(statistics.median(x[2] for x in others)), len(others)) if len(others) >= 5 else (None, len(others))
+    dated = [x for x in others if x[1]]
+    near = [x for x in dated if abs(x[1] - year) <= c["window"]]
     if len(near) >= 4:
-        adj = [p * (1 + DEPRECIATION) ** (year - y) for _, y, p in near]
+        adj = [x[2] * (1 + c["dep"]) ** (year - x[1]) for x in near]
         return int(statistics.median(adj)), len(near)
-    yrs = [y for _, y, _ in others]
-    if len(others) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1:
-        a, b = _fit(others)
-        return int(math.exp(a + b * year)), len(others)
+    yrs = [x[1] for x in dated]
+    if c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1:
+        a, b = _fit(dated)
+        return int(math.exp(a + b * year)), len(dated)
     return None, len(others)
 
 
@@ -87,13 +98,14 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
         reasons.append("motivated seller")
 
     age = max(1, NOW_YEAR - (listing["year"] or NOW_YEAR) + 1)
-    if listing["miles"] is not None or listing["hours"] is not None:
+    if listing["year"] and (listing["miles"] is not None or listing["hours"] is not None):
         mpy = (listing["miles"] or 0) / age
         hpy = (listing["hours"] or 0) / age
-        if (listing["miles"] is not None and mpy < 800) or (listing["hours"] is not None and hpy < 60):
+        c = cfg(listing["category"])
+        if (listing["miles"] is not None and mpy < 800) or (listing["hours"] is not None and hpy < c["low_hpy"]):
             s += 3
             reasons.append("low use")
-        elif mpy > 3000 or hpy > 200:
+        elif mpy > 3000 or hpy > c["high_hpy"]:
             s -= 6
             reasons.append("high use")
 

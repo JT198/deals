@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import db, geo, score
-from .parse import FAMILIES
+from .categories import CATEGORIES, FAMILY_CATEGORY
 
 TUNNEL_IPS = set(os.environ.get("TUNNEL_IPS", "10.10.10.5").split(","))
 ALLOWED = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
@@ -51,7 +51,7 @@ def _geo(con):
     return dist
 
 
-LIST_COLS = """id, source, url, title, price, first_price, strike_price, location, image, seller_type,
+LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, extras, red_flags, summary, expected, comps, deal_pct, score,
   reasons, starred, hidden"""
@@ -97,22 +97,27 @@ def mark(lid: str, body: dict = Body(...)):
 def market(family: str):
     """Asking prices by year for one family, plus the expected-price curve."""
     con = db.connect()
-    pts = [dict(r) for r in con.execute(
-        """SELECT id, title, year, price, status, is_dealer, seller_type, url, miles, hours, location
-           FROM listings WHERE relevant = 1 AND family = ? AND year IS NOT NULL AND price >= 1500
+    rows = [dict(r) for r in con.execute(
+        """SELECT id, title, year, price, status, is_dealer, seller_type, url, miles, hours, location,
+                  deck_in, is_new
+           FROM listings WHERE relevant = 1 AND family = ? AND price >= 300
            ORDER BY year""", (family,))]
+    pts = [p for p in rows if p["year"]]
+    undated = sorted(p["price"] for p in rows if not p["year"])
     comps = score._comps(con)
     years = sorted({p["year"] for p in pts})
     curve = []
     if years:
         for y in range(years[0], years[-1] + 1):
-            fake = {"id": "", "family": family, "year": y}
+            fake = {"id": "", "family": family, "year": y, "category": FAMILY_CATEGORY.get(family),
+                    "deck_in": None}
             exp, n = score.expected_price(fake, comps)
             if exp:
                 curve.append({"year": y, "price": exp})
     for p in pts:
         p["dealer"] = bool(p["is_dealer"] == 1 or p["seller_type"] == "dealer")
-    return {"points": pts, "curve": curve}
+    return {"points": pts, "curve": curve,
+            "undated": {"count": len(undated), "median": undated[len(undated) // 2] if undated else None}}
 
 
 @app.get("/api/families")
@@ -120,17 +125,24 @@ def families():
     con = db.connect()
     counts = {r["family"]: r["n"] for r in con.execute(
         "SELECT family, COUNT(*) n FROM listings WHERE relevant = 1 AND family IS NOT NULL GROUP BY family")}
-    return [{"family": f, "count": counts.get(f, 0)} for f in FAMILIES if counts.get(f)]
+    return [{"family": f, "category": c, "count": counts[f]}
+            for c, cf in CATEGORIES.items() for f in cf["families"] if counts.get(f)]
+
+
+@app.get("/api/categories")
+def categories():
+    return [{"key": k, "label": c["label"], "emoji": c["emoji"]} for k, c in CATEGORIES.items()]
 
 
 @app.get("/api/settings")
 def get_settings():
     con = db.connect()
-    return {"settings": db.settings(con),
-            "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY id")]}
+    st = db.settings(con)
+    return {"settings": st, "alert_rules": db.alert_rules(st),
+            "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
 
-EDITABLE = {"radius_mi", "alert_threshold", "alert_private_only", "max_price", "min_year",
+EDITABLE = {"radius_mi", "alert_threshold", "alert_private_only", "alert_rules",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
 
@@ -140,6 +152,10 @@ def put_settings(body: dict = Body(...)):
     for k, v in body.items():
         if k not in EDITABLE:
             raise HTTPException(400, f"unknown setting {k}")
+        if k == "alert_rules":
+            v = json.dumps({c: {"enabled": bool(r.get("enabled")), "max_price": str(r.get("max_price") or ""),
+                                "min_year": str(r.get("min_year") or "")}
+                            for c, r in v.items() if c in CATEGORIES})
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, str(v).strip()))
     con.commit()
     return get_settings()
@@ -151,7 +167,8 @@ def add_search(body: dict = Body(...)):
     if not q:
         raise HTTPException(400, "query required")
     con = db.connect()
-    con.execute("INSERT OR IGNORE INTO searches(query) VALUES (?)", (q,))
+    cat = body.get("category") if body.get("category") in CATEGORIES else "utv4"
+    con.execute("INSERT OR IGNORE INTO searches(query, category) VALUES (?, ?)", (q, cat))
     con.commit()
     return get_settings()
 

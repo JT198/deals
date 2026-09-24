@@ -54,6 +54,13 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
   padding: 6px 9px; font: inherit; min-width: 0; }
 .filters input[type=number] { width: 110px; }
 .filters label { display: flex; gap: 6px; align-items: center; color: var(--text-2); }
+.cats { display: flex; gap: 6px; margin: 12px 0 2px; overflow-x: auto; padding-bottom: 2px; }
+.cats button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 10px;
+  padding: 7px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
+.cats button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.cats button span { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.rules td { white-space: nowrap; }
+.rules input[type=number] { width: 110px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px;
   padding: 3px 10px; cursor: pointer; font-size: 13px; }
@@ -124,13 +131,14 @@ td.t { white-space: normal; min-width: 240px; }
     <button data-tab="market">Market</button>
     <button data-tab="setup">Setup</button>
   </nav>
+  <div class="cats" id="cats"></div>
 </header>
 <main>
   <section id="filtersec">
     <div class="filters">
       <input id="f-q" type="search" placeholder="Search title / notes" style="width:200px">
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
-      <label>Min year <input id="f-year" type="number" min="1995" max="2030"></label>
+      <label>Min year <input id="f-year" type="number" min="1965" max="2030"></label>
       <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
       <label>Listed <select id="f-age"><option value="">any time</option><option value="1">last 24 hours</option>
         <option value="3">last 3 days</option><option value="7">last 7 days</option></select></label>
@@ -160,6 +168,7 @@ const api = async (url, opt) => { const r = await fetch(url, opt); if (!r.ok) th
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals." + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem("deals." + k, JSON.stringify(v)); } catch {} } };
 
+let CATS = [], CAT = store.get("cat", "utv4");
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
 const F = Object.assign({ q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
   store.get("filters", {}));
@@ -176,6 +185,7 @@ function save() { store.set("filters", F); render(); }
 function filtered() {
   const q = F.q.trim().toLowerCase();
   return DATA.filter(d =>
+    (CAT === "all" || d.category === CAT) &&
     (F.hidden || !d.hidden) &&
     (!F.star || d.starred) &&
     (!F.priv || !d.dealer) &&
@@ -190,13 +200,23 @@ function filtered() {
 
 function famChips() {
   const counts = {};
-  DATA.forEach(d => { if (d.family) counts[d.family] = (counts[d.family] || 0) + 1; });
+  DATA.forEach(d => { if (d.family && (CAT === "all" || d.category === CAT)) counts[d.family] = (counts[d.family] || 0) + 1; });
   const fams = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
   $("#f-fams").innerHTML = fams.map(f =>
     `<button class="chip ${F.fams.includes(f) ? "on" : ""}" data-f="${esc(f)}">${esc(f)} · ${counts[f]}</button>`).join("");
   $("#f-fams").onclick = e => { const f = e.target.dataset.f; if (!f) return;
     F.fams = F.fams.includes(f) ? F.fams.filter(x => x !== f) : [...F.fams, f]; famChips(); save(); };
 }
+
+function catBar() {
+  const n = {}; DATA.forEach(d => n[d.category] = (n[d.category] || 0) + 1);
+  const items = [...CATS.map(c => [c.key, `${c.emoji} ${c.label}`, n[c.key] || 0]), ["all", "All", DATA.length]];
+  $("#cats").innerHTML = items.map(([k, label, c]) =>
+    `<button data-cat="${k}" class="${k === CAT ? "on" : ""}">${esc(label)}<span>${c}</span></button>`).join("");
+}
+$("#cats").onclick = e => { const b = e.target.closest("[data-cat]"); if (!b) return;
+  CAT = b.dataset.cat; store.set("cat", CAT); F.fams = []; store.set("filters", F); catBar(); famChips(); render(); };
+const catOf = k => CATS.find(c => c.key === k) || { label: "", emoji: "" };
 
 function badge(d) {
   const cls = d.score >= 75 ? "great" : d.score >= 60 ? "good" : "";
@@ -210,7 +230,8 @@ function vsTypical(d) {
   return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>`;
 }
 function facts(d) {
-  return [d.year, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
+  return [CAT === "all" ? catOf(d.category).label : null, d.year,
+    d.deck_in ? d.deck_in + '" deck' : null, d.engine || null, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
     .filter(Boolean).map(esc).join(" · ");
@@ -272,16 +293,21 @@ let MARKET_FAM = store.get("marketFam", null);
 async function renderMarket() {
   const fams = await api("/api/families");
   if (!fams.length) { $("#tab-market").innerHTML = `<div class="empty">No parsed listings yet.</div>`; return; }
-  if (!MARKET_FAM || !fams.some(f => f.family === MARKET_FAM)) MARKET_FAM = fams.sort((a, b) => b.count - a.count)[0].family;
+  const inCat = fams.filter(f => CAT === "all" || f.category === CAT);
+  const pool = inCat.length ? inCat : fams;
+  if (!MARKET_FAM || !pool.some(f => f.family === MARKET_FAM)) MARKET_FAM = [...pool].sort((a, b) => b.count - a.count)[0].family;
   const m = await api("/api/market?family=" + encodeURIComponent(MARKET_FAM));
   $("#tab-market").innerHTML = `<div class="panel">
-    <div class="filters"><label>Model <select id="m-fam">${fams.map(f =>
-      `<option ${f.family === MARKET_FAM ? "selected" : ""}>${esc(f.family)}</option>`).join("")}</select></label>
+    <div class="filters"><label>Model <select id="m-fam">${CATS.map(c => {
+      const fs = fams.filter(f => f.category === c.key); if (!fs.length) return "";
+      return `<optgroup label="${esc(c.label)}">${fs.map(f =>
+        `<option value="${esc(f.family)}" ${f.family === MARKET_FAM ? "selected" : ""}>${esc(f.family)} (${f.count})</option>`).join("")}</optgroup>`; }).join("")}</select></label>
       <span class="hint">Every asking price we've seen for this model (including sold/removed), by model year.</span></div>
     <h2>${esc(MARKET_FAM)}: asking price by model year</h2>
     <div class="legend"><span><i style="background:var(--series-1)"></i>Private seller</span>
       <span><i style="background:var(--series-2)"></i>Dealer</span><span><i class="line"></i>Typical price</span></div>
-    <div class="chart-wrap" id="chart"></div></div>
+    <div class="chart-wrap" id="chart"></div>
+    ${m.undated.count ? `<p class="hint">${m.undated.count} more listing${m.undated.count > 1 ? "s" : ""} gave no model year (median asking ${money(m.undated.median)}); they count toward "typical" for other no-year listings only.</p>` : ""}</div>
     <div class="tablewrap"><table><thead><tr><th>Year</th><th>Listings</th><th>Low</th><th>Median</th><th>High</th><th>Typical (model)</th></tr></thead><tbody>
     ${yearTable(m)}</tbody></table></div>`;
   $("#m-fam").onchange = e => { MARKET_FAM = e.target.value; store.set("marketFam", MARKET_FAM); renderMarket(); };
@@ -345,14 +371,23 @@ async function renderSetup() {
     <label>Alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
       <option value="0" ${v.alert_private_only !== "1" ? "selected" : ""}>Private and dealers</option></select></label>
-    <label>Alert max price<input name="max_price" type="number" value="${esc(v.max_price)}" placeholder="any"></label>
-    <label>Alert min year<input name="min_year" type="number" value="${esc(v.min_year)}" placeholder="any"></label>
     <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
-  </div><p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
-  <div class="panel"><h2>Searches</h2><p class="hint">Each runs on Craigslist and Facebook every scan. Broad terms find more; the model filters out 2-seaters, parts and wanted ads.</p>
-    <div class="searchlist">${s.searches.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
-      <span>${esc(q.query)}</span><button class="btn" data-del="${q.id}">Remove</button></div>`).join("")}</div>
-    <p class="filters"><input id="newq" placeholder="add a search, e.g. mule pro fxt"><button class="btn" id="addq">Add</button></p></div>
+  </div>
+  <h2 style="margin-top:16px">Alerts by category</h2>
+  <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Alerts</th><th>Max price</th><th>Min year</th></tr></thead><tbody>
+    ${CATS.map(c => { const r = s.alert_rules[c.key] || {}; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
+      <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
+      <td><input type="number" step="500" data-r="max_price" value="${esc(r.max_price)}" placeholder="any"></td>
+      <td><input type="number" data-r="min_year" value="${esc(r.min_year)}" placeholder="any"></td></tr>`; }).join("")}
+  </tbody></table></div>
+  <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
+  <div class="panel"><h2>Searches</h2><p class="hint">Craigslist runs every search each scan. Facebook runs 4-seat UTV and mower searches every scan (20 min) and the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
+    ${CATS.map(c => { const qs = s.searches.filter(q => q.category === c.key); return `<h3 style="font-size:13px;margin:14px 0 6px">${c.emoji} ${esc(c.label)}</h3>
+    <div class="searchlist">${qs.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
+      <span>${esc(q.query)}</span><button class="btn" data-del="${q.id}">Remove</button></div>`).join("") || '<span class="hint">none</span>'}</div>`; }).join("")}
+    <p class="filters" style="margin-top:14px"><input id="newq" placeholder="add a search, e.g. mule pro fxt">
+      <select id="newcat">${CATS.map(c => `<option value="${c.key}" ${c.key === CAT ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
+      <button class="btn" id="addq">Add</button></p></div>
   <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
     ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;
@@ -361,6 +396,10 @@ async function renderSetup() {
     document.querySelectorAll("#setform [name]").forEach(i => {
       if (i.name === "home_latlon") { const [a, b] = i.value.split(",").map(x => x.trim()); body.home_lat = a; body.home_lon = b; }
       else body[i.name] = i.value; });
+    body.alert_rules = {};
+    document.querySelectorAll("[data-rule]").forEach(tr => { const r = {};
+      tr.querySelectorAll("[data-r]").forEach(i => r[i.dataset.r] = i.type === "checkbox" ? i.checked : i.value);
+      body.alert_rules[tr.dataset.rule] = r; });
     try { await api("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       $("#savemsg").textContent = "Saved."; } catch (e) { $("#savemsg").textContent = "Save failed: " + e.message; }
   };
@@ -369,7 +408,7 @@ async function renderSetup() {
   $("#tab-setup").onclick = async e => {
     if (e.target.dataset.del) { await api("/api/searches/" + e.target.dataset.del, { method: "DELETE" }); renderSetup(); }
     if (e.target.id === "addq" && $("#newq").value.trim()) {
-      await api("/api/searches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: $("#newq").value }) }); renderSetup(); }
+      await api("/api/searches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: $("#newq").value, category: $("#newcat").value }) }); renderSetup(); }
   };
 }
 
@@ -378,6 +417,7 @@ function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   ["deals", "all", "market", "setup"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
   $("#filtersec").hidden = !(TAB === "deals" || TAB === "all");
+  $("#cats").hidden = TAB === "setup";
   if (TAB === "deals") renderDeals();
   if (TAB === "all") renderAll();
   if (TAB === "market") renderMarket();
@@ -402,7 +442,9 @@ async function status() {
   $("#scanbtn").disabled = st.scanning; $("#scanbtn").textContent = st.scanning ? "Scanning…" : "Scan now";
   if (st.scanning) setTimeout(status, 15000);
 }
-async function load() { DATA = await api("/api/listings"); famChips(); render(); }
+async function load() {
+  if (!CATS.length) CATS = await api("/api/categories");
+  DATA = await api("/api/listings"); catBar(); famChips(); render(); }
 window.addEventListener("resize", () => { if (TAB === "market") renderMarket(); });
 bindFilters(); load(); status();
 setInterval(() => { load(); status(); }, 5 * 60 * 1000);

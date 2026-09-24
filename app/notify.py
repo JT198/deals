@@ -5,6 +5,8 @@ import os
 
 import httpx
 
+from .categories import cfg
+
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://deals.lan")
@@ -16,11 +18,13 @@ def enabled() -> bool:
 
 def listing_caption(r) -> str:
     e = html.escape
-    bits = [f"🚙 <b>{e(r['title'])}</b>",
+    bits = [f"{cfg(r['category'])['emoji']} <b>{e(r['title'])}</b>",
             f"<b>${r['price']:,}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
             + f"  ·  score {r['score']}"]
     facts = [x for x in (
         r["location"],
+        f"{r['deck_in']}\" deck" if r["deck_in"] else None,
+        r["engine"],
         f"{r['miles']:,} mi" if r["miles"] is not None else None,
         f"{r['hours']:,} hrs" if r["hours"] is not None else None,
         "dealer" if (r["is_dealer"] == 1 or r["seller_type"] == "dealer") else "private seller",

@@ -4,6 +4,7 @@ LLM, re-score everything, send alerts. Run by deals-scan.timer.
   python -m app.scan            # normal run (skipped outside active_hours)
   python -m app.scan --force    # run now regardless of the clock
   python -m app.scan --backfill # first run: "best match" sort + no alert flood
+  python -m app.scan --backfill --no-search   # just finish item pages + parsing
 """
 import asyncio
 import fcntl
@@ -85,7 +86,7 @@ def in_active_hours(st) -> bool:
     return a <= time.localtime().tm_hour < b
 
 
-async def run(force=False, backfill=False) -> None:
+async def run(force=False, backfill=False, search=True) -> None:
     db.init()
     con = db.connect()
     st = db.settings(con)
@@ -103,6 +104,8 @@ async def run(force=False, backfill=False) -> None:
     due.sort(key=lambda s: s["last_run"] or 0)
     if not backfill:
         due = due[:FB_SEARCHES_PER_RUN]
+    if not search:
+        searches, due = [], []
     # we hold the lock, so any unfinished run was killed part-way
     con.execute("""UPDATE runs SET finished = started, errors = '["interrupted"]' WHERE finished IS NULL""")
     run_id = con.execute("INSERT INTO runs(started, source) VALUES (?, 'all')", (db.now(),)).lastrowid
@@ -141,7 +144,7 @@ async def run(force=False, backfill=False) -> None:
                     except Exception as e:
                         errors.append(f"fb '{q}': {e}")
                     await pause()
-                if due and empty == len(due):
+                if due and empty == len(due):  # (skipped when --no-search)
                     errors.append("facebook returned nothing for every search (login wall?)")
 
                 todo = con.execute(
@@ -159,7 +162,7 @@ async def run(force=False, backfill=False) -> None:
                         con.commit()
                     except Exception as e:
                         errors.append(f"fb detail {r['ext_id']}: {e}")
-                    await asyncio.sleep(random.uniform(2, 5))
+                    await asyncio.sleep(random.uniform(1, 3))
         except Exception as e:
             errors.append(f"facebook: {e}")
 
@@ -255,7 +258,8 @@ def main():
         print("another scan is running")
         return
     try:
-        asyncio.run(run(force="--force" in sys.argv, backfill="--backfill" in sys.argv))
+        asyncio.run(run(force="--force" in sys.argv, backfill="--backfill" in sys.argv,
+                        search="--no-search" not in sys.argv))
     except Exception:
         traceback.print_exc()
         sys.exit(1)

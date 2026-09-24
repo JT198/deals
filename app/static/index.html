@@ -132,6 +132,12 @@ td.t { white-space: normal; min-width: 240px; }
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
       <label>Min year <input id="f-year" type="number" min="1995" max="2030"></label>
       <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
+      <label>Listed <select id="f-age"><option value="">any time</option><option value="1">last 24 hours</option>
+        <option value="3">last 3 days</option><option value="7">last 7 days</option></select></label>
+      <label>Condition <select id="f-cond"><option value="">any</option><option value="used">used only</option>
+        <option value="new">new only</option></select></label>
+      <label>Sort <select id="f-sort"><option value="score">best deal</option><option value="newest">newest first</option>
+        <option value="price">lowest price</option></select></label>
       <label><input id="f-private" type="checkbox"> Private only</label>
       <label><input id="f-star" type="checkbox"> Starred</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
@@ -155,10 +161,12 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals.
                 set(k, v) { try { localStorage.setItem("deals." + k, JSON.stringify(v)); } catch {} } };
 
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
-const F = store.get("filters", { q: "", max: "", year: "", dist: "", priv: false, star: false, hidden: false, fams: [] });
+const F = Object.assign({ q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
+  store.get("filters", {}));
+const listedAt = d => d.listed_at || d.first_seen;
 
 function bindFilters() {
-  const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist" };
+  const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
   for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value; save(); }; }
   const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden" };
   for (const [id, k] of Object.entries(cb)) { $("#" + id).checked = F[k]; $("#" + id).onchange = e => { F[k] = e.target.checked; save(); }; }
@@ -175,6 +183,8 @@ function filtered() {
     (!F.year || (d.year && d.year >= +F.year)) &&
     (!F.dist || d.distance == null || d.distance <= +F.dist) &&
     (!F.fams.length || F.fams.includes(d.family)) &&
+    (!F.age || listedAt(d) >= Date.now() / 1000 - F.age * 86400) &&
+    (!F.cond || (F.cond === "new" ? d.is_new === 1 : d.is_new !== 1)) &&
     (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "")).toLowerCase().includes(q)));
 }
 
@@ -210,7 +220,8 @@ function card(d) {
   const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
   return `<article class="card">
     <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image ? `background-image:url('${esc(d.image)}')` : ""}">
-      ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>' : ""}</a>
+      ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
+        : listedAt(d) > Date.now() / 1000 - 86400 ? '<span class="ribbon">Just listed</span>' : ""}</a>
     <div class="body">
       <h3>${esc(d.title)}</h3>
       <div class="price">${money(d.price)}${was > d.price ? `<s>${money(was)}</s>` : ""}</div>
@@ -229,20 +240,24 @@ function card(d) {
 }
 
 function renderDeals() {
-  const rows = filtered().sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.first_seen - a.first_seen));
+  const by = { score: (a, b) => (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
+    newest: (a, b) => listedAt(b) - listedAt(a),
+    price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
+  const rows = filtered().sort(by[F.sort] || by.score);
   $("#tab-deals").innerHTML = rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
     : `<div class="empty">No listings match these filters yet.</div>`;
 }
 
-const COLS = [["score","Score"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],
+const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],
   ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
 function renderAll() {
   const [k, dir] = SORT;
+  filtered().forEach(d => d.listed = listedAt(d));
   const rows = filtered().sort((a, b) => { const x = a[k], y = b[k];
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
   $("#tab-all").innerHTML = `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
-    <td>${d.score ?? "–"}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
+    <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>
     <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>

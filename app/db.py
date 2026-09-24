@@ -64,12 +64,12 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 DEFAULT_SETTINGS = {
-    "home_label": "Plymouth, MN",
-    "home_zip": "55447",
-    "home_lat": "45.0105",
-    "home_lon": "-93.4555",
+    "home_label": "Plymouth, MN 55446",
+    "home_zip": "55446",
+    "home_lat": "45.0400",
+    "home_lon": "-93.4900",
     "radius_mi": "100",
-    "fb_location": "minneapolis",   # FB marketplace city slug; radius is applied around it
+    "fb_location": "plymouth-mn",  # FB marketplace city slug; radius is applied around it
     "alert_threshold": "75",
     "alert_private_only": "1",
     "max_price": "",

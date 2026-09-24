@@ -24,6 +24,7 @@ FAMILIES = [
 PROMPT = """You read used-vehicle classified ads for a buyer shopping for a 4-seat (or larger) UTV / side-by-side.
 Return ONLY a JSON object with these keys:
 Seat hints: "MAX", "Crew", "XP 4", "4-seat", "Teryx4", "KRX4", "X4", "RMAX4", "General 4", "Pioneer 1000-5/6", "6-passenger", "Viking VI" all mean 4+ seats - never call those 2-seat.
+A plain "General", "General 1000", "Ranger XP 1000", "Ranger 570", "RZR XP 1000", "RZR Pro XP", "Defender HD10", "Pioneer 1000", "Pioneer 700", "Teryx", "Wolverine X2" with no 4-seat marker are 2-3 seat models. Only mark relevant=true when the title, description or model name actually indicates 4+ seats; if unsure, relevant=false and seats=null.
 Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family.
 - relevant: true only if this ad is selling a complete side-by-side / UTV with 4 or more seats. false for 2-seat machines, ATVs/quads, snowmobiles, trailers, parts, accessories, "wanted"/"looking for" ads, rentals, and services.
 - year: model year as an integer, or null

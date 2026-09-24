@@ -1,0 +1,13 @@
+[Unit]
+Description=UTV deal finder scan (manual, ignores active hours)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/deals
+EnvironmentFile=/opt/deals/.env
+ExecStart=/opt/deals/venv/bin/python -m app.scan --force
+TimeoutStartSec=50min
+Nice=5
+StandardOutput=append:/var/log/deals-scan.log
+StandardError=append:/var/log/deals-scan.log

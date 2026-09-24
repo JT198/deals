@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>UTV Deal Finder</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚙</text></svg>">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3f0; --surface: #fcfcfb; --surface-2: #efeeea; --border: #e0ded8;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #7b7a75;
+  --accent: #2a78d6; --accent-ink: #ffffff;
+  --series-1: #2a78d6; --series-2: #eb6834; --curve: #52514e;
+  --good: #0f7b3a; --good-bg: #e3f3e8; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe6e4;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
+    --text: #ffffff; --text-2: #c3c2b7; --muted: #8f8e86;
+    --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926; --curve: #c3c2b7;
+    --good: #5fd08a; --good-bg: #16301f; --warn: #f0b457; --warn-bg: #33270f; --bad: #ff8a80; --bad-bg: #3a1a17;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
+  --text: #ffffff; --text-2: #c3c2b7; --muted: #8f8e86;
+  --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926; --curve: #c3c2b7;
+  --good: #5fd08a; --good-bg: #16301f; --warn: #f0b457; --warn-bg: #33270f; --bad: #ff8a80; --bad-bg: #3a1a17;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); }
+header { padding: 18px 16px 0; max-width: 1280px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+.sub { color: var(--text-2); margin-top: 2px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+nav { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+nav button { background: none; border: 0; padding: 9px 12px; color: var(--text-2); font: inherit; cursor: pointer;
+  border-bottom: 2px solid transparent; white-space: nowrap; }
+nav button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
+.btn { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+  padding: 6px 11px; font: inherit; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:disabled { opacity: .55; cursor: default; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.filters input, .filters select, .form input, .form select {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+  padding: 6px 9px; font: inherit; min-width: 0; }
+.filters input[type=number] { width: 110px; }
+.filters label { display: flex; gap: 6px; align-items: center; color: var(--text-2); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px;
+  padding: 3px 10px; cursor: pointer; font-size: 13px; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  display: flex; flex-direction: column; }
+.card .img { aspect-ratio: 16/10; background: var(--surface-2) center/cover no-repeat; position: relative; display: block; }
+.badge { position: absolute; top: 8px; left: 8px; border-radius: 8px; padding: 3px 8px; font-weight: 700; font-size: 13px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.badge.great { background: var(--good-bg); color: var(--good); border-color: transparent; }
+.badge.good { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.ribbon { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); color: #fff; border-radius: 6px; padding: 2px 7px; font-size: 12px; }
+.card .body { padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.card h3 { font-size: 15px; margin: 0; line-height: 1.3; }
+.price { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.price s { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 6px; }
+.typ { color: var(--text-2); font-size: 13px; }
+.under { color: var(--good); font-weight: 600; }
+.over { color: var(--bad); font-weight: 600; }
+.facts { color: var(--text-2); font-size: 13px; }
+.summary { font-size: 13px; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.tag { font-size: 12px; background: var(--surface-2); color: var(--text-2); border-radius: 6px; padding: 1px 7px; }
+.tag.flag { background: var(--bad-bg); color: var(--bad); }
+.tag.plus { background: var(--good-bg); color: var(--good); }
+.actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
+.actions .btn { padding: 4px 9px; font-size: 13px; }
+.empty { color: var(--text-2); padding: 40px 0; text-align: center; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { font-size: 12px; color: var(--text-2); cursor: pointer; user-select: none; background: var(--surface-2); }
+td.t { white-space: normal; min-width: 240px; }
+.tablewrap { overflow-x: auto; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+.panel h2 { font-size: 15px; margin: 0 0 10px; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 4px; color: var(--text-2); font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; }
+.searchlist { display: flex; flex-direction: column; gap: 6px; }
+.searchrow { display: flex; gap: 8px; align-items: center; }
+.searchrow span { flex: 1; }
+.chart-wrap { position: relative; }
+.chart-wrap svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 16px; color: var(--text-2); font-size: 13px; margin: 6px 0 2px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend i.line { border-radius: 0; height: 2px; width: 16px; vertical-align: 3px; background: var(--curve); }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); max-width: 260px; display: none; z-index: 5; }
+.runs td { font-size: 12px; }
+.err { color: var(--bad); font-size: 12px; white-space: normal; }
+@media (max-width: 600px) {
+  .grid { grid-template-columns: 1fr; }
+  .filters input[type=number] { width: 90px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>UTV Deal Finder</h1>
+  <div class="sub"><span id="statusline">Loading…</span>
+    <button class="btn" id="scanbtn">Scan now</button></div>
+  <nav id="tabs">
+    <button data-tab="deals" class="on">Best deals</button>
+    <button data-tab="all">All listings</button>
+    <button data-tab="market">Market</button>
+    <button data-tab="setup">Setup</button>
+  </nav>
+</header>
+<main>
+  <section id="filtersec">
+    <div class="filters">
+      <input id="f-q" type="search" placeholder="Search title / notes" style="width:200px">
+      <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
+      <label>Min year <input id="f-year" type="number" min="1995" max="2030"></label>
+      <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
+      <label><input id="f-private" type="checkbox"> Private only</label>
+      <label><input id="f-star" type="checkbox"> Starred</label>
+      <label><input id="f-hidden" type="checkbox"> Show hidden</label>
+    </div>
+    <div class="chips" id="f-fams" style="margin:-4px 0 14px"></div>
+  </section>
+  <section id="tab-deals"></section>
+  <section id="tab-all" hidden></section>
+  <section id="tab-market" hidden></section>
+  <section id="tab-setup" hidden></section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => n == null ? "—" : "$" + Math.round(n).toLocaleString();
+const ago = t => { if (!t) return ""; const s = Date.now()/1000 - t;
+  if (s < 3600) return Math.max(1, Math.round(s/60)) + "m ago"; if (s < 86400) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago"; };
+const api = async (url, opt) => { const r = await fetch(url, opt); if (!r.ok) throw new Error(r.status); return r.json(); };
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals." + k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem("deals." + k, JSON.stringify(v)); } catch {} } };
+
+let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
+const F = store.get("filters", { q: "", max: "", year: "", dist: "", priv: false, star: false, hidden: false, fams: [] });
+
+function bindFilters() {
+  const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist" };
+  for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value; save(); }; }
+  const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden" };
+  for (const [id, k] of Object.entries(cb)) { $("#" + id).checked = F[k]; $("#" + id).onchange = e => { F[k] = e.target.checked; save(); }; }
+}
+function save() { store.set("filters", F); render(); }
+
+function filtered() {
+  const q = F.q.trim().toLowerCase();
+  return DATA.filter(d =>
+    (F.hidden || !d.hidden) &&
+    (!F.star || d.starred) &&
+    (!F.priv || !d.dealer) &&
+    (!F.max || (d.price && d.price <= +F.max)) &&
+    (!F.year || (d.year && d.year >= +F.year)) &&
+    (!F.dist || d.distance == null || d.distance <= +F.dist) &&
+    (!F.fams.length || F.fams.includes(d.family)) &&
+    (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "")).toLowerCase().includes(q)));
+}
+
+function famChips() {
+  const counts = {};
+  DATA.forEach(d => { if (d.family) counts[d.family] = (counts[d.family] || 0) + 1; });
+  const fams = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  $("#f-fams").innerHTML = fams.map(f =>
+    `<button class="chip ${F.fams.includes(f) ? "on" : ""}" data-f="${esc(f)}">${esc(f)} · ${counts[f]}</button>`).join("");
+  $("#f-fams").onclick = e => { const f = e.target.dataset.f; if (!f) return;
+    F.fams = F.fams.includes(f) ? F.fams.filter(x => x !== f) : [...F.fams, f]; famChips(); save(); };
+}
+
+function badge(d) {
+  const cls = d.score >= 75 ? "great" : d.score >= 60 ? "good" : "";
+  const word = d.score >= 75 ? "Great " : d.score >= 60 ? "Good " : "";
+  return `<span class="badge ${cls}">${word}${d.score ?? "–"}</span>`;
+}
+function vsTypical(d) {
+  if (!d.expected) return `<span class="typ">Typical: not enough comps yet (${d.comps || 0})</span>`;
+  const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
+  const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
+  return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>`;
+}
+function facts(d) {
+  return [d.year, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
+    d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
+    d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
+    .filter(Boolean).map(esc).join(" · ");
+}
+function card(d) {
+  const was = Math.max(d.strike_price || 0, d.first_price || 0);
+  const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
+  return `<article class="card">
+    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image ? `background-image:url('${esc(d.image)}')` : ""}">
+      ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>' : ""}</a>
+    <div class="body">
+      <h3>${esc(d.title)}</h3>
+      <div class="price">${money(d.price)}${was > d.price ? `<s>${money(was)}</s>` : ""}</div>
+      ${vsTypical(d)}
+      <div class="facts">${facts(d)}</div>
+      ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
+      <div class="tags">${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+        ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
+        ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
+      <div class="actions">
+        <a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
+        <button class="btn" data-act="star" data-id="${esc(d.id)}">${d.starred ? "★ Starred" : "☆ Star"}</button>
+        <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
+      </div>
+    </div></article>`;
+}
+
+function renderDeals() {
+  const rows = filtered().sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.first_seen - a.first_seen));
+  $("#tab-deals").innerHTML = rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
+    : `<div class="empty">No listings match these filters yet.</div>`;
+}
+
+const COLS = [["score","Score"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],
+  ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
+function renderAll() {
+  const [k, dir] = SORT;
+  const rows = filtered().sort((a, b) => { const x = a[k], y = b[k];
+    if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+  $("#tab-all").innerHTML = `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
+    `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
+    <td>${d.score ?? "–"}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
+    <td>${money(d.price)}</td><td>${money(d.expected)}</td>
+    <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td>
+    <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
+    <td>${d.distance ?? "—"}</td><td>${d.dealer ? "dealer" : "private"}</td><td>${ago(d.first_seen)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="hint">${rows.length} listings. "Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
+  $("#tab-all thead").onclick = e => { const c = e.target.dataset.k; if (!c) return;
+    SORT = [c, SORT[0] === c ? -SORT[1] : (c === "title" || c === "family" ? 1 : -1)]; store.set("sort", SORT); renderAll(); };
+}
+
+// ---------- Market: asking price by model year for one family ----------
+let MARKET_FAM = store.get("marketFam", null);
+async function renderMarket() {
+  const fams = await api("/api/families");
+  if (!fams.length) { $("#tab-market").innerHTML = `<div class="empty">No parsed listings yet.</div>`; return; }
+  if (!MARKET_FAM || !fams.some(f => f.family === MARKET_FAM)) MARKET_FAM = fams.sort((a, b) => b.count - a.count)[0].family;
+  const m = await api("/api/market?family=" + encodeURIComponent(MARKET_FAM));
+  $("#tab-market").innerHTML = `<div class="panel">
+    <div class="filters"><label>Model <select id="m-fam">${fams.map(f =>
+      `<option ${f.family === MARKET_FAM ? "selected" : ""}>${esc(f.family)}</option>`).join("")}</select></label>
+      <span class="hint">Every asking price we've seen for this model (including sold/removed), by model year.</span></div>
+    <h2>${esc(MARKET_FAM)}: asking price by model year</h2>
+    <div class="legend"><span><i style="background:var(--series-1)"></i>Private seller</span>
+      <span><i style="background:var(--series-2)"></i>Dealer</span><span><i class="line"></i>Typical price</span></div>
+    <div class="chart-wrap" id="chart"></div></div>
+    <div class="tablewrap"><table><thead><tr><th>Year</th><th>Listings</th><th>Low</th><th>Median</th><th>High</th><th>Typical (model)</th></tr></thead><tbody>
+    ${yearTable(m)}</tbody></table></div>`;
+  $("#m-fam").onchange = e => { MARKET_FAM = e.target.value; store.set("marketFam", MARKET_FAM); renderMarket(); };
+  drawScatter($("#chart"), m);
+}
+function yearTable(m) {
+  const by = {}; m.points.forEach(p => (by[p.year] ||= []).push(p.price));
+  const curve = Object.fromEntries(m.curve.map(c => [c.year, c.price]));
+  return Object.keys(by).sort().reverse().map(y => { const v = by[y].sort((a, b) => a - b);
+    return `<tr><td>${y}</td><td>${v.length}</td><td>${money(v[0])}</td><td>${money(v[Math.floor(v.length/2)])}</td><td>${money(v[v.length-1])}</td><td>${money(curve[y])}</td></tr>`; }).join("");
+}
+function drawScatter(el, m) {
+  const W = Math.max(320, el.clientWidth), H = Math.min(420, Math.max(260, W * 0.45));
+  const pad = { l: 58, r: 14, t: 10, b: 30 };
+  const pts = m.points; if (!pts.length) { el.innerHTML = '<div class="empty">No data</div>'; return; }
+  const ys = pts.map(p => p.year).concat(m.curve.map(c => c.year));
+  const y0 = Math.min(...ys) - 0.5, y1 = Math.max(...ys) + 0.5;
+  const prices = pts.map(p => p.price).concat(m.curve.map(c => c.price));
+  const pmax = Math.max(...prices) * 1.08;
+  const step = niceStep(pmax / 5);
+  const X = y => pad.l + (y - y0) / (y1 - y0) * (W - pad.l - pad.r);
+  const Y = p => H - pad.b - p / (Math.ceil(pmax / step) * step) * (H - pad.t - pad.b);
+  let g = "";
+  for (let v = 0; v <= Math.ceil(pmax / step) * step; v += step)
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--border)" stroke-width="1"/>
+          <text x="${pad.l - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="var(--text-2)">${v >= 1000 ? "$" + v/1000 + "k" : "$" + v}</text>`;
+  const every = Math.ceil((y1 - y0) / Math.max(1, Math.floor((W - 80) / 46)));
+  for (let y = Math.ceil(y0); y <= y1; y += every)
+    g += `<text x="${X(y)}" y="${H - 10}" text-anchor="middle" font-size="11" fill="var(--text-2)">${y}</text>`;
+  const curve = m.curve.length > 1 ? `<polyline fill="none" stroke="var(--curve)" stroke-width="2" stroke-dasharray="5 4"
+    points="${m.curve.map(c => `${X(c.year)},${Y(c.price)}`).join(" ")}"/>` : "";
+  // jitter same-year points horizontally so stacks stay readable
+  const seen = {};
+  const dots = pts.map((p, i) => { const n = (seen[p.year] = (seen[p.year] || 0) + 1);
+    const jx = ((n % 7) - 3) * 3.2; const gone = p.status === "gone" || p.status === "sold";
+    return `<circle data-i="${i}" cx="${X(p.year) + jx}" cy="${Y(p.price)}" r="5" fill="${p.dealer ? "var(--series-2)" : "var(--series-1)"}"
+      fill-opacity="${gone ? .35 : .9}" stroke="var(--surface)" stroke-width="2" style="cursor:pointer"/>`; }).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Asking price by model year">${g}${curve}${dots}</svg><div class="tip"></div>`;
+  const tip = el.querySelector(".tip");
+  el.querySelector("svg").onmousemove = e => { const c = e.target.closest("circle");
+    if (!c) { tip.style.display = "none"; return; } const p = pts[+c.dataset.i];
+    tip.innerHTML = `<b>${esc(p.title)}</b><br>${money(p.price)} · ${p.year}${p.miles != null ? " · " + p.miles.toLocaleString() + " mi" : ""}${p.hours != null ? " · " + p.hours + " hrs" : ""}<br>${esc(p.location || "")} · ${p.dealer ? "dealer" : "private"}${p.status !== "active" ? " · " + p.status : ""}`;
+    const r = el.getBoundingClientRect(); tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX - r.left + 12, r.width - 270) + "px"; tip.style.top = (e.clientY - r.top + 12) + "px"; };
+  el.querySelector("svg").onmouseleave = () => tip.style.display = "none";
+  el.querySelector("svg").onclick = e => { const c = e.target.closest("circle"); if (c) window.open(pts[+c.dataset.i].url, "_blank", "noopener"); };
+}
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x))); const f = x / p; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p; }
+
+// ---------- Setup ----------
+async function renderSetup() {
+  const [s, st] = await Promise.all([api("/api/settings"), api("/api/status")]);
+  const v = s.settings;
+  $("#tab-setup").innerHTML = `
+  <div class="panel"><h2>Search area and alerts</h2><div class="form" id="setform">
+    <label>Home<input name="home_label" value="${esc(v.home_label)}"><span class="hint">Just a label</span></label>
+    <label>Home ZIP (Craigslist)<input name="home_zip" value="${esc(v.home_zip)}"></label>
+    <label>Home lat, lon (distances)<input name="home_latlon" value="${esc(v.home_lat)}, ${esc(v.home_lon)}"></label>
+    <label>Radius (miles)<input name="radius_mi" type="number" value="${esc(v.radius_mi)}"><span class="hint">Used by the next scan</span></label>
+    <label>Facebook city<input name="fb_location" value="${esc(v.fb_location)}"><span class="hint">Marketplace URL slug, e.g. minneapolis</span></label>
+    <label>Alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
+    <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
+      <option value="0" ${v.alert_private_only !== "1" ? "selected" : ""}>Private and dealers</option></select></label>
+    <label>Alert max price<input name="max_price" type="number" value="${esc(v.max_price)}" placeholder="any"></label>
+    <label>Alert min year<input name="min_year" type="number" value="${esc(v.min_year)}" placeholder="any"></label>
+    <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
+  </div><p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
+  <div class="panel"><h2>Searches</h2><p class="hint">Each runs on Craigslist and Facebook every scan. Broad terms find more; the model filters out 2-seaters, parts and wanted ads.</p>
+    <div class="searchlist">${s.searches.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
+      <span>${esc(q.query)}</span><button class="btn" data-del="${q.id}">Remove</button></div>`).join("")}</div>
+    <p class="filters"><input id="newq" placeholder="add a search, e.g. mule pro fxt"><button class="btn" id="addq">Add</button></p></div>
+  <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
+    ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
+      <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;
+  $("#savebtn").onclick = async () => {
+    const body = {};
+    document.querySelectorAll("#setform [name]").forEach(i => {
+      if (i.name === "home_latlon") { const [a, b] = i.value.split(",").map(x => x.trim()); body.home_lat = a; body.home_lon = b; }
+      else body[i.name] = i.value; });
+    try { await api("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      $("#savemsg").textContent = "Saved."; } catch (e) { $("#savemsg").textContent = "Save failed: " + e.message; }
+  };
+  $("#tab-setup").onchange = async e => { const sid = e.target.dataset.sid; if (!sid) return;
+    await api("/api/searches/" + sid, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: e.target.checked }) }); };
+  $("#tab-setup").onclick = async e => {
+    if (e.target.dataset.del) { await api("/api/searches/" + e.target.dataset.del, { method: "DELETE" }); renderSetup(); }
+    if (e.target.id === "addq" && $("#newq").value.trim()) {
+      await api("/api/searches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: $("#newq").value }) }); renderSetup(); }
+  };
+}
+
+// ---------- shell ----------
+function render() {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
+  ["deals", "all", "market", "setup"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
+  $("#filtersec").hidden = !(TAB === "deals" || TAB === "all");
+  if (TAB === "deals") renderDeals();
+  if (TAB === "all") renderAll();
+  if (TAB === "market") renderMarket();
+  if (TAB === "setup") renderSetup();
+}
+$("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB = t; store.set("tab", t); render(); };
+document.body.addEventListener("click", async e => {
+  const b = e.target.closest("[data-act]"); if (!b) return;
+  const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
+  const body = b.dataset.act === "star" ? { starred: !d.starred } : { hidden: !d.hidden };
+  await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  Object.assign(d, { starred: body.starred ?? d.starred, hidden: body.hidden ?? d.hidden }); render();
+});
+$("#scanbtn").onclick = async () => { $("#scanbtn").disabled = true; $("#scanbtn").textContent = "Scanning…";
+  await api("/api/scan", { method: "POST" }); setTimeout(status, 3000); };
+
+async function status() {
+  const st = await api("/api/status");
+  const last = st.runs.find(r => r.finished);
+  $("#statusline").textContent = `${st.counts.live ?? 0} live listings` +
+    (last ? ` · last scan ${ago(last.finished)} (${last.new} new)` : " · no scans yet") + (st.scanning ? " · scanning now…" : "");
+  $("#scanbtn").disabled = st.scanning; $("#scanbtn").textContent = st.scanning ? "Scanning…" : "Scan now";
+  if (st.scanning) setTimeout(status, 15000);
+}
+async function load() { DATA = await api("/api/listings"); famChips(); render(); }
+window.addEventListener("resize", () => { if (TAB === "market") renderMarket(); });
+bindFilters(); load(); status();
+setInterval(() => { load(); status(); }, 5 * 60 * 1000);
+</script>
+</body>
+</html>

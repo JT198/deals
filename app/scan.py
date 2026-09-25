@@ -227,10 +227,18 @@ async def send_alerts(con, http, st, quiet=False) -> int:
     if st.get("alert_private_only") == "1":
         sql += " AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
     rules = db.alert_rules(st)
+    # FB sometimes mixes in "suggested" listings far outside the radius
+    home = (float(st["home_lat"]), float(st["home_lon"]))
+    radius = int(st.get("radius_mi") or 100)
+    places = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
+
+    def in_range(r):
+        c = places.get(geo.place_key(r["location"]))
+        return not c or c[0] is None or geo.miles(*home, *c) <= radius + 10
 
     def wanted(r):
         rule = rules.get(r["category"]) or {}
-        return (rule.get("enabled")
+        return (rule.get("enabled") and in_range(r)
                 and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
                 and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
     rows = [r for r in con.execute(sql + " ORDER BY score DESC", args).fetchall() if wanted(r)]

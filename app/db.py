@@ -1,6 +1,7 @@
 """SQLite storage. One file, WAL mode; the scanner and the web app share it."""
 import json
 import os
+import re
 import sqlite3
 import time
 
@@ -59,6 +60,12 @@ CREATE TABLE IF NOT EXISTS price_history (
   listing_id TEXT NOT NULL, ts INTEGER NOT NULL, price INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ph_listing ON price_history(listing_id);
+
+-- one row per delivered Telegram alert; cross-post suppression checks the full history
+CREATE TABLE IF NOT EXISTS alert_log (
+  listing_id TEXT NOT NULL, title_key TEXT NOT NULL, price INTEGER, kind TEXT NOT NULL, ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS alert_log_key ON alert_log(title_key, price);
 
 CREATE TABLE IF NOT EXISTS geocache (place TEXT PRIMARY KEY, lat REAL, lon REAL);
 
@@ -120,6 +127,11 @@ def init() -> None:
     _add_columns(con, "listings", {"fresh_alerted": "INTEGER", "detail_misses": "INTEGER NOT NULL DEFAULT 0",
                                    "alerted_price": "INTEGER"})   # price when the last alert went out
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
+    if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:
+        # seed history from listings alerted before the log existed
+        for r in con.execute("""SELECT id, title, COALESCE(alerted_price, price) p, first_seen FROM listings
+                                WHERE alerted_score IS NOT NULL OR fresh_alerted = 1""").fetchall():
+            con.execute("INSERT INTO alert_log VALUES (?, ?, ?, 'seed', ?)", (r["id"], title_key(r["title"]), r["p"], r["first_seen"]))
     for k, v in DEFAULT_SETTINGS.items():
         con.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
     seeded = int(con.execute("SELECT value FROM settings WHERE key='seed_version'").fetchone()[0])
@@ -136,6 +148,11 @@ def init() -> None:
 
 def settings(con) -> dict:
     return {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM settings")}
+
+
+def title_key(title: str | None) -> str:
+    """Normalized title for spotting cross-posts ("2014 Arctic Cat 500 HDX!" == "2014 arctic cat 500 hdx")."""
+    return re.sub(r"[^a-z0-9]", "", (title or "").lower())
 
 
 def alert_rules(st: dict) -> dict:

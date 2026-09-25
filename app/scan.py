@@ -298,27 +298,28 @@ async def _send_alerts(con, http, st, quiet) -> int:
     def switched_on(r, kind):
         return bool((rules.get(r["category"]) or {}).get(kind))
 
-    def mark(sql, ids):
+    def mark(sql, ids, kind=None):
         con.executemany(sql, [(i,) for i in ids])
+        if kind:   # delivered (or silently accepted by a backfill): remember title + price for cross-posts
+            for i in ids:
+                r = con.execute("SELECT title, price FROM listings WHERE id = ?", (i,)).fetchone()
+                con.execute("INSERT INTO alert_log(listing_id, title_key, price, kind, ts) VALUES (?, ?, ?, ?, ?)",
+                            (i, db.title_key(r["title"]), r["price"], kind, db.now()))
         con.commit()
 
     deal_mark = "UPDATE listings SET alerted_score = score, fresh_alerted = 1, alerted_price = price WHERE id = ?"
     fresh_mark = "UPDATE listings SET fresh_alerted = 1, alerted_price = price WHERE id = ?"
 
-    # Cross-posts / reposts: a DIFFERENT listing with the same title already alerted at this price
-    # (or was picked earlier in this run). A listing never blocks its own follow-up alerts, and
-    # the comparison uses the price at delivery time, so a price cut on a twin still alerts.
-    def key(title, price):
-        return (re.sub(r"[^a-z0-9]", "", (title or "").lower()), price)
+    # Cross-posts / reposts: a DIFFERENT listing with the same title has alerted at this price at any
+    # point in the last 30 days (full history in alert_log), or was picked earlier in this run.
+    # A listing never blocks its own follow-up alerts (score jump, price cut).
     seen: dict[tuple, set] = {}
-    for r in con.execute(
-            """SELECT id, title, COALESCE(alerted_price, price) p FROM listings
-               WHERE (alerted_score IS NOT NULL OR fresh_alerted = 1) AND first_seen >= ?""",
-            (db.now() - 30 * 86400,)):
-        seen.setdefault(key(r["title"], r["p"]), set()).add(r["id"])
+    for r in con.execute("SELECT listing_id, title_key, price FROM alert_log WHERE ts >= ?",
+                         (db.now() - 30 * 86400,)):
+        seen.setdefault((r["title_key"], r["price"]), set()).add(r["listing_id"])
 
     def first_copy(r):
-        ids = seen.setdefault(key(r["title"], r["price"]), set())
+        ids = seen.setdefault((db.title_key(r["title"]), r["price"]), set())
         if ids - {r["id"]}:
             return False
         ids.add(r["id"])
@@ -344,8 +345,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if r["id"] not in deal_ids and switched_on(r, "fresh") and passes_limits(r) and first_copy(r)]
 
     if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
-        mark(deal_mark, deal_ids)
-        mark(fresh_mark, [r["id"] for r in fresh])
+        mark(deal_mark, deal_ids, "backfill")
+        mark(fresh_mark, [r["id"] for r in fresh], "backfill")
         return 0
 
     # markers are written only after Telegram accepts the message, so failures retry next run
@@ -353,16 +354,16 @@ async def _send_alerts(con, http, st, quiet) -> int:
     for r in deals[:MAX_ALERTS_PER_RUN]:
         if await notify.send_listing(http, r):
             sent += 1
-            mark(deal_mark, [r["id"]])
+            mark(deal_mark, [r["id"]], "deal")
     rest = deals[MAX_ALERTS_PER_RUN:]
     if rest and await notify.send_text(http, f"…and {len(rest)} more above {threshold} "
                                              f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.'):
-        mark(deal_mark, [r["id"] for r in rest])
+        mark(deal_mark, [r["id"] for r in rest], "deal-summary")
     for r in fresh[:MAX_FRESH_PER_RUN]:   # any beyond the cap go out next run (still fresh)
         mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
         if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
             sent += 1
-            mark(fresh_mark, [r["id"]])
+            mark(fresh_mark, [r["id"]], "fresh")
     return sent
 
 

@@ -36,7 +36,7 @@ notify.send_text = fake_send_text
 def reset(rows, **settings):
     db.init()
     con = db.connect()
-    con.executescript("DELETE FROM listings; DELETE FROM settings;")   # every test starts from defaults
+    con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log;")   # every test starts clean
     con.commit()
     db.init()
     con.execute("DELETE FROM listings")
@@ -177,6 +177,21 @@ def test_twin_blocked_even_after_its_own_alert_price_changes():
     con.execute("UPDATE listings SET price = 3500 WHERE id = 'facebook:0'"); con.commit()
     asyncio.run(alerts(con))
     assert SENT == ["facebook:0"], SENT
+
+
+def test_twin_stays_blocked_after_original_realerts_at_new_price():
+    # Codex's sequence: A alerts at $4,000 (twin B suppressed) -> A cuts to $3,500 and re-alerts
+    # -> B, still at $4,000, must stay suppressed on the next scan
+    con = reset([{"title": "Arctic Cat HDX", "price": 4000, "score": 80},
+                 {"id": "craigslist:2", "source": "craigslist", "ext_id": "2", "title": "Arctic Cat HDX",
+                  "price": 4000, "score": 80}])
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
+    con.execute("UPDATE listings SET price = 3500, score = 90 WHERE id = 'facebook:0'"); con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0", "facebook:0"], SENT      # price-cut re-alert goes out
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0", "facebook:0"], SENT      # stale $4,000 twin still suppressed
 
 
 if __name__ == "__main__":

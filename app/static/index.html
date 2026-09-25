@@ -73,6 +73,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .badge.great { background: var(--good-bg); color: var(--good); border-color: transparent; }
 .badge.good { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
+.sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
 .ribbon.new { background: var(--accent); }
 .sub a.pill { color: var(--accent); cursor: pointer; text-decoration: none; border-bottom: 1px dotted var(--accent); }
 .qbtn { padding: 2px 8px !important; font-size: 12px; }
@@ -179,6 +182,11 @@ const F = Object.assign({ q: "", max: "", year: "", dist: "", age: "", cond: "",
   store.get("filters", {}));
 const listedAt = d => d.listed_at || d.first_seen;
 if (/^\d+$/.test(F.age || "")) F.age = (+F.age * 24) + "h";   // old day-based values
+if (store.get("ver", 1) < 2) { F.age = ""; F.sort = "score"; store.set("filters", F); store.set("ver", 2); }
+// Quick views from the status line: temporary, never saved, never touch the filters
+let QUICK = null;   // null | "1h" | "visit"
+const QUICK_LABEL = { "1h": "listed in the last hour", visit: "new since your last visit" };
+const inQuick = d => QUICK === "visit" ? isNew(d) : listedAt(d) >= Date.now() / 1000 - 3600;
 // "New since my last visit": fixed for this browser tab session, so reloads don't clear the marks
 let PREV_VISIT = 0;
 try {
@@ -197,6 +205,7 @@ function bindFilters() {
 function save() { store.set("filters", F); render(); }
 
 function filtered() {
+  if (QUICK) return DATA.filter(d => !d.hidden && inQuick(d)).sort((a, b) => listedAt(b) - listedAt(a));
   const q = F.q.trim().toLowerCase();
   return DATA.filter(d =>
     (CAT === "all" || d.category === CAT) &&
@@ -275,13 +284,17 @@ function card(d) {
     </div></article>`;
 }
 
+function quickBar(n) {
+  return QUICK ? `<div class="quickbar"><span>Showing <b>${n}</b> ${QUICK_LABEL[QUICK]} (all categories, newest first)</span>
+    <button class="btn" id="quickoff">✕ Show everything</button></div>` : "";
+}
 function renderDeals() {
   const by = { score: (a, b) => (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
-  const rows = filtered().sort(by[F.sort] || by.score);
-  $("#tab-deals").innerHTML = rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
-    : `<div class="empty">No listings match these filters yet.</div>`;
+  const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
+  $("#tab-deals").innerHTML = quickBar(rows.length) + (rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
+    : `<div class="empty">No listings match these filters yet.</div>`);
 }
 
 const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],
@@ -439,14 +452,14 @@ async function renderSetup() {
 function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   ["deals", "all", "market", "setup"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
-  $("#filtersec").hidden = !(TAB === "deals" || TAB === "all");
-  $("#cats").hidden = TAB === "setup";
+  $("#filtersec").hidden = !(TAB === "deals" || TAB === "all") || !!QUICK;
+  $("#cats").hidden = TAB === "setup" || !!QUICK;
   if (TAB === "deals") renderDeals();
   if (TAB === "all") renderAll();
   if (TAB === "market") renderMarket();
   if (TAB === "setup") renderSetup();
 }
-$("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB = t; store.set("tab", t); render(); };
+$("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB = t; store.set("tab", t); QUICK = null; render(); status(); };
 document.body.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
@@ -460,21 +473,24 @@ $("#scanbtn").onclick = async () => { $("#scanbtn").disabled = true; $("#scanbtn
 async function status() {
   const st = await api("/api/status");
   const last = st.runs.find(r => r.finished);
-  const hour = DATA.filter(d => listedAt(d) >= Date.now() / 1000 - 3600).length;
-  const fresh = DATA.filter(isNew).length;
+  const hour = DATA.filter(d => !d.hidden && listedAt(d) >= Date.now() / 1000 - 3600).length;
+  const fresh = DATA.filter(d => !d.hidden && isNew(d)).length;
   $("#statusline").innerHTML = `${st.counts.live ?? 0} live listings` +
     (last ? ` · last scan ${ago(last.finished)}` : " · no scans yet") +
-    ` · <a class="pill" data-age="1h">${hour} listed in the last hour</a>` +
-    (fresh ? ` · <a class="pill" data-age="visit">${fresh} new since your last visit</a>` : "") +
+    ` · <a class="pill ${QUICK === "1h" ? "on" : ""}" data-age="1h">${hour} listed in the last hour</a>` +
+    (fresh ? ` · <a class="pill ${QUICK === "visit" ? "on" : ""}" data-age="visit">${fresh} new since your last visit</a>` : "") +
     (st.scanning ? " · scanning now…" : "");
   $("#scanbtn").disabled = st.scanning; $("#scanbtn").textContent = st.scanning ? "Scanning…" : "Scan now";
   if (st.scanning) setTimeout(status, 15000);
 }
-$("#statusline").onclick = e => { const a = e.target.closest("[data-age]"); if (!a) return;
-  F.age = a.dataset.age; F.sort = "newest"; $("#f-age").value = F.age; $("#f-sort").value = F.sort;
-  CAT = "all"; store.set("cat", CAT); F.fams = []; catBar(); famChips();
-  if (TAB !== "deals" && TAB !== "all") { TAB = "deals"; store.set("tab", TAB); }
-  save(); };
+function setQuick(v) {
+  QUICK = QUICK === v ? null : v;
+  if (QUICK && TAB !== "deals") { TAB = "deals"; store.set("tab", TAB); }
+  $("#filtersec").hidden = !!QUICK; $("#cats").hidden = !!QUICK;
+  render(); status();
+}
+$("#statusline").onclick = e => { const a = e.target.closest("[data-age]"); if (a) setQuick(a.dataset.age); };
+document.addEventListener("click", e => { if (e.target.id === "quickoff") setQuick(QUICK); });
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
   DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }

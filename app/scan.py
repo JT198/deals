@@ -5,6 +5,7 @@ LLM, re-score everything, send alerts. Run by deals-scan.timer.
   python -m app.scan --force    # run now regardless of the clock
   python -m app.scan --backfill # first run: "best match" sort + no alert flood
   python -m app.scan --backfill --no-search   # just finish item pages + parsing
+  python -m app.scan --quick    # 5-minute fast lane: only searches marked quick, newest first
 """
 import asyncio
 import fcntl
@@ -23,6 +24,7 @@ from .sources import craigslist
 from .sources.facebook import Facebook, pause
 
 MAX_ALERTS_PER_RUN = 6
+MAX_FRESH_PER_RUN = 8
 FB_SEARCHES_PER_RUN = 16      # keeps a run inside the 20-minute timer slot
 FB_DETAILS_PER_RUN = 40
 FB_RECHECKS_PER_RUN = 12
@@ -86,7 +88,7 @@ def in_active_hours(st) -> bool:
     return a <= time.localtime().tm_hour < b
 
 
-async def run(force=False, backfill=False, search=True) -> None:
+async def run(force=False, backfill=False, search=True, quick=False) -> None:
     db.init()
     con = db.connect()
     st = db.settings(con)
@@ -95,20 +97,28 @@ async def run(force=False, backfill=False, search=True) -> None:
         return
     radius = int(st.get("radius_mi") or 100)
     boost = 5 if backfill else 1   # catch-up runs take bigger bites
-    searches = [dict(r) for r in con.execute("SELECT * FROM searches WHERE enabled = 1")]
+    searches = [dict(r) for r in con.execute(
+        "SELECT * FROM searches WHERE enabled = 1" + (" AND quick = 1" if quick else ""))]
     random.shuffle(searches)
-    # Facebook: each search runs on its category's cadence (4-seat UTVs + mowers every run, others hourly)
     t0 = db.now()
-    due = [s for s in searches if backfill or not s["last_run"]
-           or s["last_run"] <= t0 - cfg(s["category"])["every_min"] * 60 + 180]
-    due.sort(key=lambda s: s["last_run"] or 0)
-    if not backfill:
-        due = due[:FB_SEARCHES_PER_RUN]
+    if quick:
+        due = searches
+    else:
+        # Facebook: each search runs on its category's cadence (4-seat UTVs + mowers every run, others hourly)
+        due = [s for s in searches if backfill or not s["last_run"]
+               or s["last_run"] <= t0 - cfg(s["category"])["every_min"] * 60 + 180]
+        due.sort(key=lambda s: s["last_run"] or 0)
+        if not backfill:
+            due = due[:FB_SEARCHES_PER_RUN]
+    # the fast lane only follows up on what it found itself
+    only_new = " AND first_seen >= %d" % t0 if quick else ""
     if not search:
         searches, due = [], []
     # we hold the lock, so any unfinished run was killed part-way
-    con.execute("""UPDATE runs SET finished = started, errors = '["interrupted"]' WHERE finished IS NULL""")
-    run_id = con.execute("INSERT INTO runs(started, source) VALUES (?, 'all')", (db.now(),)).lastrowid
+    mode = "quick" if quick else "all"
+    con.execute("""UPDATE runs SET finished = started, errors = '["interrupted"]'
+                   WHERE finished IS NULL AND source = ?""", (mode,))
+    run_id = con.execute("INSERT INTO runs(started, source) VALUES (?, ?)", (db.now(), mode)).lastrowid
     con.commit()
     errors: list[str] = []
     found = new = alerts = 0
@@ -135,7 +145,8 @@ async def run(force=False, backfill=False, search=True) -> None:
                     q = srch["query"]
                     try:
                         items = await fb.search(q, st.get("fb_location", "plymouth-mn"), radius,
-                                                sort="best_match" if backfill else "newest")
+                                                sort="best_match" if backfill else "newest",
+                                                scrolls=0 if quick else None)
                         found += len(items)
                         empty += not items
                         new += sum(upsert(con, "facebook", i) for i in items)
@@ -149,10 +160,10 @@ async def run(force=False, backfill=False, search=True) -> None:
 
                 todo = con.execute(
                     """SELECT id, ext_id, price FROM listings
-                       WHERE source='facebook' AND detail_fetched=0 AND status='active'
+                       WHERE source='facebook' AND detail_fetched=0 AND status='active'""" + only_new + """
                        ORDER BY first_seen DESC LIMIT ?""", (FB_DETAILS_PER_RUN * boost,)).fetchall()
                 # plus a few older relevant ones, to notice price cuts / sold / removed
-                todo += con.execute(
+                todo += [] if quick else con.execute(
                     """SELECT id, ext_id, price FROM listings
                        WHERE source='facebook' AND detail_fetched=1 AND relevant=1 AND status IN ('active','pending')
                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall()
@@ -168,7 +179,7 @@ async def run(force=False, backfill=False, search=True) -> None:
 
         # --- Craigslist posting pages
         for r in con.execute(
-                """SELECT id, url, price FROM listings WHERE source='craigslist' AND detail_fetched=0
+                """SELECT id, url, price FROM listings WHERE source='craigslist' AND detail_fetched=0""" + only_new + """
                    ORDER BY first_seen DESC LIMIT ?""", (CL_DETAILS_PER_RUN * boost,)).fetchall():
             try:
                 apply_detail(con, r["id"], await craigslist.detail(http, r["url"]), r["price"])
@@ -180,7 +191,7 @@ async def run(force=False, backfill=False, search=True) -> None:
         # --- LLM parse (once the description is in, or after an hour without one)
         rows = con.execute(
             """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
-                 AND (detail_fetched = 1 OR first_seen < ?)
+                 AND (detail_fetched = 1 OR first_seen < ?)""" + only_new + """
                ORDER BY first_seen DESC LIMIT ?""", (db.now() - 3600, PARSES_PER_RUN * boost)).fetchall()
         gate = asyncio.Semaphore(PARSE_CONCURRENCY)
 
@@ -199,9 +210,10 @@ async def run(force=False, backfill=False, search=True) -> None:
         await asyncio.gather(*(parse_one(r) for r in rows))
 
         # listings we haven't seen or confirmed in a while are probably gone
-        con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
-                    (db.now() - STALE_AFTER,))
-        con.commit()
+        if not quick:
+            con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
+                        (db.now() - STALE_AFTER,))
+            con.commit()
 
         score.rescore_all(con)
         try:
@@ -242,10 +254,8 @@ async def send_alerts(con, http, st, quiet=False) -> int:
                 and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
                 and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
     rows = [r for r in con.execute(sql + " ORDER BY score DESC", args).fetchall() if wanted(r)]
-    if not rows:
-        return 0
     sent = 0
-    if not quiet:
+    if rows and not quiet:
         for r in rows[:MAX_ALERTS_PER_RUN]:
             if await notify.send_listing(http, r):
                 sent += 1
@@ -253,13 +263,33 @@ async def send_alerts(con, http, st, quiet=False) -> int:
             await notify.send_text(http, f"…and {len(rows) - MAX_ALERTS_PER_RUN} more above {threshold} "
                                          f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.')
     # mark all as alerted (a backfill run marks silently so the first real run doesn't flood)
-    con.executemany("UPDATE listings SET alerted_score = score WHERE id = ?", [(r["id"],) for r in rows])
+    con.executemany("UPDATE listings SET alerted_score = score, fresh_alerted = 1 WHERE id = ?",
+                    [(r["id"],) for r in rows])
+    con.commit()
+
+    # "Just listed": any fresh private listing that isn't overpriced, so Jon can message the seller first
+    window = int(st.get("fresh_window_min") or 120) * 60
+    fsql = """SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
+                AND fresh_alerted IS NULL AND COALESCE(is_new, 0) = 0 AND score >= ?
+                AND COALESCE(listed_at, first_seen) >= ?"""
+    if st.get("alert_private_only") == "1":
+        fsql += " AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
+    fresh = [r for r in con.execute(fsql + " ORDER BY COALESCE(listed_at, first_seen) DESC",
+                                    (int(st.get("fresh_min_score") or 50), db.now() - window)).fetchall()
+             if (rules.get(r["category"]) or {}).get("fresh") and wanted(r)]
+    if fresh and not quiet:
+        for r in fresh[:MAX_FRESH_PER_RUN]:
+            mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
+            if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
+                sent += 1
+    con.executemany("UPDATE listings SET fresh_alerted = 1 WHERE id = ?", [(r["id"],) for r in fresh])
     con.commit()
     return sent
 
 
 def main():
-    lock = open("/tmp/deals-scan.lock", "w")
+    quick = "--quick" in sys.argv
+    lock = open("/tmp/deals-quick.lock" if quick else "/tmp/deals-scan.lock", "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -267,7 +297,7 @@ def main():
         return
     try:
         asyncio.run(run(force="--force" in sys.argv, backfill="--backfill" in sys.argv,
-                        search="--no-search" not in sys.argv))
+                        search="--no-search" not in sys.argv, quick=quick))
     except Exception:
         traceback.print_exc()
         sys.exit(1)

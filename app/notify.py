@@ -16,9 +16,9 @@ def enabled() -> bool:
     return bool(TOKEN and CHAT)
 
 
-def listing_caption(r) -> str:
+def listing_caption(r, header: str | None = None) -> str:
     e = html.escape
-    bits = [f"{cfg(r['category'])['emoji']} <b>{e(r['title'])}</b>",
+    bits = ([header] if header else []) + [f"{cfg(r['category'])['emoji']} <b>{e(r['title'])}</b>",
             f"<b>${r['price']:,}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
             + f"  ·  score {r['score']}"]
     facts = [x for x in (
@@ -39,10 +39,10 @@ def listing_caption(r) -> str:
     return "\n".join(bits)
 
 
-async def send_listing(http: httpx.AsyncClient, r) -> bool:
+async def send_listing(http: httpx.AsyncClient, r, header: str | None = None) -> bool:
     if not enabled():
         return False
-    cap = listing_caption(r)[:1020]
+    cap = listing_caption(r, header)[:1020]
     base = f"https://api.telegram.org/bot{TOKEN}"
     if r["image"]:
         resp = await http.post(f"{base}/sendPhoto", data={

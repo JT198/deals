@@ -73,6 +73,10 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .badge.great { background: var(--good-bg); color: var(--good); border-color: transparent; }
 .badge.good { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.ribbon.new { background: var(--accent); }
+.sub a.pill { color: var(--accent); cursor: pointer; text-decoration: none; border-bottom: 1px dotted var(--accent); }
+.qbtn { padding: 2px 8px !important; font-size: 12px; }
+.qbtn.on { background: var(--warn-bg); color: var(--warn); border-color: transparent; font-weight: 600; }
 .ribbon { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); color: #fff; border-radius: 6px; padding: 2px 7px; font-size: 12px; }
 .card .body { padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .card h3 { font-size: 15px; margin: 0; line-height: 1.3; }
@@ -140,8 +144,9 @@ td.t { white-space: normal; min-width: 240px; }
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
       <label>Min year <input id="f-year" type="number" min="1965" max="2030"></label>
       <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
-      <label>Listed <select id="f-age"><option value="">any time</option><option value="1">last 24 hours</option>
-        <option value="3">last 3 days</option><option value="7">last 7 days</option></select></label>
+      <label>Listed <select id="f-age"><option value="">any time</option><option value="visit">new since my last visit</option>
+        <option value="1h">last hour</option><option value="6h">last 6 hours</option><option value="24h">last 24 hours</option>
+        <option value="72h">last 3 days</option><option value="168h">last 7 days</option></select></label>
       <label>Condition <select id="f-cond"><option value="">any</option><option value="used">used only</option>
         <option value="new">new only</option></select></label>
       <label>Sort <select id="f-sort"><option value="score">best deal</option><option value="newest">newest first</option>
@@ -173,6 +178,15 @@ let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score
 const F = Object.assign({ q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
   store.get("filters", {}));
 const listedAt = d => d.listed_at || d.first_seen;
+if (/^\d+$/.test(F.age || "")) F.age = (+F.age * 24) + "h";   // old day-based values
+// "New since my last visit": fixed for this browser tab session, so reloads don't clear the marks
+let PREV_VISIT = 0;
+try {
+  PREV_VISIT = +sessionStorage.getItem("deals.prevVisit") || 0;
+  if (!PREV_VISIT) { PREV_VISIT = +localStorage.getItem("deals.lastSeen") || 0; sessionStorage.setItem("deals.prevVisit", PREV_VISIT || 1); }
+} catch {}
+const markSeen = () => { try { localStorage.setItem("deals.lastSeen", Math.floor(Date.now() / 1000)); } catch {} };
+const isNew = d => PREV_VISIT > 1 && d.first_seen > PREV_VISIT;
 
 function bindFilters() {
   const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
@@ -193,7 +207,7 @@ function filtered() {
     (!F.year || (d.year && d.year >= +F.year)) &&
     (!F.dist || d.distance == null || d.distance <= +F.dist) &&
     (!F.fams.length || F.fams.includes(d.family)) &&
-    (!F.age || listedAt(d) >= Date.now() / 1000 - F.age * 86400) &&
+    (!F.age || (F.age === "visit" ? isNew(d) : listedAt(d) >= Date.now() / 1000 - parseInt(F.age) * 3600)) &&
     (!F.cond || (F.cond === "new" ? d.is_new === 1 : d.is_new !== 1)) &&
     (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "")).toLowerCase().includes(q)));
 }
@@ -201,7 +215,7 @@ function filtered() {
 function famChips() {
   const counts = {};
   DATA.forEach(d => { if (d.family && (CAT === "all" || d.category === CAT)) counts[d.family] = (counts[d.family] || 0) + 1; });
-  const fams = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const fams = CAT === "all" ? [] : Object.keys(counts).sort((a, b) => counts[b] - counts[a]);   // too many to be useful across all categories
   $("#f-fams").innerHTML = fams.map(f =>
     `<button class="chip ${F.fams.includes(f) ? "on" : ""}" data-f="${esc(f)}">${esc(f)} · ${counts[f]}</button>`).join("");
   $("#f-fams").onclick = e => { const f = e.target.dataset.f; if (!f) return;
@@ -242,6 +256,7 @@ function card(d) {
   return `<article class="card">
     <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image ? `background-image:url('${esc(d.image)}')` : ""}">
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
+        : isNew(d) ? '<span class="ribbon new">NEW</span>'
         : listedAt(d) > Date.now() / 1000 - 86400 ? '<span class="ribbon">Just listed</span>' : ""}</a>
     <div class="body">
       <h3>${esc(d.title)}</h3>
@@ -368,28 +383,33 @@ async function renderSetup() {
     <label>Home lat, lon (distances)<input name="home_latlon" value="${esc(v.home_lat)}, ${esc(v.home_lon)}"></label>
     <label>Radius (miles)<input name="radius_mi" type="number" value="${esc(v.radius_mi)}"><span class="hint">Used by the next scan</span></label>
     <label>Facebook city<input name="fb_location" value="${esc(v.fb_location)}"><span class="hint">Marketplace URL slug, e.g. minneapolis</span></label>
-    <label>Alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
+    <label>Deal alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
+    <label>Just-listed alert window (minutes)<input name="fresh_window_min" type="number" value="${esc(v.fresh_window_min)}"><span class="hint">Only listings posted this recently</span></label>
+    <label>Just-listed minimum score<input name="fresh_min_score" type="number" value="${esc(v.fresh_min_score)}"><span class="hint">50 = priced normally or better, no red flags</span></label>
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
       <option value="0" ${v.alert_private_only !== "1" ? "selected" : ""}>Private and dealers</option></select></label>
     <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
   </div>
   <h2 style="margin-top:16px">Alerts by category</h2>
-  <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Alerts</th><th>Max price</th><th>Min year</th></tr></thead><tbody>
+  <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Deal alerts</th><th>Just-listed alerts</th><th>Max price</th><th>Min year</th></tr></thead><tbody>
     ${CATS.map(c => { const r = s.alert_rules[c.key] || {}; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
       <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
+      <td><label><input type="checkbox" data-r="fresh" ${r.fresh ? "checked" : ""}> on</label></td>
       <td><input type="number" step="500" data-r="max_price" value="${esc(r.max_price)}" placeholder="any"></td>
       <td><input type="number" data-r="min_year" value="${esc(r.min_year)}" placeholder="any"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
-  <div class="panel"><h2>Searches</h2><p class="hint">Craigslist runs every search each scan. Facebook runs 4-seat UTV and mower searches every scan (20 min) and the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
+  <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 5 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV and mower searches every scan (20 min) and the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
     ${CATS.map(c => { const qs = s.searches.filter(q => q.category === c.key); return `<h3 style="font-size:13px;margin:14px 0 6px">${c.emoji} ${esc(c.label)}</h3>
     <div class="searchlist">${qs.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
-      <span>${esc(q.query)}</span><button class="btn" data-del="${q.id}">Remove</button></div>`).join("") || '<span class="hint">none</span>'}</div>`; }).join("")}
+      <span>${esc(q.query)}</span><button class="btn qbtn ${q.quick ? "on" : ""}" data-quick="${q.id}" data-on="${q.quick ? 1 : 0}"
+        title="Fast lane: also check this search every 5 minutes">⚡ ${q.quick ? "fast" : "normal"}</button>
+      <button class="btn" data-del="${q.id}">Remove</button></div>`).join("") || '<span class="hint">none</span>'}</div>`; }).join("")}
     <p class="filters" style="margin-top:14px"><input id="newq" placeholder="add a search, e.g. mule pro fxt">
       <select id="newcat">${CATS.map(c => `<option value="${c.key}" ${c.key === CAT ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
       <button class="btn" id="addq">Add</button></p></div>
-  <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
-    ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
+  <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Type</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
+    ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.source === "quick" ? "⚡ fast" : "full"}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;
   $("#savebtn").onclick = async () => {
     const body = {};
@@ -406,6 +426,9 @@ async function renderSetup() {
   $("#tab-setup").onchange = async e => { const sid = e.target.dataset.sid; if (!sid) return;
     await api("/api/searches/" + sid, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: e.target.checked }) }); };
   $("#tab-setup").onclick = async e => {
+    const qb = e.target.closest("[data-quick]");
+    if (qb) { await api("/api/searches/" + qb.dataset.quick, { method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ quick: qb.dataset.on !== "1" }) }); renderSetup(); return; }
     if (e.target.dataset.del) { await api("/api/searches/" + e.target.dataset.del, { method: "DELETE" }); renderSetup(); }
     if (e.target.id === "addq" && $("#newq").value.trim()) {
       await api("/api/searches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: $("#newq").value, category: $("#newcat").value }) }); renderSetup(); }
@@ -437,17 +460,27 @@ $("#scanbtn").onclick = async () => { $("#scanbtn").disabled = true; $("#scanbtn
 async function status() {
   const st = await api("/api/status");
   const last = st.runs.find(r => r.finished);
-  $("#statusline").textContent = `${st.counts.live ?? 0} live listings` +
-    (last ? ` · last scan ${ago(last.finished)} (${last.new} new)` : " · no scans yet") + (st.scanning ? " · scanning now…" : "");
+  const hour = DATA.filter(d => listedAt(d) >= Date.now() / 1000 - 3600).length;
+  const fresh = DATA.filter(isNew).length;
+  $("#statusline").innerHTML = `${st.counts.live ?? 0} live listings` +
+    (last ? ` · last scan ${ago(last.finished)}` : " · no scans yet") +
+    ` · <a class="pill" data-age="1h">${hour} listed in the last hour</a>` +
+    (fresh ? ` · <a class="pill" data-age="visit">${fresh} new since your last visit</a>` : "") +
+    (st.scanning ? " · scanning now…" : "");
   $("#scanbtn").disabled = st.scanning; $("#scanbtn").textContent = st.scanning ? "Scanning…" : "Scan now";
   if (st.scanning) setTimeout(status, 15000);
 }
+$("#statusline").onclick = e => { const a = e.target.closest("[data-age]"); if (!a) return;
+  F.age = a.dataset.age; F.sort = "newest"; $("#f-age").value = F.age; $("#f-sort").value = F.sort;
+  CAT = "all"; store.set("cat", CAT); F.fams = []; catBar(); famChips();
+  if (TAB !== "deals" && TAB !== "all") { TAB = "deals"; store.set("tab", TAB); }
+  save(); };
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
-  DATA = await api("/api/listings"); catBar(); famChips(); render(); }
+  DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }
 window.addEventListener("resize", () => { if (TAB === "market") renderMarket(); });
-bindFilters(); load(); status();
-setInterval(() => { load(); status(); }, 5 * 60 * 1000);
+bindFilters(); load();
+setInterval(load, 2 * 60 * 1000);   // matches the 5-minute fast lane closely enough
 </script>
 </body>
 </html>

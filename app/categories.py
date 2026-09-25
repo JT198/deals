@@ -6,6 +6,7 @@ fit        allow the log-linear price-vs-year fit when near comps are thin
 low_hpy / high_hpy   engine hours per year that count as light / heavy use
 cl_cat     Craigslist category to search (sna = atvs/utvs/snowmobiles, grd = farm & garden)
 every_min  how often each search in this category runs on Facebook
+quick      searches the 5-minute fast lane also runs (newest first), to be first to message a seller
 """
 
 CATEGORIES = {
@@ -13,6 +14,7 @@ CATEGORIES = {
         "label": "4-seat UTVs", "emoji": "🚙",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "cl_cat": "sna", "every_min": 20,
+        "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
             "Ranger Crew 1000", "Ranger Crew 570", "General 4",
@@ -79,6 +81,7 @@ CATEGORIES = {
         "label": "Zero-turn mowers", "emoji": "🌱",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 25, "high_hpy": 100,
         "cl_cat": "grd", "every_min": 20,
+        "quick": ["zero turn", "zero turn mower"],   # also run by the 5-minute fast lane
         "families": [
             "Cub Cadet RZT S (steering wheel)", "Cub Cadet ZT1/ZT2 (lap bar)", "Cub Cadet Ultima ZT",
             "Cub Cadet Pro Z (commercial)", "John Deere Z300 series", "John Deere Z500 series",

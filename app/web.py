@@ -142,7 +142,7 @@ def get_settings():
             "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
 
-EDITABLE = {"radius_mi", "alert_threshold", "alert_private_only", "alert_rules",
+EDITABLE = {"radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
 
@@ -153,7 +153,8 @@ def put_settings(body: dict = Body(...)):
         if k not in EDITABLE:
             raise HTTPException(400, f"unknown setting {k}")
         if k == "alert_rules":
-            v = json.dumps({c: {"enabled": bool(r.get("enabled")), "max_price": str(r.get("max_price") or ""),
+            v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
+                                "max_price": str(r.get("max_price") or ""),
                                 "min_year": str(r.get("min_year") or "")}
                             for c, r in v.items() if c in CATEGORIES})
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, str(v).strip()))
@@ -176,7 +177,9 @@ def add_search(body: dict = Body(...)):
 @app.patch("/api/searches/{sid}")
 def toggle_search(sid: int, body: dict = Body(...)):
     con = db.connect()
-    con.execute("UPDATE searches SET enabled = ? WHERE id = ?", (1 if body.get("enabled") else 0, sid))
+    for k in ("enabled", "quick"):
+        if k in body:
+            con.execute(f"UPDATE searches SET {k} = ? WHERE id = ?", (1 if body[k] else 0, sid))
     con.commit()
     return get_settings()
 

@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+def _default_rule(cat: str) -> dict:
+    return {"enabled": True, "fresh": cat in ("utv4", "mower"), "max_price": "", "min_year": ""}
+
+
 DEFAULT_SETTINGS = {
     "home_label": "Plymouth, MN 55446",
     "home_zip": "55446",
@@ -82,11 +86,13 @@ DEFAULT_SETTINGS = {
     "min_year": "",
     "active_hours": "6-23",        # local hours the scanner runs
     # per category: {"utv4": {"enabled": true, "max_price": "", "min_year": ""}, ...}
-    "alert_rules": json.dumps({c: {"enabled": True, "max_price": "", "min_year": ""} for c in CATEGORIES}),
+    "alert_rules": json.dumps({c: _default_rule(c) for c in CATEGORIES}),
+    "fresh_window_min": "120",     # "just listed" = posted within this many minutes
+    "fresh_min_score": "50",       # ...and not overpriced / not red-flagged
     "seed_version": "1",
 }
 
-SEED_VERSION = 2   # bump when categories.py gains default searches
+SEED_VERSION = 3   # bump when categories.py gains default searches
 
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -109,15 +115,19 @@ def init() -> None:
     con.executescript(SCHEMA)
     _add_columns(con, "listings", {"is_new": "INTEGER", "category": "TEXT",
                                    "deck_in": "INTEGER", "engine": "TEXT"})
-    _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER"})
+    _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER",
+                                   "quick": "INTEGER NOT NULL DEFAULT 0"})
+    _add_columns(con, "listings", {"fresh_alerted": "INTEGER"})
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     for k, v in DEFAULT_SETTINGS.items():
         con.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
     seeded = int(con.execute("SELECT value FROM settings WHERE key='seed_version'").fetchone()[0])
     if seeded < SEED_VERSION or con.execute("SELECT COUNT(*) FROM searches").fetchone()[0] == 0:
         for cat, c in CATEGORIES.items():
-            for q in c["searches"]:
+            for q in c["searches"] + c.get("quick", []):
                 con.execute("INSERT OR IGNORE INTO searches(query, category) VALUES (?, ?)", (q, cat))
+            for q in c.get("quick", []):
+                con.execute("UPDATE searches SET quick = 1 WHERE query = ?", (q,))
         con.execute("UPDATE settings SET value = ? WHERE key = 'seed_version'", (str(SEED_VERSION),))
     con.commit()
     con.close()
@@ -133,7 +143,8 @@ def alert_rules(st: dict) -> dict:
     except ValueError:
         rules = {}
     for c in CATEGORIES:
-        rules.setdefault(c, {"enabled": True, "max_price": "", "min_year": ""})
+        rules.setdefault(c, _default_rule(c))
+        rules[c].setdefault("fresh", _default_rule(c)["fresh"])
     return rules
 
 

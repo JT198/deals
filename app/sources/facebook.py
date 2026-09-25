@@ -76,7 +76,8 @@ class Facebook:
     async def __aexit__(self, *exc):
         await self.browser.close()
 
-    async def search(self, query: str, location: str, radius_mi: int, sort: str = "newest") -> list[dict]:
+    async def search(self, query: str, location: str, radius_mi: int, sort: str = "newest",
+                     scrolls: int | None = None) -> list[dict]:
         page = await self.ctx.new_page()
         found: list[dict] = []
 
@@ -106,7 +107,8 @@ class Facebook:
                     _walk(json.loads(m.group(1)), "marketplace_listing_title", found)
                 except ValueError:
                     pass
-            for _ in range(2 if sort == "newest" else 6):  # scrolls pulls the next graphql page
+            n = scrolls if scrolls is not None else (2 if sort == "newest" else 6)
+            for _ in range(n):  # each scroll pulls the next graphql page
                 await page.mouse.wheel(0, 5000)
                 await page.wait_for_timeout(2000 + random.randint(0, 1500))
         finally:

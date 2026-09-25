@@ -125,7 +125,10 @@ def init() -> None:
     _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER",
                                    "quick": "INTEGER NOT NULL DEFAULT 0"})
     _add_columns(con, "listings", {"fresh_alerted": "INTEGER", "detail_misses": "INTEGER NOT NULL DEFAULT 0",
-                                   "alerted_price": "INTEGER"})   # price when the last alert went out
+                                   "alerted_price": "INTEGER",   # price when the last alert went out
+                                   "expected_base": "INTEGER", "usage_note": "TEXT",   # typical before use adjustment
+                                   "offer_open": "INTEGER", "offer_aim": "INTEGER", "offer_walk": "INTEGER",
+                                   "offer_notes": "TEXT"})
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:
         # seed history from listings alerted before the log existed
@@ -172,7 +175,7 @@ def now() -> int:
 
 def row_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
-    for k in ("extras", "red_flags", "reasons"):
+    for k in ("extras", "red_flags", "reasons", "offer_notes"):
         if d.get(k):
             try:
                 d[k] = json.loads(d[k])

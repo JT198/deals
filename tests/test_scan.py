@@ -194,6 +194,52 @@ def test_twin_stays_blocked_after_original_realerts_at_new_price():
     assert SENT == ["facebook:0", "facebook:0"], SENT      # stale $4,000 twin still suppressed
 
 
+def _family(con, n=12):
+    """n used RZR XP 4 comps, 2021-2023, whose price falls with miles."""
+    t = db.now()
+    for i in range(n):
+        year, miles = 2021 + i % 3, 1000 + 1000 * i
+        price = int(16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status,
+                         parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 'c', ?, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
+                    (f"facebook:c{i}", f"c{i}", price, t, t, year, miles))
+    con.commit()
+
+
+def test_usage_moves_typical_the_right_way():
+    from app import score
+    con = reset([])
+    _family(con)
+    comps = score._comps(con)
+    base_row = {"id": "x", "family": "RZR XP 4", "year": 2022, "category": "utv4", "deck_in": None}
+    high = score.expected_price(dict(base_row, miles=15000, hours=None), comps)
+    low = score.expected_price(dict(base_row, miles=500, hours=None), comps)
+    none = score.expected_price(dict(base_row, miles=None, hours=None), comps)
+    assert high[0] < high[2] and "more use" in high[3], high
+    assert low[0] > low[2] and "less use" in low[3], low
+    assert none[0] == none[2] and none[3] is None, none
+    slope = score.usage_slope(comps["RZR XP 4"], "miles", "utv4")
+    assert -0.00004 < slope < -0.00001, slope      # learned ~-2.5%/1000 mi, not something wild
+
+
+def test_offer_numbers_are_ordered():
+    from app import score
+    con = reset([{"price": 15000, "motivated": 1}])
+    r = con.execute("SELECT * FROM listings").fetchone()
+    o = score.offer(r, 16000, (16000 - 15000) / 16000, 10)
+    assert o["open"] <= o["aim"] <= o["walk"] <= 15000, o
+    assert o["open"] >= 15000 * 0.75, o
+    great = score.offer(r, 20000, 0.25, 10)            # 25% under typical: don't lowball
+    assert great["open"] >= 15000 * 0.95 - 250 and "don't lowball" in " ".join(great["notes"]), great
+
+
+def test_alert_text_includes_offer():
+    con = reset([{"offer_open": 13000, "offer_aim": 13500, "offer_walk": 14500, "usage_note": "−$900 for use"}])
+    cap = notify.listing_caption(con.execute("SELECT * FROM listings").fetchone())
+    assert "Offer $13,000 · aim $13,500 · walk away above $14,500" in cap and "for use" in cap, cap
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

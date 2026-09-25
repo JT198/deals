@@ -5,6 +5,8 @@ window     +/- model years that count as "near" comps
 fit        allow the log-linear price-vs-year fit when near comps are thin
 low_hpy / high_hpy   engine hours per year that count as light / heavy use
 cl_cat     Craigslist category to search (sna = atvs/utvs/snowmobiles, grd = farm & garden)
+usage      prior for how price falls with use: {"miles": (log-change, per N miles), "hours": (...)}.
+           Each family blends this with what its own listings show (more data -> more weight).
 every_min  how often each search in this category runs on Facebook
 quick      searches the 5-minute fast lane also runs (newest first), to be first to message a seller
 """
@@ -13,6 +15,7 @@ CATEGORIES = {
     "utv4": {
         "label": "4-seat UTVs", "emoji": "🚙",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
+        "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 20,
         "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
         "families": [
@@ -35,6 +38,7 @@ CATEGORIES = {
     "utv2": {
         "label": "2-seat UTVs", "emoji": "🛻",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
+        "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 60,
         "families": [
             "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP/Pro R (2-seat)", "RZR 900/570/Trail (2-seat)",
@@ -52,6 +56,7 @@ CATEGORIES = {
     "atv": {
         "label": "ATVs", "emoji": "🏍️",
         "dep": 0.07, "window": 1, "fit": True, "low_hpy": 40, "high_hpy": 150,
+        "usage": {"miles": (-0.03, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 60,
         "families": [
             "Polaris Sportsman", "Polaris Scrambler", "Can-Am Outlander", "Can-Am Renegade",
@@ -69,6 +74,7 @@ CATEGORIES = {
         # vintage ATCs hold or gain value with age, so no depreciation and a wide year window
         "label": "3-wheelers", "emoji": "🛺",
         "dep": 0.0, "window": 3, "fit": False, "low_hpy": 20, "high_hpy": 100,
+        "usage": {},
         "cl_cat": "sna", "every_min": 60,
         "families": [
             "Honda ATC 250R", "Honda ATC 200 series (200X/200S/200E/Big Red)",
@@ -80,6 +86,7 @@ CATEGORIES = {
     "mower": {
         "label": "Zero-turn mowers", "emoji": "🌱",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 25, "high_hpy": 100,
+        "usage": {"hours": (-0.04, 100)},
         "cl_cat": "grd", "every_min": 20,
         "quick": ["zero turn", "zero turn mower"],   # also run by the 5-minute fast lane
         "families": [

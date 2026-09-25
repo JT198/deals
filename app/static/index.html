@@ -73,6 +73,28 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .badge.great { background: var(--good-bg); color: var(--good); border-color: transparent; }
 .badge.good { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.typ.usage { font-size: 12px; color: var(--muted); }
+details.offer { background: var(--surface-2); border-radius: 8px; padding: 7px 10px; font-size: 13px; }
+details.offer summary { cursor: pointer; font-weight: 600; list-style: none; }
+details.offer summary::-webkit-details-marker { display: none; }
+details.offer summary::after { content: " ▸"; color: var(--muted); font-weight: 400; }
+details.offer[open] summary::after { content: " ▾"; }
+details.offer .nums { display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+details.offer .nums b { font-size: 15px; }
+details.offer .nums span { color: var(--text-2); font-weight: 400; font-size: 12px; display: block; }
+details.offer ul { margin: 8px 0 2px; padding-left: 18px; color: var(--text-2); }
+details.offer li { margin: 3px 0; }
+dialog#help { max-width: 760px; width: calc(100% - 32px); max-height: 85vh; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--surface); color: var(--text); padding: 0; }
+dialog#help::backdrop { background: rgba(0,0,0,.45); }
+dialog#help .hd { position: sticky; top: 0; background: var(--surface); display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid var(--border); }
+dialog#help .hd h2 { margin: 0; font-size: 17px; }
+dialog#help .bd { padding: 6px 18px 18px; line-height: 1.55; }
+dialog#help h3 { font-size: 14px; margin: 18px 0 6px; }
+dialog#help p, dialog#help li { color: var(--text-2); font-size: 13.5px; }
+dialog#help ul { padding-left: 18px; margin: 6px 0; }
+dialog#help code { background: var(--surface-2); padding: 0 5px; border-radius: 4px; font-size: 12.5px; }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
 .sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
@@ -131,7 +153,8 @@ td.t { white-space: normal; min-width: 240px; }
 <header>
   <h1>Deal Finder</h1>
   <div class="sub"><span id="statusline">Loading…</span>
-    <button class="btn" id="scanbtn">Scan now</button></div>
+    <button class="btn" id="scanbtn">Scan now</button>
+    <button class="btn" id="helpbtn" title="How this works">? Help</button></div>
   <nav id="tabs">
     <button data-tab="deals" class="on">Best deals</button>
     <button data-tab="all">All listings</button>
@@ -165,6 +188,93 @@ td.t { white-space: normal; min-width: 240px; }
   <section id="tab-market" hidden></section>
   <section id="tab-setup" hidden></section>
 </main>
+<dialog id="help" aria-labelledby="help-title">
+  <div class="hd"><h2 id="help-title">How Deal Finder works</h2><button class="btn" id="helpclose">Close</button></div>
+  <div class="bd">
+    <h3>What it does</h3>
+    <p>It watches Facebook Marketplace and Craigslist within your radius (Setup tab) for 4-seat and 2-seat UTVs,
+      ATVs, 3-wheelers and zero-turn mowers. It reads every ad, works out what similar machines usually list for,
+      and flags the ones priced well below that. Private sellers are the focus; dealers are shown but marked.</p>
+
+    <h3>How often it looks</h3>
+    <ul>
+      <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook, 4-seat UTV and mower
+        searches every scan and the other categories hourly.</li>
+      <li><b>⚡ Fast lane</b> every 5 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
+        usually shows up 5-10 minutes after it's posted.</li>
+      <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
+        deck size, add-ons, whether it's a dealer, and any problems (red flags). Parts, "wanted" ads and the wrong kind
+        of machine are dropped.</li>
+    </ul>
+
+    <h3>"Typical" price</h3>
+    <ul>
+      <li>The middle asking price of the same model family (e.g. <i>RZR XP 4</i>, <i>Toro TimeCutter</i>) seen in the
+        last 6 months, within a model year either side, adjusted about 8% per year of age. Mowers are matched on deck
+        size when there are enough. Vintage 3-wheelers don't lose value with age, so no age adjustment for those.</li>
+      <li><b>Adjusted for use:</b> when the ad states miles or hours, similar machines are lined up to the same use
+        before taking the middle price. How much a mile or an hour is worth is learned from the listings for that model,
+        starting from a sensible default (about 2.5% per 1,000 miles for UTVs, 4% per 100 hours for mowers). The grey
+        line under "Typical" shows the adjustment.</li>
+      <li>These are <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
+        With few listings of a model the number is rougher; the comps count tells you how many it's based on.</li>
+      <li>New/dealer-stock units get no typical price (used comps don't apply); compare those to MSRP.</li>
+    </ul>
+
+    <h3>Score (the number on each card)</h3>
+    <ul>
+      <li><b>50</b> is a normally priced listing. <b>60-74 "Good"</b>, <b>75+ "Great"</b>.</li>
+      <li>Goes up for being under typical, price cuts, and signs the seller is motivated (OBO, must sell).
+        Goes down for dealers, new stock, and being over typical.</li>
+      <li>Anything with red flags (needs work, title problems, scam signs) is capped at 70 - never "Great".</li>
+      <li>Prices under $100 or under 20% of typical are treated as placeholders ("$1 - make an offer"), not deals.</li>
+      <li>Few comps or no model year pull the score toward the middle, because the typical price is less certain.</li>
+    </ul>
+
+    <h3>Offer guidance</h3>
+    <ul>
+      <li><b>Walk away above</b> - the typical price for this machine (or the asking price, if lower). Paying more
+        means you're paying above market.</li>
+      <li><b>Aim to pay</b> - normally 7% under that, more when the seller is motivated, it's a dealer, or it has sat
+        for 3+ weeks; less when it was just listed (other buyers are coming).</li>
+      <li><b>Open with</b> - a little under your aim, never below 75% of asking.</li>
+      <li>If it's already 15%+ under typical, the guidance flips: offer close to asking and move fast - lowballing a
+        real deal usually loses it.</li>
+      <li>Red flags: get a repair estimate and take it off these numbers. Always check the title/VIN in person.</li>
+    </ul>
+
+    <h3>Telegram alerts</h3>
+    <ul>
+      <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup (75). Sent again if the score
+        jumps 10+ points (e.g. a price cut).</li>
+      <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
+        and have no red flags, so you can be first to message. On for 4-seat UTVs and mowers; change per category in Setup.</li>
+      <li>Per category you can turn each alert type on or off and set a max price and minimum year. Listings far outside
+        the radius and cross-posts of something already sent are skipped.</li>
+    </ul>
+
+    <h3>Using the dashboard</h3>
+    <ul>
+      <li><b>Category bar</b> picks what you're looking at; model chips narrow it to specific families.</li>
+      <li><b>"Listed in the last hour" / "new since your last visit"</b> in the header are quick views - click to see
+        just those, click again (or ✕) to go back. Your filters aren't changed.</li>
+      <li><b>NEW</b> marks listings added since your last visit in this browser; <b>Just listed</b> = posted within a day.</li>
+      <li><b>Star</b> to keep track of one, <b>Hide</b> to get it out of the way (Show hidden brings them back).
+        Stars and hides are shared by everyone who uses this dashboard.</li>
+      <li><b>Market</b> tab: every asking price seen for a model by year - handy for knowing what yours is worth, too.</li>
+      <li><b>Setup</b>: radius and home ZIP, alert rules, searches (add your own; ⚡ puts one in the fast lane), and
+        recent scan history with any problems.</li>
+    </ul>
+
+    <h3>Limits worth knowing</h3>
+    <ul>
+      <li>Facebook is read without an account. If Facebook starts blocking it, Setup → Recent scans will say so.</li>
+      <li>OfferUp and ATVTrader aren't covered (they block this kind of reading).</li>
+      <li>The AI occasionally misreads an ad (wrong model family, 2-seat vs 4-seat). The card summary and the listing
+        itself are the final word.</li>
+    </ul>
+  </div>
+</dialog>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -250,7 +360,17 @@ function vsTypical(d) {
   if (!d.expected) return `<span class="typ">Typical: not enough comps yet (${d.comps || 0})</span>`;
   const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
   const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
-  return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>`;
+  return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` +
+    (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
+}
+function offerBox(d) {
+  if (!d.offer_aim) return "";
+  const nums = d.offer_open < d.offer_aim
+    ? `<div><b>${money(d.offer_open)}</b><span>open with</span></div><div><b>${money(d.offer_aim)}</b><span>aim to pay</span></div>`
+    : `<div><b>${money(d.offer_open)}</b><span>offer</span></div>`;
+  return `<details class="offer"><summary>Offer guidance</summary>
+    <div class="nums" style="margin-top:6px">${nums}<div><b>${money(d.offer_walk)}</b><span>walk away above</span></div></div>
+    <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`;
 }
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year,
@@ -273,6 +393,7 @@ function card(d) {
       ${vsTypical(d)}
       <div class="facts">${facts(d)}</div>
       ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
+      ${offerBox(d)}
       <div class="tags">${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
@@ -297,7 +418,7 @@ function renderDeals() {
     : `<div class="empty">No listings match these filters yet.</div>`);
 }
 
-const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],
+const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["offer_aim","Aim to pay"],
   ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
 function renderAll() {
   const [k, dir] = SORT;
@@ -308,7 +429,7 @@ function renderAll() {
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
     <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>
-    <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td>
+    <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${money(d.offer_aim)}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
     <td>${d.distance ?? "—"}</td><td>${d.dealer ? "dealer" : "private"}</td><td>${ago(d.first_seen)}</td></tr>`).join("")}</tbody></table></div>
     <p class="hint">${rows.length} listings. "Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
@@ -491,6 +612,9 @@ function setQuick(v) {
 }
 $("#statusline").onclick = e => { const a = e.target.closest("[data-age]"); if (a) setQuick(a.dataset.age); };
 document.addEventListener("click", e => { if (e.target.id === "quickoff") setQuick(QUICK); });
+$("#helpbtn").onclick = () => $("#help").showModal();
+$("#helpclose").onclick = () => $("#help").close();
+$("#help").addEventListener("click", e => { if (e.target.id === "help") $("#help").close(); });   // click outside
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
   DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }

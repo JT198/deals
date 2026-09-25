@@ -31,6 +31,11 @@ def listing_caption(r, header: str | None = None) -> str:
         r["source"],
     ) if x]
     bits.append(e(" · ".join(facts)))
+    if r["usage_note"]:
+        bits.append(e(r["usage_note"]))
+    if r["offer_aim"]:
+        o = f"Offer ${r['offer_open']:,}" + (f" · aim ${r['offer_aim']:,}" if r["offer_open"] < r["offer_aim"] else "")
+        bits.append(f"💬 {e(o)} · walk away above ${r['offer_walk']:,}")
     if r["summary"]:
         bits.append(e(r["summary"]))
     if r["reasons"]:

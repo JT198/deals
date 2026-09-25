@@ -14,27 +14,41 @@ COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
 
 
-def _comps(con) -> dict[str, list[tuple]]:
-    """family -> [(id, year|None, price, deck_in|None)] of used asking prices."""
+def _v(listing, key):
+    """Row or dict field, None if absent (the market chart scores synthetic listings)."""
+    try:
+        return listing[key]
+    except (KeyError, IndexError):
+        return None
+
+
+class Comp(tuple):
+    """(id, year, price, deck_in, miles, hours)"""
+    id, year, price, deck, miles, hours = (property(lambda t, i=i: t[i]) for i in range(6))
+
+
+def _comps(con) -> dict[str, list[Comp]]:
+    """family -> used asking prices."""
     rows = con.execute(
-        """SELECT id, family, year, price, deck_in FROM listings
+        """SELECT id, family, year, price, deck_in, miles, hours FROM listings
            WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND price >= 300 AND last_seen >= ?""",
         (int(time.time()) - COMP_WINDOW,)).fetchall()
-    by_fam: dict[str, list[tuple]] = {}
+    by_fam: dict[str, list[Comp]] = {}
     for r in rows:
-        by_fam.setdefault(r["family"], []).append((r["id"], r["year"], r["price"], r["deck_in"]))
+        by_fam.setdefault(r["family"], []).append(
+            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"])))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
-        med = statistics.median(c[2] for c in lst)
-        by_fam[fam] = [c for c in lst if c[2] >= 0.3 * med]
+        med = statistics.median(c.price for c in lst)
+        by_fam[fam] = [c for c in lst if c.price >= 0.3 * med]
     return by_fam
 
 
 def _fit(comps):
     """log(price) = a + b*year, least squares, slope clipped to a sane range."""
-    xs = [c[1] for c in comps]
-    ys = [math.log(c[2]) for c in comps]
+    xs = [c.year for c in comps]
+    ys = [math.log(c.price) for c in comps]
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     var = sum((x - mx) ** 2 for x in xs)
     b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / var if var else 0.08
@@ -42,32 +56,120 @@ def _fit(comps):
     return my - b * mx, b
 
 
-def expected_price(listing, comps_by_fam) -> tuple[int | None, int]:
-    fam, year = listing["family"], listing["year"]
+# ---- usage (miles / hours) --------------------------------------------------------------------
+USAGE_SHRINK = 15          # listings' worth of weight on the category prior
+USAGE_CLAMP = (0.6, 1.4)   # a single comp is never moved more than -40% / +40% for usage
+
+
+def _usage_metric(listing, category):
+    """Which usage number to compare on: mowers use hours; vehicles miles, else hours."""
+    prior = cfg(category)["usage"]
+    for m in ("miles", "hours"):
+        if m in prior and _v(listing, m) is not None:
+            return m
+    return None
+
+
+def usage_slope(comps, metric, category):
+    """log-price change per unit of use, from year+use least squares, shrunk toward the prior."""
+    per, unit = cfg(category)["usage"][metric]
+    prior = per / unit
+    pts = [(c.year, getattr(c, metric), math.log(c.price)) for c in comps
+           if c.year and getattr(c, metric) is not None]
+    n = len(pts)
+    if n >= 6:
+        my, mu, ml = (statistics.fmean(p[i] for p in pts) for i in range(3))
+        syy = sum((p[0] - my) ** 2 for p in pts)
+        suu = sum((p[1] - mu) ** 2 for p in pts)
+        syu = sum((p[0] - my) * (p[1] - mu) for p in pts)
+        syl = sum((p[0] - my) * (p[2] - ml) for p in pts)
+        sul = sum((p[1] - mu) * (p[2] - ml) for p in pts)
+        det = syy * suu - syu * syu
+        fit = (syy * sul - syu * syl) / det if det > 1e-9 and suu > 0 else prior
+    else:
+        fit, n = prior, 0
+    slope = (n * fit + USAGE_SHRINK * prior) / (n + USAGE_SHRINK)
+    return min(0.0, max(3 * prior, slope))          # more use never raises the price
+
+
+def _use_per_year(comps, metric):
+    rates = [getattr(c, metric) / max(1, NOW_YEAR - c.year + 1) for c in comps
+             if c.year and getattr(c, metric) is not None]
+    return statistics.median(rates) if len(rates) >= 5 else None
+
+
+def expected_price(listing, comps_by_fam) -> tuple[int | None, int, int | None, str | None]:
+    """(expected, comps used, expected before the usage adjustment, plain-English usage note)."""
+    fam, year = _v(listing, "family"), _v(listing, "year")
     if not fam:
-        return None, 0
-    c = cfg(listing["category"])
-    others = [x for x in comps_by_fam.get(fam, []) if x[0] != listing["id"]]
-    deck = listing["deck_in"]
+        return None, 0, None, None
+    cat = _v(listing, "category")
+    c = cfg(cat)
+    others = [x for x in comps_by_fam.get(fam, []) if x.id != _v(listing, "id")]
+    deck = _v(listing, "deck_in")
     if deck:   # mowers: a 42" and a 60" of the same series are different machines
-        same_deck = [x for x in others if x[3] and abs(x[3] - deck) <= 6]
+        same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]
         if len(same_deck) >= 4:
             others = same_deck
+    metric = _usage_metric(listing, cat)
+    use = _v(listing, metric) if metric else None
+    slope = usage_slope(others, metric, cat) if metric else 0.0
+    rate = _use_per_year(others, metric) if metric else None
+
+    def comp_use(x):
+        u = getattr(x, metric) if metric else None
+        if u is None and rate is not None and x.year:
+            u = rate * max(1, NOW_YEAR - x.year + 1)     # typical use for its age
+        return u
+
+    def usage_factor(u):
+        if use is None or u is None:
+            return 1.0
+        return min(USAGE_CLAMP[1], max(USAGE_CLAMP[0], math.exp(slope * (use - u))))
+
     if not year:
-        return (int(statistics.median(x[2] for x in others)), len(others)) if len(others) >= 5 else (None, len(others))
-    dated = [x for x in others if x[1]]
-    near = [x for x in dated if abs(x[1] - year) <= c["window"]]
+        # no model year (common for mowers): compare against the whole family, still adjusted for use
+        if len(others) < 5:
+            return None, len(others), None, None
+        base = int(statistics.median(x.price for x in others))
+        with_use = [getattr(x, metric) for x in others if metric and getattr(x, metric) is not None]
+        typical_use = statistics.median(with_use) if len(with_use) >= 5 else None
+        exp = int(base * usage_factor(typical_use))
+        n = len(others)
+        return exp, n, base, _usage_note(use, typical_use, metric, exp, base)
+
+    dated = [x for x in others if x.year]
+    near = [x for x in dated if abs(x.year - year) <= c["window"]]
     if len(near) >= 4:
-        adj = [x[2] * (1 + c["dep"]) ** (year - x[1]) for x in near]
-        return int(statistics.median(adj)), len(near)
-    yrs = [x[1] for x in dated]
-    if c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1:
+        aligned = [(x.price * (1 + c["dep"]) ** (year - x.year), comp_use(x)) for x in near]
+        base = int(statistics.median(p for p, _ in aligned))
+        exp = int(statistics.median(p * usage_factor(u) for p, u in aligned))
+        typical_use = [u for _, u in aligned if u is not None]
+        typical_use = statistics.median(typical_use) if typical_use else None
+        n = len(near)
+    else:
+        yrs = [x.year for x in dated]
+        if not (c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1):
+            return None, len(others), None, None
         a, b = _fit(dated)
-        return int(math.exp(a + b * year)), len(dated)
-    return None, len(others)
+        base = int(math.exp(a + b * year))
+        typical_use = rate * max(1, NOW_YEAR - year + 1) if rate is not None else None
+        exp = int(base * usage_factor(typical_use))
+        n = len(dated)
+
+    return exp, n, base, _usage_note(use, typical_use, metric, exp, base)
 
 
-def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[str]]:
+def _usage_note(use, typical_use, metric, exp, base):
+    if use is None or typical_use is None or abs(exp - base) < max(100, 0.02 * base):
+        return None
+    unit = "mi" if metric == "miles" else "hrs"
+    more = "more" if use > typical_use else "less"
+    return (f"{'−' if exp < base else '+'}${abs(base - exp):,} for use: {use:,} {unit} vs about "
+            f"{int(round(typical_use, -2 if typical_use >= 1000 else -1)):,} {unit} on similar ones ({more} use)")
+
+
+def score(listing, expected, comps: int = 0, usage_adjusted: bool = False) -> tuple[int, float | None, list[str]]:
     """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
     reasons: list[str] = []
     price = listing["price"]
@@ -104,7 +206,8 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
         reasons.append("motivated seller")
 
     age = max(1, NOW_YEAR - (listing["year"] or NOW_YEAR) + 1)
-    if listing["year"] and (listing["miles"] is not None or listing["hours"] is not None):
+    # when "typical" is already adjusted for this machine's miles/hours, use is priced in - no extra points
+    if not usage_adjusted and listing["year"] and (listing["miles"] is not None or listing["hours"] is not None):
         mpy = (listing["miles"] or 0) / age
         hpy = (listing["hours"] or 0) / age
         c = cfg(listing["category"])
@@ -136,16 +239,77 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
     return max(0, min(100, round(s))), deal_pct, reasons
 
 
+def _nice(x: float) -> int:
+    """Round down to a number people actually offer."""
+    step = 50 if x < 2000 else 100 if x < 10000 else 250
+    return int(x // step * step)
+
+
+def offer(listing, expected, deal_pct, comps) -> dict | None:
+    """Opening offer / target / walk-away, plus talking points. None when we can't price it."""
+    price = listing["price"]
+    if not expected or not price or listing["is_new"] == 1 or price < 0.2 * expected:
+        return None
+    now = time.time()
+    days = int((now - (listing["listed_at"] or listing["first_seen"])) / 86400)
+    dealer = listing["is_dealer"] == 1 or listing["seller_type"] == "dealer"
+    great = deal_pct is not None and deal_pct >= 0.15
+    notes = []
+
+    if great:
+        room = 0.03
+        notes.append(f"Already {deal_pct:.0%} under typical - don't lowball; offer close to asking and move fast.")
+    else:
+        room = 0.07
+        if listing["motivated"]:
+            room += 0.03
+            notes.append("Seller signals flexibility (OBO / must sell) - lead with that.")
+        if dealer:
+            room += 0.03
+            notes.append("Dealer - ask for fees/freight to be waived or accessories thrown in.")
+    if days >= 45:
+        room += 0.04
+        notes.append(f"Listed {days} days - long enough that the seller is likely open to offers.")
+    elif days >= 21:
+        room += 0.02
+        notes.append(f"Listed {days} days ago - interest has probably cooled.")
+    elif days <= 1:
+        room = max(0.02, room - 0.03)
+        notes.append("Just listed - expect other buyers; a quick, firm offer beats a low one.")
+
+    was = max(x for x in (listing["strike_price"], listing["first_price"], 0) if x is not None)
+    if was > price:
+        notes.append(f"Already cut ${was - price:,} from ${was:,} - they may go lower.")
+
+    fair = min(price, expected)
+    walk = _nice(fair)
+    aim = _nice(fair * (1 - room))
+    gap = 0.03 if great else 0.06                              # opening offer sits a bit under the target
+    open_ = max(_nice(aim * (1 - gap)), _nice(price * (0.95 if great else 0.75)))   # never insulting / never lose a steal
+    open_ = min(open_, aim)
+
+    noun = f"similar {listing['family']}" if listing["family"] else "similar machines"
+    notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby).")
+    flags = json.loads(listing["red_flags"] or "[]")
+    if flags:
+        notes.append("Known issues (" + ", ".join(flags) + "): get a repair estimate and take it off these numbers.")
+    notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
+    return {"open": open_, "aim": aim, "walk": walk, "notes": notes}
+
+
 def rescore_all(con) -> None:
     comps = _comps(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
     for r in rows:
-        exp, n = expected_price(r, comps)
+        exp, n, base, note = expected_price(r, comps)
         if r["is_new"] == 1:
-            exp = None
-        s, pct, reasons = score(r, exp, n)
+            exp = base = note = None
+        s, pct, reasons = score(r, exp, n, usage_adjusted=note is not None)
+        o = offer(r, exp, pct, n)
         con.execute(
-            "UPDATE listings SET expected=?, comps=?, deal_pct=?, score=?, reasons=? WHERE id=?",
-            (exp, n, pct, s, json.dumps(reasons), r["id"]))
+            """UPDATE listings SET expected=?, expected_base=?, usage_note=?, comps=?, deal_pct=?, score=?, reasons=?,
+                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=? WHERE id=?""",
+            (exp, base, note, n, pct, s, json.dumps(reasons),
+             o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None, r["id"]))
     con.commit()

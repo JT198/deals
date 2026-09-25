@@ -79,6 +79,9 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
         s = 45 + 100 * max(-0.4, min(0.4, deal_pct))
         if comps < 8:   # thin comps: trust the discount less
             s = 45 + (s - 45) * (0.5 + comps / 16)
+        if not listing["year"]:   # compared against every year of the family
+            s = 45 + (s - 45) * 0.6
+            reasons.append("year not stated")
         if deal_pct >= 0.05:
             reasons.append(f"{deal_pct:.0%} under typical ${expected:,}")
         elif deal_pct <= -0.05:
@@ -120,7 +123,7 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
 
     flags = json.loads(listing["red_flags"] or "[]")
     if flags:
-        s -= min(35, 15 * len(flags))
+        s = min(s - min(35, 15 * len(flags)), 70)   # never "Great" (or alert-worthy) with known problems
         reasons.append("red flags: " + ", ".join(flags))
 
     if deal_pct is not None and deal_pct > 0.45:

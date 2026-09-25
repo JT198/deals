@@ -302,21 +302,26 @@ async def _send_alerts(con, http, st, quiet) -> int:
         con.executemany(sql, [(i,) for i in ids])
         con.commit()
 
-    deal_mark = "UPDATE listings SET alerted_score = score, fresh_alerted = 1 WHERE id = ?"
-    fresh_mark = "UPDATE listings SET fresh_alerted = 1 WHERE id = ?"
+    deal_mark = "UPDATE listings SET alerted_score = score, fresh_alerted = 1, alerted_price = price WHERE id = ?"
+    fresh_mark = "UPDATE listings SET fresh_alerted = 1, alerted_price = price WHERE id = ?"
 
-    # cross-posts / reposts: same title + price as something already alerted (or picked this run)
-    def key(r):
-        return (re.sub(r"[^a-z0-9]", "", (r["title"] or "").lower()), r["price"])
-    seen = {key(r) for r in con.execute(
-        """SELECT title, price FROM listings WHERE (alerted_score IS NOT NULL OR fresh_alerted = 1)
-             AND first_seen >= ?""", (db.now() - 30 * 86400,))}
+    # Cross-posts / reposts: a DIFFERENT listing with the same title already alerted at this price
+    # (or was picked earlier in this run). A listing never blocks its own follow-up alerts, and
+    # the comparison uses the price at delivery time, so a price cut on a twin still alerts.
+    def key(title, price):
+        return (re.sub(r"[^a-z0-9]", "", (title or "").lower()), price)
+    seen: dict[tuple, set] = {}
+    for r in con.execute(
+            """SELECT id, title, COALESCE(alerted_price, price) p FROM listings
+               WHERE (alerted_score IS NOT NULL OR fresh_alerted = 1) AND first_seen >= ?""",
+            (db.now() - 30 * 86400,)):
+        seen.setdefault(key(r["title"], r["p"]), set()).add(r["id"])
 
     def first_copy(r):
-        k = key(r)
-        if k in seen:
+        ids = seen.setdefault(key(r["title"], r["price"]), set())
+        if ids - {r["id"]}:
             return False
-        seen.add(k)
+        ids.add(r["id"])
         return True
 
     deals = [r for r in con.execute(

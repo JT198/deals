@@ -36,6 +36,9 @@ notify.send_text = fake_send_text
 def reset(rows, **settings):
     db.init()
     con = db.connect()
+    con.executescript("DELETE FROM listings; DELETE FROM settings;")   # every test starts from defaults
+    con.commit()
+    db.init()
     con.execute("DELETE FROM listings")
     for k, v in settings.items():
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, v))
@@ -146,6 +149,34 @@ def test_cross_posts_alert_once():
            {"id": "craigslist:3", "source": "craigslist", "ext_id": "3", "title": "2014 Arctic cat 500 Hdx", "price": 3500}])
     asyncio.run(alerts(db.connect()))
     assert len(SENT) == 2, SENT          # the $4,000 twin is skipped; the $3,500 repost is a real price change
+
+
+def test_just_listed_then_deal_alert():
+    con = reset([{"score": 55}])
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT                      # just-listed alert
+    con.execute("UPDATE listings SET score = 85"); con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0", "facebook:0"], SENT        # later becomes a great deal -> deal alert
+
+
+def test_price_drop_realerts():
+    con = reset([{"score": 75, "price": 10000}])
+    asyncio.run(alerts(con))
+    con.execute("UPDATE listings SET price = 7000, score = 90"); con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0", "facebook:0"], SENT
+
+
+def test_twin_blocked_even_after_its_own_alert_price_changes():
+    # twin A alerted at $4,000; B is a cross-post at $4,000 -> skipped, even if A later drops to $3,500
+    con = reset([{"title": "Arctic Cat HDX", "price": 4000},
+                 {"id": "craigslist:2", "source": "craigslist", "ext_id": "2", "title": "Arctic Cat HDX", "price": 4000}])
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
+    con.execute("UPDATE listings SET price = 3500 WHERE id = 'facebook:0'"); con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
 
 
 if __name__ == "__main__":

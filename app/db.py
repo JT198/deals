@@ -117,7 +117,7 @@ def init() -> None:
                                    "deck_in": "INTEGER", "engine": "TEXT"})
     _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER",
                                    "quick": "INTEGER NOT NULL DEFAULT 0"})
-    _add_columns(con, "listings", {"fresh_alerted": "INTEGER"})
+    _add_columns(con, "listings", {"fresh_alerted": "INTEGER", "detail_misses": "INTEGER NOT NULL DEFAULT 0"})
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     for k, v in DEFAULT_SETTINGS.items():
         con.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))

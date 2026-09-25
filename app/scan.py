@@ -11,6 +11,7 @@ import asyncio
 import fcntl
 import json
 import random
+import re
 import sys
 import time
 import traceback
@@ -25,6 +26,7 @@ from .sources.facebook import Facebook, pause
 
 MAX_ALERTS_PER_RUN = 6
 MAX_FRESH_PER_RUN = 8
+ALERT_LOCK = "/tmp/deals-alert.lock"
 FB_SEARCHES_PER_RUN = 16      # keeps a run inside the 20-minute timer slot
 FB_DETAILS_PER_RUN = 40
 FB_RECHECKS_PER_RUN = 12
@@ -62,22 +64,38 @@ def upsert(con, source: str, item: dict) -> bool:
 
 def set_price(con, lid, old, new):
     if new and new != old:
-        con.execute("UPDATE listings SET price = ? WHERE id = ?", (new, lid))
+        con.execute("UPDATE listings SET price = ?, first_price = COALESCE(first_price, ?) WHERE id = ?",
+                    (new, new, lid))
         con.execute("INSERT INTO price_history VALUES (?,?,?)", (lid, db.now(), new))
 
 
+MAX_DETAIL_MISSES = 3
+
+
 def apply_detail(con, lid, d: dict | None, old_price):
+    """d = page data, {"status": "gone"} (site confirmed removal), or None (unreadable - see record_miss)."""
     t = db.now()
-    if d is None or d.get("status") == "gone":
+    if d is None:
+        return
+    if d.get("status") == "gone":
         con.execute("UPDATE listings SET status='gone', detail_fetched=1, last_checked=? WHERE id=?", (t, lid))
         return
     con.execute(
         """UPDATE listings SET description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
              listed_at = COALESCE(?, listed_at), image = COALESCE(?, image), status = ?,
-             detail_fetched = 1, last_checked = ?, last_seen = ? WHERE id = ?""",
+             detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ? WHERE id = ?""",
         (d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
          d.get("status", "active"), t, t, lid))
     set_price(con, lid, old_price, d.get("price"))
+
+
+def record_miss(con, lid):
+    """An item page we couldn't read. Retry; after a few misses stop waiting for the description
+    (parse from the title) and, for FB, treat it as removed - deleted listings redirect to login."""
+    con.execute("UPDATE listings SET detail_misses = detail_misses + 1, last_checked = ? WHERE id = ?", (db.now(), lid))
+    con.execute("""UPDATE listings SET detail_fetched = 1,
+                     status = CASE WHEN source = 'facebook' THEN 'gone' ELSE status END
+                   WHERE id = ? AND detail_misses >= ?""", (lid, MAX_DETAIL_MISSES))
 
 
 def in_active_hours(st) -> bool:
@@ -167,13 +185,26 @@ async def run(force=False, backfill=False, search=True, quick=False) -> None:
                     """SELECT id, ext_id, price FROM listings
                        WHERE source='facebook' AND detail_fetched=1 AND relevant=1 AND status IN ('active','pending')
                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall()
+                ok, missed = 0, []
                 for r in todo:
                     try:
-                        apply_detail(con, r["id"], await fb.detail(r["ext_id"]), r["price"])
-                        con.commit()
+                        d = await fb.detail(r["ext_id"])
+                        if d is None:
+                            missed.append(r["id"])
+                        else:
+                            ok += 1
+                            apply_detail(con, r["id"], d, r["price"])
+                            con.commit()
                     except Exception as e:
                         errors.append(f"fb detail {r['ext_id']}: {e}")
                     await asyncio.sleep(random.uniform(1, 3))
+                if missed and ok == 0 and len(missed) >= 3:
+                    # every page failed: FB is walling us, not a batch of removed listings
+                    errors.append(f"facebook item pages unreadable ({len(missed)}/{len(todo)}) - login wall?")
+                else:
+                    for lid in missed:
+                        record_miss(con, lid)
+                    con.commit()
         except Exception as e:
             errors.append(f"facebook: {e}")
 
@@ -182,7 +213,11 @@ async def run(force=False, backfill=False, search=True, quick=False) -> None:
                 """SELECT id, url, price FROM listings WHERE source='craigslist' AND detail_fetched=0""" + only_new + """
                    ORDER BY first_seen DESC LIMIT ?""", (CL_DETAILS_PER_RUN * boost,)).fetchall():
             try:
-                apply_detail(con, r["id"], await craigslist.detail(http, r["url"]), r["price"])
+                d = await craigslist.detail(http, r["url"])
+                if d is None:
+                    record_miss(con, r["id"])
+                else:
+                    apply_detail(con, r["id"], d, r["price"])
                 con.commit()
             except Exception as e:
                 errors.append(f"cl detail {r['url']}: {e}")
@@ -232,12 +267,17 @@ async def run(force=False, backfill=False, search=True, quick=False) -> None:
 
 
 async def send_alerts(con, http, st, quiet=False) -> int:
+    # The full scan and the fast lane both alert. One shared lock around select -> send -> mark
+    # means a listing is claimed by exactly one of them.
+    with open(ALERT_LOCK, "w") as lock:
+        await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
+        return await _send_alerts(con, http, st, quiet)
+
+
+async def _send_alerts(con, http, st, quiet) -> int:
     threshold = int(st.get("alert_threshold") or 75)
-    sql = """SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
-               AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10)"""
-    args: list = [threshold]
-    if st.get("alert_private_only") == "1":
-        sql += " AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
+    private = ("AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
+               if st.get("alert_private_only") == "1" else "")
     rules = db.alert_rules(st)
     # FB sometimes mixes in "suggested" listings far outside the radius
     home = (float(st["home_lat"]), float(st["home_lon"]))
@@ -248,42 +288,76 @@ async def send_alerts(con, http, st, quiet=False) -> int:
         c = places.get(geo.place_key(r["location"]))
         return not c or c[0] is None or geo.miles(*home, *c) <= radius + 10
 
-    def wanted(r):
+    def passes_limits(r):
+        """Filters shared by both alert types; each type has its own on/off switch."""
         rule = rules.get(r["category"]) or {}
-        return (rule.get("enabled") and in_range(r)
+        return (in_range(r)
                 and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
                 and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
-    rows = [r for r in con.execute(sql + " ORDER BY score DESC", args).fetchall() if wanted(r)]
-    sent = 0
-    if rows and not quiet:
-        for r in rows[:MAX_ALERTS_PER_RUN]:
-            if await notify.send_listing(http, r):
-                sent += 1
-        if len(rows) > MAX_ALERTS_PER_RUN:
-            await notify.send_text(http, f"…and {len(rows) - MAX_ALERTS_PER_RUN} more above {threshold} "
-                                         f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.')
-    # mark all as alerted (a backfill run marks silently so the first real run doesn't flood)
-    con.executemany("UPDATE listings SET alerted_score = score, fresh_alerted = 1 WHERE id = ?",
-                    [(r["id"],) for r in rows])
-    con.commit()
 
-    # "Just listed": any fresh private listing that isn't overpriced, so Jon can message the seller first
+    def switched_on(r, kind):
+        return bool((rules.get(r["category"]) or {}).get(kind))
+
+    def mark(sql, ids):
+        con.executemany(sql, [(i,) for i in ids])
+        con.commit()
+
+    deal_mark = "UPDATE listings SET alerted_score = score, fresh_alerted = 1 WHERE id = ?"
+    fresh_mark = "UPDATE listings SET fresh_alerted = 1 WHERE id = ?"
+
+    # cross-posts / reposts: same title + price as something already alerted (or picked this run)
+    def key(r):
+        return (re.sub(r"[^a-z0-9]", "", (r["title"] or "").lower()), r["price"])
+    seen = {key(r) for r in con.execute(
+        """SELECT title, price FROM listings WHERE (alerted_score IS NOT NULL OR fresh_alerted = 1)
+             AND first_seen >= ?""", (db.now() - 30 * 86400,))}
+
+    def first_copy(r):
+        k = key(r)
+        if k in seen:
+            return False
+        seen.add(k)
+        return True
+
+    deals = [r for r in con.execute(
+        f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
+              AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10) {private}
+            ORDER BY score DESC""", (threshold,)).fetchall()
+        if switched_on(r, "enabled") and passes_limits(r) and first_copy(r)]
+
+    # "Just listed": fresh private listings priced normally or better with no known problems,
+    # so Jon can message the seller first
     window = int(st.get("fresh_window_min") or 120) * 60
-    fsql = """SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
-                AND fresh_alerted IS NULL AND COALESCE(is_new, 0) = 0 AND score >= ?
-                AND COALESCE(listed_at, first_seen) >= ?"""
-    if st.get("alert_private_only") == "1":
-        fsql += " AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
-    fresh = [r for r in con.execute(fsql + " ORDER BY COALESCE(listed_at, first_seen) DESC",
-                                    (int(st.get("fresh_min_score") or 50), db.now() - window)).fetchall()
-             if (rules.get(r["category"]) or {}).get("fresh") and wanted(r)]
-    if fresh and not quiet:
-        for r in fresh[:MAX_FRESH_PER_RUN]:
-            mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
-            if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
-                sent += 1
-    con.executemany("UPDATE listings SET fresh_alerted = 1 WHERE id = ?", [(r["id"],) for r in fresh])
-    con.commit()
+    deal_ids = {r["id"] for r in deals}
+    fresh = [r for r in con.execute(
+        f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
+              AND fresh_alerted IS NULL AND COALESCE(is_new, 0) = 0 AND score >= ?
+              AND COALESCE(red_flags, '[]') = '[]'
+              AND COALESCE(listed_at, first_seen) >= ? {private}
+            ORDER BY COALESCE(listed_at, first_seen) DESC""",
+        (int(st.get("fresh_min_score") or 50), db.now() - window)).fetchall()
+        if r["id"] not in deal_ids and switched_on(r, "fresh") and passes_limits(r) and first_copy(r)]
+
+    if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
+        mark(deal_mark, deal_ids)
+        mark(fresh_mark, [r["id"] for r in fresh])
+        return 0
+
+    # markers are written only after Telegram accepts the message, so failures retry next run
+    sent = 0
+    for r in deals[:MAX_ALERTS_PER_RUN]:
+        if await notify.send_listing(http, r):
+            sent += 1
+            mark(deal_mark, [r["id"]])
+    rest = deals[MAX_ALERTS_PER_RUN:]
+    if rest and await notify.send_text(http, f"…and {len(rest)} more above {threshold} "
+                                             f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.'):
+        mark(deal_mark, [r["id"] for r in rest])
+    for r in fresh[:MAX_FRESH_PER_RUN]:   # any beyond the cap go out next run (still fresh)
+        mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
+        if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
+            sent += 1
+            mark(fresh_mark, [r["id"]])
     return sent
 
 

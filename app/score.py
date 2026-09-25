@@ -74,6 +74,9 @@ def score(listing, expected, comps: int = 0) -> tuple[int, float | None, list[st
     deal_pct = None
     if listing["is_new"] == 1:
         expected = None   # our comps are used machines; new units need an MSRP comparison
+    if price is not None and (price < 100 or (expected and price < 0.2 * expected)):
+        # "$1", "$3", "$123" - sellers who want offers, not a real price
+        return min(35, 45), None, [f"price ${price:,} looks like a placeholder"]
     if expected and price:
         deal_pct = (expected - price) / expected
         s = 45 + 100 * max(-0.4, min(0.4, deal_pct))

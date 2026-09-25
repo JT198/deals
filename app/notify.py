@@ -44,6 +44,13 @@ async def send_listing(http: httpx.AsyncClient, r, header: str | None = None) ->
         return False
     cap = listing_caption(r, header)[:1020]
     base = f"https://api.telegram.org/bot{TOKEN}"
+    try:
+        return await _send(http, base, r, cap)
+    except httpx.HTTPError:
+        return False
+
+
+async def _send(http, base, r, cap) -> bool:
     if r["image"]:
         resp = await http.post(f"{base}/sendPhoto", data={
             "chat_id": CHAT, "photo": r["image"], "caption": cap, "parse_mode": "HTML"})
@@ -54,7 +61,12 @@ async def send_listing(http: httpx.AsyncClient, r, header: str | None = None) ->
     return resp.status_code == 200
 
 
-async def send_text(http: httpx.AsyncClient, text: str) -> None:
-    if enabled():
-        await http.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data={
+async def send_text(http: httpx.AsyncClient, text: str) -> bool:
+    if not enabled():
+        return False
+    try:
+        resp = await http.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data={
             "chat_id": CHAT, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "true"})
+    except httpx.HTTPError:
+        return False
+    return resp.status_code == 200

@@ -13,10 +13,11 @@ import httpx
 
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
-ITEM = re.compile(
-    r'<li class="cl-static-search-result" title="(?P<title>[^"]*)">\s*<a href="(?P<url>[^"]+)">'
-    r'.*?(?:<div class="price">(?P<price>[^<]*)</div>)?\s*'
-    r'(?:<div class="location">\s*(?P<loc>[^<]*?)\s*</div>)?', re.S)
+# one match per complete result element; fields are then read inside that element only
+ITEM = re.compile(r'<li class="cl-static-search-result" title="(?P<title>[^"]*)">(?P<body>.*?)</li>', re.S)
+HREF = re.compile(r'<a href="([^"]+)"')
+PRICE = re.compile(r'<div class="price">([^<]*)</div>')
+LOC = re.compile(r'<div class="location">\s*([^<]*?)\s*</div>', re.S)
 
 
 def _price(s):
@@ -36,15 +37,19 @@ async def search(http: httpx.AsyncClient, query: str, zip_code: str, radius_mi: 
     r.raise_for_status()
     out = {}
     for m in ITEM.finditer(r.text):
-        link = m.group("url")
+        body = m.group("body")
+        href, price, loc = HREF.search(body), PRICE.search(body), LOC.search(body)
+        if not href:
+            continue
+        link = href.group(1)
         ext_id = link.rstrip("/").rsplit("/", 1)[-1]
         out[ext_id] = {
             "ext_id": ext_id,
             "url": link,
             "title": html.unescape(m.group("title")).strip(),
-            "price": _price(m.group("price")),
+            "price": _price(price.group(1)) if price else None,
             "strike_price": None,
-            "location": html.unescape(m.group("loc") or "").strip() or None,
+            "location": html.unescape(loc.group(1)).strip() or None if loc else None,
             "image": None,
             "listed_at": None,
             "status": "active",
@@ -77,6 +82,7 @@ async def detail(http: httpx.AsyncClient, url: str) -> dict | None:
         except ValueError:
             pass
     img = re.search(r'<meta property="og:image" content="([^"]+)"', h)
+    price = re.search(r'<span class="price">([^<]*)</span>', h)
     crumbs = re.search(r'<ul class="breadcrumbs">(.*?)</ul>', h, re.S)
     crumbs = crumbs.group(1) if crumbs else ""
     seller = "dealer" if "by dealer" in crumbs else "private" if "by owner" in crumbs else None
@@ -86,4 +92,5 @@ async def detail(http: httpx.AsyncClient, url: str) -> dict | None:
         "listed_at": listed_at,
         "image": img.group(1) if img else None,
         "status": "active",
+        "price": _price(price.group(1)) if price else None,
     }

@@ -123,14 +123,22 @@ class Facebook:
         return list(out.values())
 
     async def detail(self, ext_id: str) -> dict | None:
-        """Description, seller type and current status from the item page."""
+        """Description, seller type and current status from the item page.
+
+        {"status": "gone"} only when FB explicitly says the content isn't available.
+        None means "couldn't read it" (removed listings redirect to login, but so can a
+        login wall) - the caller counts misses instead of assuming it was removed.
+        """
         page = await self.ctx.new_page()
         try:
             await page.goto(f"https://www.facebook.com/marketplace/item/{ext_id}/",
                             timeout=45000, wait_until="domcontentloaded")
             await page.wait_for_timeout(2500 + random.randint(0, 1500))
             hits: list[dict] = []
-            for m in JSON_SCRIPT.finditer(await page.content()):
+            html = await page.content()
+            if "/marketplace/item/" in page.url and "content isn't available" in html.replace("&#039;", "'"):
+                return {"status": "gone"}
+            for m in JSON_SCRIPT.finditer(html):
                 try:
                     _walk(json.loads(m.group(1)), "redacted_description", hits)
                 except ValueError:

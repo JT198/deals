@@ -125,17 +125,20 @@ def init() -> None:
                                    "deck_in": "INTEGER", "engine": "TEXT"})
     _add_columns(con, "searches", {"category": "TEXT NOT NULL DEFAULT 'utv4'", "last_run": "INTEGER",
                                    "quick": "INTEGER NOT NULL DEFAULT 0"})
-    _add_columns(con, "listings", {"fresh_alerted": "INTEGER", "detail_misses": "INTEGER NOT NULL DEFAULT 0",
-                                   "alerted_price": "INTEGER",   # price when the last alert went out
-                                   "expected_base": "INTEGER", "usage_note": "TEXT",   # typical before use adjustment
-                                   "offer_open": "INTEGER", "offer_aim": "INTEGER", "offer_walk": "INTEGER",
-                                   "offer_notes": "TEXT",
-                                   # trailers
-                                   "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
-                                   "offer_rough": "INTEGER",
-                                   "equipment": "TEXT", "expected_pre": "INTEGER",   # detected cab/heat/...; typical before equipment
-                                   "watch_price": "INTEGER", "watch_status": "TEXT",   # starred: last state told to Jon   # offer numbers from asking price only (few comps / new)
-                                   "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT"})
+    _add_columns(con, "listings", {
+        "fresh_alerted": "INTEGER", "detail_misses": "INTEGER NOT NULL DEFAULT 0",
+        "alerted_price": "INTEGER",                              # price when the last alert went out
+        "expected_base": "INTEGER", "usage_note": "TEXT",        # typical before any adjustment; adjustment notes
+        "expected_pre": "INTEGER",                               # typical before equipment (learns equipment worth)
+        "equipment": "TEXT",                                     # detected cab / heat / A-C / plow / trailer
+        "offer_open": "INTEGER", "offer_aim": "INTEGER", "offer_walk": "INTEGER", "offer_notes": "TEXT",
+        "offer_rough": "INTEGER",                                # offer from asking price only (few comps / new)
+        "watch_price": "INTEGER", "watch_status": "TEXT",        # starred: last state Jon was told about
+        "ended_at": "INTEGER", "end_price": "INTEGER",           # when it went sold/gone, and its last asking price
+        # trailers
+        "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
+        "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT",
+    })
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:
         # seed history from listings alerted before the log existed

@@ -371,7 +371,8 @@ def _nice(x: float) -> int:
     return int(x // step * step)
 
 
-def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -> dict | None:
+def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
+          sell_days: float | None = None) -> dict | None:
     """Opening offer / target / walk-away, plus talking points.
 
     Without a typical price (few comps, or new dealer stock) it still gives "rough" numbers off the
@@ -413,6 +414,10 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -
     was = max(x for x in (listing["strike_price"], listing["first_price"], 0) if x is not None)
     if was > price:
         notes.append(f"Already cut ${was - price:,} from ${was:,} - they may go lower.")
+    if sell_days:
+        pace = f"Similar {listing['family']} listings are usually gone in about {sell_days:.0f} days"
+        notes.append(pace + (" - this one is past that, so there's room to push." if days > sell_days * 1.5 else
+                             " - good ones move fast." if sell_days <= 10 else "."))
 
     fair = price if rough else min(price, expected)
     walk = price if fair >= price else _nice(fair)            # never "walk away above" something under the ask
@@ -446,7 +451,30 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -
     return {"open": open_, "aim": aim, "walk": walk, "notes": notes, "rough": rough}
 
 
+def mark_ended(con) -> None:
+    """Record when a listing sold / disappeared and what it was last asking - the closest thing to a
+    sold price we can see. A listing that comes back is un-ended."""
+    now = int(time.time())
+    con.execute("""UPDATE listings SET ended_at = ?, end_price = price
+                   WHERE status IN ('sold', 'gone') AND ended_at IS NULL""", (now,))
+    con.execute("""UPDATE listings SET ended_at = NULL, end_price = NULL
+                   WHERE status IN ('active', 'pending') AND ended_at IS NOT NULL""")
+    con.commit()
+
+
+def days_to_sell(con) -> dict[str, float]:
+    """family -> median days listed before it sold / disappeared (last 120 days, used only, >= 5 of them)."""
+    out: dict[str, list] = {}
+    for r in con.execute("""SELECT family, ended_at - COALESCE(listed_at, first_seen) secs FROM listings
+                            WHERE ended_at IS NOT NULL AND relevant = 1 AND family IS NOT NULL
+                              AND COALESCE(is_new, 0) = 0 AND ended_at > ?""", (int(time.time()) - 120 * 86400,)):
+        if r["secs"] and r["secs"] > 0:
+            out.setdefault(r["family"], []).append(r["secs"] / 86400)
+    return {f: statistics.median(v) for f, v in out.items() if len(v) >= 5}
+
+
 def rescore_all(con) -> None:
+    mark_ended(con)
     # 1. equipment from the ad text (cheap, deterministic - recomputed every run)
     for r in con.execute("SELECT id, category, title, description, extras, summary FROM listings "
                          "WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall():
@@ -459,6 +487,7 @@ def rescore_all(con) -> None:
         tow = int(con.execute("SELECT value FROM settings WHERE key = 'tow_capacity_lb'").fetchone()[0])
     except (TypeError, ValueError):
         tow = None
+    pace = days_to_sell(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
     for r in rows:
@@ -466,7 +495,7 @@ def rescore_all(con) -> None:
         if r["is_new"] == 1:
             exp = base = note = pre = None
         s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note))
-        o = offer(r, exp, pct, n, tow)
+        o = offer(r, exp, pct, n, tow, pace.get(r["family"]))
         fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, expected_pre=?, usage_note=?, comps=?, deal_pct=?, score=?,

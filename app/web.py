@@ -4,15 +4,19 @@ Requests arriving through the Cloudflare tunnel (CF-Gateway, 10.10.10.5) must
 carry a Cloudflare Access identity from ALLOWED_EMAILS; LAN requests are trusted.
 """
 import json
+import re
 import os
 import subprocess
 from pathlib import Path
 
+import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import db, geo, score
 from .categories import CATEGORIES, FAMILY_CATEGORY
+from .equipment import APPLIES
+from .parse import OLLAMA_MODEL, OLLAMA_URL
 
 TUNNEL_IPS = set(os.environ.get("TUNNEL_IPS", "10.10.10.5").split(","))
 ALLOWED = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
@@ -124,6 +128,133 @@ def market(family: str):
             "undated": {"count": len(undated), "median": undated[len(undated) // 2] if undated else None}}
 
 
+@app.get("/api/trends")
+def trends(category: str):
+    """Weekly market pulse for a category: supply, pricing vs typical, and how fast things go."""
+    con = db.connect()
+    wk = "strftime('%Y-%W', {col}, 'unixepoch', 'localtime')"
+    new = {r["w"]: dict(r) for r in con.execute(
+        f"""SELECT {wk.format(col='COALESCE(listed_at, first_seen)')} w, COUNT(*) n, MIN(COALESCE(listed_at, first_seen)) t
+            FROM listings WHERE relevant = 1 AND category = ? AND COALESCE(is_new, 0) = 0
+              AND COALESCE(listed_at, first_seen) > ? GROUP BY w""", (category, db.now() - 120 * 86400))}
+    pct: dict[str, list] = {}
+    for r in con.execute(
+            f"""SELECT {wk.format(col='COALESCE(listed_at, first_seen)')} w, deal_pct FROM listings
+                WHERE relevant = 1 AND category = ? AND COALESCE(is_new, 0) = 0 AND deal_pct IS NOT NULL
+                  AND COALESCE(listed_at, first_seen) > ?""", (category, db.now() - 120 * 86400)):
+        pct.setdefault(r["w"], []).append(r["deal_pct"])
+    ended: dict[str, list] = {}
+    for r in con.execute(
+            f"""SELECT {wk.format(col='ended_at')} w, ended_at - COALESCE(listed_at, first_seen) secs FROM listings
+                WHERE relevant = 1 AND category = ? AND COALESCE(is_new, 0) = 0 AND ended_at > ?""",
+            (category, db.now() - 120 * 86400)):
+        ended.setdefault(r["w"], []).append(max(0, r["secs"] or 0) / 86400)
+    import statistics as st
+    out = []
+    for w in sorted(set(new) | set(ended)):
+        p = pct.get(w, [])
+        e = ended.get(w, [])
+        out.append({"week": w, "start": new.get(w, {}).get("t"), "new": new.get(w, {}).get("n", 0),
+                    "vs_typical": round(-st.median(p) * 100, 1) if len(p) >= 3 else None,   # + = asking above typical
+                    "priced": len(p), "ended": len(e), "days_listed": round(st.median(e), 1) if e else None})
+    return out
+
+
+@app.get("/api/ended")
+def ended(family: str):
+    """Recently sold or removed listings of one family - last asking price is the closest thing to a sold price."""
+    con = db.connect()
+    return [dict(r) for r in con.execute(
+        """SELECT title, url, source, year, miles, hours, deck_in, len_ft, width_ft, first_price, end_price, status,
+                  ended_at, (ended_at - COALESCE(listed_at, first_seen)) / 86400 days
+           FROM listings WHERE family = ? AND ended_at IS NOT NULL AND relevant = 1 AND COALESCE(is_new, 0) = 0
+           ORDER BY ended_at DESC LIMIT 40""", (family,))]
+
+
+CONDITION = {"excellent": 1.05, "good": 1.0, "fair": 0.9, "needs work": 0.75}
+
+
+def _appraisal(body: dict) -> dict:
+    con = db.connect()
+    cat = body.get("category")
+    if cat not in CATEGORIES:
+        raise HTTPException(400, "unknown category")
+    num = lambda k: (float(body[k]) if str(body.get(k) or "").strip() else None)
+    me = {"id": "", "category": cat, "family": body.get("family"), "year": int(num("year")) if num("year") else None,
+          "miles": int(num("miles")) if num("miles") else None, "hours": int(num("hours")) if num("hours") else None,
+          "deck_in": int(num("deck_in")) if num("deck_in") else None, "len_ft": num("len_ft"),
+          "axles": int(num("axles")) if num("axles") else None,
+          "equipment": json.dumps([f for f in (body.get("equipment") or []) if isinstance(f, str)])}
+    exp, n, base, note, pre = score.expected_price(me, score._comps(con), score.equipment_effects(con))
+    cond = CONDITION.get(body.get("condition") or "good", 1.0)
+    pace = score.days_to_sell(con).get(me["family"])
+    # closest comparable listings (same family): nearest year, then use, then size
+    rows = con.execute("""SELECT title, url, source, year, miles, hours, deck_in, len_ft, price, status, is_dealer,
+                                 seller_type, location FROM listings
+                          WHERE family = ? AND relevant = 1 AND COALESCE(is_new, 0) = 0 AND price >= 100
+                            AND last_seen > ?""", (me["family"], db.now() - 180 * 86400)).fetchall()
+
+    def distance(r):
+        d = abs((r["year"] or 0) - (me["year"] or r["year"] or 0)) * 2 if me["year"] else 0
+        for k, unit in (("miles", 2000), ("hours", 150)):
+            if me[k] is not None and r[k] is not None:
+                d += abs(r[k] - me[k]) / unit
+        if me["deck_in"] and r["deck_in"]:
+            d += abs(r["deck_in"] - me["deck_in"]) / 6
+        if me["len_ft"] and r["len_ft"]:
+            d += abs(r["len_ft"] - me["len_ft"]) / 2
+        return d
+    near = sorted(rows, key=distance)[:8]
+    result = {"typical": exp, "comps": n, "note": note, "condition": body.get("condition") or "good",
+              "days_to_sell": pace, "similar": [dict(r) for r in near]}
+    rough = False
+    if not exp:
+        # too few for a proper typical: rough price from the closest few listings, labeled as such
+        priced = [r["price"] for r in near[:5] if r["price"]]
+        if len(priced) >= 2:
+            import statistics as st
+            exp, rough = int(st.median(priced)), True
+    result["rough"] = rough
+    if exp:
+        result["typical"] = exp
+        target = exp * cond
+        result.update(list_price=score._nice(target * 1.06 + 99), target=score._nice(target),
+                      quick_sale=score._nice(target * 0.9))
+    return result
+
+
+@app.post("/api/appraise")
+def appraise(body: dict = Body(...)):
+    return _appraisal(body)
+
+
+@app.post("/api/appraise/draft")
+async def appraise_draft(body: dict = Body(...)):
+    """Local model writes a for-sale ad from the seller's details (only when asked - it takes a few seconds)."""
+    a = _appraisal(body)
+    facts = {k: v for k, v in body.items() if v not in (None, "", [])}
+    price = a.get("list_price")
+    prompt = (
+        "Write a Facebook Marketplace / Craigslist for-sale ad for a private seller in Minnesota. Plain, honest, "
+        "friendly; no emojis, no hype words like 'beast' or 'must see'. Structure: a title line (year make model "
+        "and the key selling point), then 3-6 short lines of details (use, maintenance, equipment, condition "
+        "including any flaws they mentioned), then pickup/payment terms (cash, local pickup, serious buyers). "
+        "Only use facts given; do not invent service history, features, or a model year - if no year is given, "
+        "do not mention one.\n\n"
+        f"Details: {json.dumps(facts)}\n"
+        + (f"Asking price: ${price:,}\n" if price else "") +
+        "Return just the ad text.")
+    async with httpx.AsyncClient() as http:
+        r = await http.post(f"{OLLAMA_URL}/api/generate", json={
+            "model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "think": False,
+            "keep_alive": "30m", "options": {"temperature": 0.2}}, timeout=120)
+    r.raise_for_status()
+    text = r.json().get("response", "").strip()
+    if not facts.get("year"):   # belt and braces: never let the model invent a model year
+        text = re.sub(r"\b(19[6-9]\d|20[0-3]\d)\s+(?=[A-Z])", "", text)
+    return {"text": text, "list_price": price}
+
+
 @app.get("/api/families")
 def families():
     con = db.connect()
@@ -135,7 +266,8 @@ def families():
 
 @app.get("/api/categories")
 def categories():
-    return [{"key": k, "label": c["label"], "emoji": c["emoji"]} for k, c in CATEGORIES.items()]
+    return [{"key": k, "label": c["label"], "emoji": c["emoji"], "families": c["families"],
+             "equipment": list(APPLIES.get(k, ()))} for k, c in CATEGORIES.items()]
 
 
 @app.get("/api/settings")

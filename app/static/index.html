@@ -100,6 +100,21 @@ dialog#help h3 { font-size: 14px; margin: 18px 0 6px; }
 dialog#help p, dialog#help li { color: var(--text-2); font-size: 13.5px; }
 dialog#help ul { padding-left: 18px; margin: 6px 0; }
 dialog#help code { background: var(--surface-2); padding: 0 5px; border-radius: 4px; font-size: 12.5px; }
+.msg { margin-top: 8px; }
+.msg textarea { width: 100%; min-height: 64px; resize: vertical; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; }
+.msg .row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.bignums { display: flex; gap: 22px; flex-wrap: wrap; margin: 6px 0 10px; font-variant-numeric: tabular-nums; }
+.bignums b { font-size: 24px; display: block; }
+.bignums span { color: var(--text-2); font-size: 12px; }
+.sellform { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.sellform label { display: flex; flex-direction: column; gap: 4px; color: var(--text-2); font-size: 13px; }
+.sellform input, .sellform select, .sellform textarea { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 6px 9px; font: inherit; }
+.sellform .wide { grid-column: 1 / -1; }
+.checks { display: flex; gap: 14px; flex-wrap: wrap; color: var(--text-2); }
+textarea.draft { width: 100%; min-height: 220px; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px; font: inherit; }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
 .sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
@@ -164,6 +179,7 @@ td.t { white-space: normal; min-width: 240px; }
     <button data-tab="deals" class="on">Best deals</button>
     <button data-tab="all">All listings</button>
     <button data-tab="market">Market</button>
+    <button data-tab="sell">Sell mine</button>
     <button data-tab="setup">Setup</button>
   </nav>
   <div class="cats" id="cats"></div>
@@ -193,6 +209,7 @@ td.t { white-space: normal; min-width: 240px; }
   <section id="tab-all" hidden></section>
   <section id="tab-market" hidden></section>
   <section id="tab-setup" hidden></section>
+  <section id="tab-sell" hidden></section>
 </main>
 <dialog id="help" aria-labelledby="help-title">
   <div class="hd"><h2 id="help-title">How Deal Finder works</h2><button class="btn" id="helpclose">Close</button></div>
@@ -289,7 +306,12 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Star</b> to watch one: it's re-checked every scan and Telegram tells you when the price drops, it goes
         pending, or it's sold/removed. <b>Hide</b> to get it out of the way (Show hidden brings them back).
         Stars and hides are shared by everyone who uses this dashboard.</li>
-      <li><b>Market</b> tab: every asking price seen for a model by year - handy for knowing what yours is worth, too.</li>
+      <li><b>Market</b> tab: every asking price seen for a model by year, a weekly <b>market pulse</b> (new listings, asking vs
+        typical, how fast things go), and <b>recently sold or removed</b> listings with their last asking price - the closest
+        thing to sold prices.</li>
+      <li><b>Copy message</b> (inside Offer guidance): a ready opener for the seller with your offer - edit, copy, paste into Messenger.</li>
+      <li><b>Sell mine</b> tab: describe your machine and get a list price, what to expect, a quick-sale price, the closest
+        listings, and a drafted ad (written by the local AI from only what you enter).</li>
       <li><b>Setup</b>: radius and home ZIP, alert rules, searches (add your own; ⚡ puts one in the fast lane), and
         recent scan history with any problems.</li>
     </ul>
@@ -406,14 +428,43 @@ function vsTypical(d) {
   return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` +
     (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
 }
+function sellerMessage(d) {
+  const name = d.model || d.family || "it";
+  const what = (d.year && !String(name).startsWith(String(d.year)) ? d.year + " " : "") + name;
+  const truck = d.category === "trailer" ? " I'll bring my truck." : "";
+  const fresh = listedAt(d) > Date.now() / 1000 - 86400;
+  const great = (d.deal_pct ?? 0) >= 0.15;
+  if (d.dealer) return `Hi, is the ${what} still available? What's your best out-the-door price? I'm ready to buy this week.`;
+  if (great || (fresh && !d.offer_rough))
+    return `Hi! Is the ${what} still available? I'm ready to buy - cash, and I can come see it today or tomorrow.${truck}` +
+      (d.offer_open && d.offer_open < d.price ? ` Would you take ${money(d.offer_open)}?` : "");
+  return `Hi, is the ${what} still available? I'm a serious buyer with cash and can pick it up this week.${truck}` +
+    (d.offer_open && d.offer_open < d.price ? ` Would you take ${money(d.offer_open)}?` : "");
+}
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {   // plain-http LAN address: no clipboard API, fall back to a hidden textarea
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select();
+    document.execCommand("copy"); t.remove();
+  }
+  if (btn) { const was = btn.textContent; btn.textContent = "Copied ✓"; setTimeout(() => btn.textContent = was, 1500); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-copy]"); if (!b) return;
+  const src = document.getElementById(b.dataset.copy); if (src) copyText(src.value, b);
+});
 function offerBox(d) {
   if (!d.offer_aim) return "";
+  const mid = "msg-" + d.id.replace(/[^a-z0-9]/gi, "");
   const nums = d.offer_open < d.offer_aim
     ? `<div><b>${money(d.offer_open)}</b><span>open with</span></div><div><b>${money(d.offer_aim)}</b><span>aim to pay</span></div>`
     : `<div><b>${money(d.offer_open)}</b><span>offer</span></div>`;
   return `<details class="offer"><summary>Offer guidance${d.offer_rough ? ' <span class="rough">rough - few comps</span>' : ""}</summary>
     <div class="nums" style="margin-top:6px">${nums}<div><b>${money(d.offer_walk)}</b><span>walk away above</span></div></div>
-    <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`;
+    <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul>
+    <div class="msg"><textarea id="${mid}" aria-label="Message to the seller">${esc(sellerMessage(d))}</textarea>
+      <div class="row"><button class="btn primary" data-copy="${mid}">Copy message</button>
+      <span class="hint">edit if you like, then paste into Messenger / Craigslist reply</span></div></div></details>`;
 }
 function trailerSize(d) {
   if (d.category !== "trailer") return null;
@@ -553,6 +604,37 @@ async function renderMarket() {
     ${yearTable(m)}</tbody></table></div>`;
   $("#m-fam").onchange = e => { MARKET_FAM = e.target.value; store.set("marketFam", MARKET_FAM); renderMarket(); };
   drawScatter($("#chart"), m);
+  const famCat = (fams.find(f => f.family === MARKET_FAM) || {}).category;
+  const [tr, gone] = await Promise.all([api("/api/trends?category=" + famCat), api("/api/ended?family=" + encodeURIComponent(MARKET_FAM))]);
+  $("#tab-market").insertAdjacentHTML("beforeend", pulsePanel(tr, famCat) + gonePanel(gone));
+}
+function pulsePanel(rows, cat) {
+  const label = catOf(cat).label || "";
+  const recent = rows.slice(-4);
+  const vs = recent.map(r => r.vs_typical).filter(v => v != null);
+  const days = recent.map(r => r.days_listed).filter(v => v != null);
+  const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const head = vs.length || days.length ? `<p>${vs.length ? `Recent used ${esc(label.toLowerCase())} are listing at
+      <b>${avg(vs) > 0 ? "+" : ""}${avg(vs).toFixed(0)}%</b> vs typical` : ""}${vs.length && days.length ? "; " : ""}${days.length ?
+      `the ones that go are up about <b>${avg(days).toFixed(0)} days</b>` : ""}.</p>` : "";
+  return `<div class="panel"><h2>Market pulse: ${esc(label)}</h2>${head}
+    <p class="hint">Week by week: how many used ones were listed, how they were priced against typical (+ = asking above), and how
+      many sold or disappeared and how long they'd been up. This fills in as the weeks go by - watch for asking prices sliding
+      and things sitting longer as winter comes on.</p>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Week of</th><th>New listings</th><th>Asking vs typical</th><th>Sold / removed</th><th>Days listed (median)</th></tr></thead><tbody>
+      ${rows.slice().reverse().map(r => `<tr><td>${r.start ? new Date(r.start * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : r.week}</td>
+        <td>${r.new}</td><td>${r.vs_typical == null ? "—" : (r.vs_typical > 0 ? "+" : "") + r.vs_typical + "%"}</td>
+        <td>${r.ended}</td><td>${r.days_listed ?? "—"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">No data yet.</p>'}</div>`;
+}
+function gonePanel(rows) {
+  return `<div class="panel"><h2>Recently sold or removed: ${esc(MARKET_FAM)}</h2>
+    <p class="hint">Sold prices aren't public, so this is the next best thing: the last asking price when a listing disappeared
+      (it may have sold for a bit less). Some just expire or get relisted.</p>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Listing</th><th>Year</th><th>Use / size</th><th>First asked</th><th>Last asked</th><th>Days listed</th><th>Gone</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="t"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td>${r.year ?? "—"}</td>
+        <td>${r.miles != null ? r.miles.toLocaleString() + " mi" : r.hours != null ? r.hours + " hrs" : r.deck_in ? r.deck_in + '"' : r.len_ft ? (r.width_ft ? r.width_ft + "x" : "") + r.len_ft : "—"}</td>
+        <td>${money(r.first_price)}</td><td>${money(r.end_price)}</td><td>${r.days ?? "—"}</td><td>${ago(r.ended_at)}</td></tr>`).join("")}</tbody></table></div>`
+      : '<p class="hint">None seen yet - the finder only started watching recently.</p>'}</div>`;
 }
 function yearTable(m) {
   const by = {}; m.points.forEach(p => (by[p.year] ||= []).push(p.price));
@@ -662,17 +744,87 @@ async function renderSetup() {
   };
 }
 
+// ---------- Sell mine: price your own machine from the same comps, and draft the ad ----------
+const SELL_DEFAULT = { category: "mower", family: "Cub Cadet RZT S (steering wheel)", year: "", miles: "", hours: "274",
+  deck_in: "42", len_ft: "", axles: "", equipment: [], condition: "fair",
+  notes: "Kohler Courage 22 HP. Steering-wheel zero-turn. Runs and mows; some wear from use (cosmetic dings)." };
+let SELL = Object.assign({}, SELL_DEFAULT, store.get("sell", {}));
+function renderSell() {
+  const cat = CATS.find(c => c.key === SELL.category) || CATS[0];
+  if (!cat.families.includes(SELL.family)) SELL.family = cat.families[0];
+  const field = (k, label, extra = "") => `<label>${label}<input name="${k}" value="${esc(SELL[k] ?? "")}" ${extra}></label>`;
+  $("#tab-sell").innerHTML = `<div class="panel"><h2>What are you selling?</h2>
+    <p class="hint">Priced from the same listings the finder watches - lined up for year, use, size and equipment like everything else.</p>
+    <div class="sellform" id="sellform">
+      <label>Category<select name="category">${CATS.map(c => `<option value="${c.key}" ${c.key === cat.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>
+      <label>Model<select name="family">${cat.families.map(f => `<option ${f === SELL.family ? "selected" : ""}>${esc(f)}</option>`).join("")}</select></label>
+      ${field("year", "Year", 'type="number" placeholder="optional"')}
+      ${cat.key === "mower" || cat.key === "trailer" ? "" : field("miles", "Miles", 'type="number"')}
+      ${cat.key === "trailer" ? "" : field("hours", "Hours", 'type="number"')}
+      ${cat.key === "mower" ? field("deck_in", "Deck (inches)", 'type="number"') : ""}
+      ${cat.key === "trailer" ? field("len_ft", "Length (ft)", 'type="number" step="0.5"') + field("axles", "Axles", 'type="number"') : ""}
+      <label>Condition<select name="condition">${["excellent", "good", "fair", "needs work"].map(c =>
+        `<option ${c === SELL.condition ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+      ${cat.equipment.length ? `<div class="wide checks">${cat.equipment.map(f => `<label><input type="checkbox" name="eq" value="${f}"
+        ${SELL.equipment.includes(f) ? "checked" : ""}> ${{ cab: "Cab", heat: "Heat", ac: "A/C", plow: "Plow", trailer: "Trailer included" }[f]}</label>`).join("")}</div>` : ""}
+      <label class="wide">Anything a buyer should know (for the ad)<textarea name="notes" rows="3">${esc(SELL.notes || "")}</textarea></label>
+    </div>
+    <p><button class="btn primary" id="appraise">Price it</button> <span class="hint" id="sellmsg"></span></p></div>
+    <div id="sellresult"></div>`;
+  const form = $("#sellform");
+  const read = () => {
+    form.querySelectorAll("[name]").forEach(i => { if (i.name !== "eq") SELL[i.name] = i.value; });
+    SELL.equipment = [...form.querySelectorAll("[name=eq]:checked")].map(i => i.value);
+    store.set("sell", SELL);
+  };
+  form.onchange = e => { read(); if (e.target.name === "category") renderSell(); };
+  $("#appraise").onclick = async () => {
+    read(); $("#sellmsg").textContent = "Pricing…";
+    try { showAppraisal(await api("/api/appraise", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(SELL) }));
+      $("#sellmsg").textContent = ""; }
+    catch (e) { $("#sellmsg").textContent = "Couldn't price it: " + e.message; }
+  };
+}
+function showAppraisal(a) {
+  const nums = a.list_price ? `<div class="bignums">
+      <div><b>${money(a.list_price)}</b><span>list it at</span></div>
+      <div><b>${money(a.target)}</b><span>expect to get about</span></div>
+      <div><b>${money(a.quick_sale)}</b><span>quick sale</span></div></div>
+    ${a.rough ? `<p class="hint" style="color:var(--warn)">Rough: only a few similar listings so far - this is the middle of the closest
+      ones below, not a full market price. It firms up as more come in.</p>` : ""}
+    <p class="hint">${a.rough ? "Middle of the closest listings" : "Typical asking price for one like yours"}: ${money(a.typical)} (${a.rough ? a.similar.length : a.comps} listings), adjusted for
+      "${esc(a.condition)}" condition. ${a.note ? esc(a.note) + "." : ""} ${a.days_to_sell ? `Similar ones are usually gone in about ${Math.round(a.days_to_sell)} days.` : ""}
+      List a little high to leave room to negotiate; drop toward the quick-sale price if it sits 2-3 weeks.</p>`
+    : `<p class="empty">Not enough comparable listings yet to price this one (${a.comps}). The closest ones are below.</p>`;
+  $("#sellresult").innerHTML = `<div class="panel"><h2>Your price</h2>${nums}
+      <p><button class="btn" id="draftbtn">Write my listing</button> <span class="hint" id="draftmsg"></span></p><div id="draftbox"></div></div>
+    <div class="panel"><h2>Closest listings</h2>${a.similar.length ? `<div class="tablewrap"><table><thead><tr><th>Listing</th><th>Year</th><th>Use</th><th>Price</th><th>Status</th></tr></thead><tbody>
+      ${a.similar.map(r => `<tr><td class="t"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td>${r.year ?? "—"}</td>
+        <td>${r.miles != null ? r.miles.toLocaleString() + " mi" : r.hours != null ? r.hours + " hrs" : r.deck_in ? r.deck_in + '" deck' : r.len_ft ? r.len_ft + " ft" : "—"}</td>
+        <td>${money(r.price)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">None yet.</p>'}</div>`;
+  $("#draftbtn").onclick = async () => {
+    $("#draftmsg").textContent = "Writing… (about 10 seconds)";
+    try {
+      const d = await api("/api/appraise/draft", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(SELL) });
+      $("#draftbox").innerHTML = `<textarea class="draft" id="drafttext">${esc(d.text)}</textarea>
+        <p><button class="btn primary" data-copy="drafttext">Copy listing</button> <span class="hint">edit before posting - add photos!</span></p>`;
+      $("#draftmsg").textContent = "";
+    } catch (e) { $("#draftmsg").textContent = "Couldn't write it: " + e.message; }
+  };
+}
+
 // ---------- shell ----------
 function render() {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
-  ["deals", "all", "market", "setup"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
+  ["deals", "all", "market", "setup", "sell"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
   $("#filtersec").hidden = !(TAB === "deals" || TAB === "all") || !!QUICK;
-  $("#cats").hidden = TAB === "setup" || !!QUICK;
+  $("#cats").hidden = TAB === "setup" || TAB === "sell" || !!QUICK;
   $("#f-fit-wrap").hidden = CAT !== "trailer";
   if (TAB === "deals") renderDeals();
   if (TAB === "all") renderAll();
   if (TAB === "market") renderMarket();
   if (TAB === "setup") renderSetup();
+  if (TAB === "sell") renderSell();
 }
 $("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB = t; store.set("tab", t); QUICK = null; render(); status(); };
 document.body.addEventListener("click", async e => {

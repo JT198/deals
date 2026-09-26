@@ -335,6 +335,44 @@ def test_watch_alerts_price_drop_pending_and_retry():
     assert SENT == ["facebook:0", "facebook:0"], SENT
 
 
+def test_ended_tracking_and_days_to_sell():
+    from app import score
+    t = db.now()
+    con = reset([{"id": f"facebook:e{i}", "ext_id": f"e{i}", "title": f"e{i}", "status": "gone",
+                  "listed_at": t - (8 + i) * 86400, "price": 12000 + i} for i in range(5)] +
+                [{"id": "facebook:live", "ext_id": "live", "status": "active"}])
+    score.mark_ended(con)
+    rows = con.execute("SELECT ended_at, end_price FROM listings WHERE status = 'gone'").fetchall()
+    assert all(r["ended_at"] and r["end_price"] for r in rows), [dict(r) for r in rows]
+    assert 9.5 < score.days_to_sell(con)["RZR XP 4"] < 10.5
+    con.execute("UPDATE listings SET status = 'active' WHERE id = 'facebook:e0'"); con.commit()
+    score.mark_ended(con)                                   # came back -> not ended any more
+    assert con.execute("SELECT ended_at FROM listings WHERE id = 'facebook:e0'").fetchone()[0] is None
+
+
+def test_appraise_endpoint():
+    from fastapi.testclient import TestClient
+    from app import web
+    con = reset([])
+    _family(con)
+    body = {"category": "utv4", "family": "RZR XP 4", "year": "2022", "miles": "3000", "condition": "good"}
+    a = TestClient(web.app).post("/api/appraise", json=body).json()
+    assert a["typical"] and a["quick_sale"] < a["target"] < a["list_price"], a
+    assert len(a["similar"]) == 8 and a["similar"][0]["year"] == 2022, a["similar"][0]
+    worse = TestClient(web.app).post("/api/appraise", json=dict(body, condition="needs work")).json()
+    assert worse["target"] < a["target"], (worse["target"], a["target"])
+
+
+def test_appraise_rough_when_few_listings():
+    from fastapi.testclient import TestClient
+    from app import web
+    con = reset([{"id": f"facebook:m{i}", "ext_id": f"m{i}", "category": "mower", "year": None,
+                  "family": "Cub Cadet RZT S (steering wheel)", "price": p} for i, p in enumerate((1800, 1800, 1500, 2750))])
+    a = TestClient(web.app).post("/api/appraise", json={"category": "mower", "family": "Cub Cadet RZT S (steering wheel)",
+                                                        "hours": "274", "deck_in": "42", "condition": "good"}).json()
+    assert a["rough"] and a["typical"] == 1800 and a["list_price"] > a["target"] > a["quick_sale"], a
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

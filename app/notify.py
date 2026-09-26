@@ -16,12 +16,25 @@ def enabled() -> bool:
     return bool(TOKEN and CHAT)
 
 
+def trailer_size(r) -> str | None:
+    """'7x16 enclosed · tandem · 7,000 lb · brakes · fits a 4-seat UTV'"""
+    if r["category"] != "trailer":
+        return None
+    w, l = r["width_ft"], r["len_ft"]
+    bits = [(f"{w:g}x{l:g}" if w and l else f"{l:g} ft" if l else "") + (f" {r['trailer_type']}" if r["trailer_type"] else ""),
+            {1: "single axle", 2: "tandem"}.get(r["axles"], f"{r['axles']} axles" if r["axles"] else ""),
+            f"{r['gvwr_lb']:,} lb" if r["gvwr_lb"] else "", "brakes" if r["brakes"] == 1 else "",
+            {"yes": "✅ fits a 4-seat UTV", "maybe": "may fit a UTV", "no": "too small for a UTV"}.get(r["utv_fit"], "")]
+    return " · ".join(b.strip() for b in bits if b.strip()) or None
+
+
 def listing_caption(r, header: str | None = None) -> str:
     e = html.escape
     bits = ([header] if header else []) + [f"{cfg(r['category'])['emoji']} <b>{e(r['title'])}</b>",
             f"<b>${r['price']:,}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
             + f"  ·  score {r['score']}"]
     facts = [x for x in (
+        trailer_size(r),
         r["location"],
         f"{r['deck_in']}\" deck" if r["deck_in"] else None,
         r["engine"],

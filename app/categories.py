@@ -103,6 +103,24 @@ CATEGORIES = {
             "scag zero turn", "exmark", "cub cadet rzt s",
         ],
     },
+    "trailer": {
+        # compared by type + size (length within 2 ft, same axle count) - see score.expected_price.
+        # fit_gate: trailers that can't carry a 4-seat UTV only alert at this score or higher.
+        "label": "Trailers", "emoji": "🚚",
+        "dep": 0.04, "window": 2, "fit": True, "low_hpy": 0, "high_hpy": 10**9,
+        "usage": {},
+        "cl_cat": "tra", "every_min": 20, "fit_gate": 85,
+        "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
+        "families": [
+            "Enclosed cargo", "Enclosed car hauler (8.5 wide)", "Open utility (rails / mesh sides)",
+            "Landscape (tandem, rear gate)", "Tilt / car hauler flatbed", "Equipment / deckover",
+            "Dump trailer", "Snowmobile / ATV drive-on (sled deck)", "Other trailer",
+        ],
+        "searches": [
+            "tandem axle trailer", "car hauler trailer", "7x16 trailer", "7x14 trailer",
+            "flatbed trailer", "tilt trailer", "sled trailer", "landscape trailer",
+        ],
+    },
 }
 
 FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"]}

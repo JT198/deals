@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 def _default_rule(cat: str) -> dict:
-    return {"enabled": True, "fresh": cat in ("utv4", "mower"), "max_price": "", "min_year": ""}
+    return {"enabled": True, "fresh": cat in ("utv4", "mower", "trailer"), "max_price": "", "min_year": ""}
 
 
 DEFAULT_SETTINGS = {
@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     "seed_version": "1",
 }
 
-SEED_VERSION = 3   # bump when categories.py gains default searches
+SEED_VERSION = 4   # bump when categories.py gains default searches
 
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -128,7 +128,10 @@ def init() -> None:
                                    "alerted_price": "INTEGER",   # price when the last alert went out
                                    "expected_base": "INTEGER", "usage_note": "TEXT",   # typical before use adjustment
                                    "offer_open": "INTEGER", "offer_aim": "INTEGER", "offer_walk": "INTEGER",
-                                   "offer_notes": "TEXT"})
+                                   "offer_notes": "TEXT",
+                                   # trailers
+                                   "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
+                                   "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT"})
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:
         # seed history from listings alerted before the log existed

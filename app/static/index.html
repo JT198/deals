@@ -177,6 +177,7 @@ td.t { white-space: normal; min-width: 240px; }
         <option value="new">new only</option></select></label>
       <label>Sort <select id="f-sort"><option value="score">best deal</option><option value="newest">newest first</option>
         <option value="price">lowest price</option></select></label>
+      <label id="f-fit-wrap"><input id="f-fit" type="checkbox"> Fits a 4-seat UTV</label>
       <label><input id="f-private" type="checkbox"> Private only</label>
       <label><input id="f-star" type="checkbox"> Starred</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
@@ -193,13 +194,25 @@ td.t { white-space: normal; min-width: 240px; }
   <div class="bd">
     <h3>What it does</h3>
     <p>It watches Facebook Marketplace and Craigslist within your radius (Setup tab) for 4-seat and 2-seat UTVs,
-      ATVs, 3-wheelers and zero-turn mowers. It reads every ad, works out what similar machines usually list for,
+      ATVs, 3-wheelers, zero-turn mowers and trailers. It reads every ad, works out what similar machines usually list for,
       and flags the ones priced well below that. Private sellers are the focus; dealers are shown but marked.</p>
+
+    <h3>Trailers</h3>
+    <ul>
+      <li>Every trailer gets a <b>fits a 4-seat UTV</b> check: open deck 14 ft+ (16 ideal), 7 ft wide class
+        (~80 in between fenders; UTVs are 62-64 in), tandem axle or 5,000 lb+ GVWR, and ~7 ft inside if enclosed.
+        "May fit" means one of those isn't stated or is borderline - ask the seller.</li>
+      <li>Trailers are compared by type and size (length within 2 ft, same axle count).</li>
+      <li>Alerts: trailers that fit a UTV alert normally; anything else only when it's an exceptional deal (score 85+).
+        Just-listed alerts are for UTV-size trailers only. Tick <b>Fits a 4-seat UTV</b> in the filters to see just those.</li>
+      <li>Before buying: title and VIN plate match, tire date codes, bearings, floor, lights, brakes (brakes need a brake
+        controller in your truck), and that its loaded weight is within your truck's towing capacity.</li>
+    </ul>
 
     <h3>How often it looks</h3>
     <ul>
       <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook, 4-seat UTV and mower
-        searches every scan and the other categories hourly.</li>
+        searches every scan (plus trailers) and the other categories hourly.</li>
       <li><b>⚡ Fast lane</b> every 5 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 5-10 minutes after it's posted.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
@@ -248,7 +261,7 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup (75). Sent again if the score
         jumps 10+ points (e.g. a price cut).</li>
       <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
-        and have no red flags, so you can be first to message. On for 4-seat UTVs and mowers; change per category in Setup.</li>
+        and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
       <li>Per category you can turn each alert type on or off and set a max price and minimum year. Listings far outside
         the radius and cross-posts of something already sent are skipped.</li>
     </ul>
@@ -288,7 +301,7 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals.
 
 let CATS = [], CAT = store.get("cat", "utv4");
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
-const F = Object.assign({ q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
+const F = Object.assign({ fit: false, q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
   store.get("filters", {}));
 const listedAt = d => d.listed_at || d.first_seen;
 if (/^\d+$/.test(F.age || "")) F.age = (+F.age * 24) + "h";   // old day-based values
@@ -309,7 +322,7 @@ const isNew = d => PREV_VISIT > 1 && d.first_seen > PREV_VISIT;
 function bindFilters() {
   const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
   for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value; save(); }; }
-  const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden" };
+  const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden", "f-fit": "fit" };
   for (const [id, k] of Object.entries(cb)) { $("#" + id).checked = F[k]; $("#" + id).onchange = e => { F[k] = e.target.checked; save(); }; }
 }
 function save() { store.set("filters", F); render(); }
@@ -319,6 +332,7 @@ function filtered() {
   const q = F.q.trim().toLowerCase();
   return DATA.filter(d =>
     (CAT === "all" || d.category === CAT) &&
+    (!F.fit || CAT !== "trailer" || d.utv_fit === "yes") &&
     (F.hidden || !d.hidden) &&
     (!F.star || d.starred) &&
     (!F.priv || !d.dealer) &&
@@ -372,8 +386,20 @@ function offerBox(d) {
     <div class="nums" style="margin-top:6px">${nums}<div><b>${money(d.offer_walk)}</b><span>walk away above</span></div></div>
     <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`;
 }
+function trailerSize(d) {
+  if (d.category !== "trailer") return null;
+  const dims = d.width_ft && d.len_ft ? `${d.width_ft}x${d.len_ft}` : d.len_ft ? `${d.len_ft} ft` : "";
+  return [dims + (d.trailer_type ? " " + d.trailer_type : ""), { 1: "single axle", 2: "tandem" }[d.axles] || (d.axles ? d.axles + " axles" : ""),
+    d.gvwr_lb ? d.gvwr_lb.toLocaleString() + " lb" : "", d.brakes === 1 ? "brakes" : ""].filter(x => x.trim()).join(" · ") || null;
+}
+function fitTag(d) {
+  if (d.category !== "trailer") return "";
+  const t = { yes: ["plus", "✓ Fits a 4-seat UTV"], maybe: ["", "? May fit a UTV - check size"],
+              no: ["", "Too small for a UTV"], unknown: ["", "Size not stated"] }[d.utv_fit];
+  return t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "";
+}
 function facts(d) {
-  return [CAT === "all" ? catOf(d.category).label : null, d.year,
+  return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
     d.deck_in ? d.deck_in + '" deck' : null, d.engine || null, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
@@ -394,7 +420,7 @@ function card(d) {
       <div class="facts">${facts(d)}</div>
       ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
       ${offerBox(d)}
-      <div class="tags">${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+      <div class="tags">${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">
@@ -575,6 +601,7 @@ function render() {
   ["deals", "all", "market", "setup"].forEach(t => $("#tab-" + t).hidden = t !== TAB);
   $("#filtersec").hidden = !(TAB === "deals" || TAB === "all") || !!QUICK;
   $("#cats").hidden = TAB === "setup" || !!QUICK;
+  $("#f-fit-wrap").hidden = CAT !== "trailer";
   if (TAB === "deals") renderDeals();
   if (TAB === "all") renderAll();
   if (TAB === "market") renderMarket();

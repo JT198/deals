@@ -23,21 +23,21 @@ def _v(listing, key):
 
 
 class Comp(tuple):
-    """(id, year, price, deck_in, miles, hours)"""
-    id, year, price, deck, miles, hours = (property(lambda t, i=i: t[i]) for i in range(6))
+    """(id, year, price, deck_in, miles, hours, len_ft, axles)"""
+    id, year, price, deck, miles, hours, len_ft, axles = (property(lambda t, i=i: t[i]) for i in range(8))
 
 
 def _comps(con) -> dict[str, list[Comp]]:
     """family -> used asking prices."""
     rows = con.execute(
-        """SELECT id, family, year, price, deck_in, miles, hours FROM listings
+        """SELECT id, family, year, price, deck_in, miles, hours, len_ft, axles FROM listings
            WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND price >= 300 AND last_seen >= ?""",
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
     for r in rows:
         by_fam.setdefault(r["family"], []).append(
-            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"])))
+            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"])))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -111,6 +111,13 @@ def expected_price(listing, comps_by_fam) -> tuple[int | None, int, int | None, 
         same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]
         if len(same_deck) >= 4:
             others = same_deck
+    length = _v(listing, "len_ft")
+    if length:   # trailers: a 5x8 single-axle and a 7x18 tandem are different things
+        axles = _v(listing, "axles")
+        same_size = [x for x in others if x.len_ft and abs(x.len_ft - length) <= 2
+                     and (not axles or not x.axles or x.axles == axles)]
+        if len(same_size) >= 4:
+            others = same_size
     metric = _usage_metric(listing, cat)
     use = _v(listing, metric) if metric else None
     slope = usage_slope(others, metric, cat) if metric else 0.0
@@ -239,6 +246,33 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False) -> tu
     return max(0, min(100, round(s))), deal_pct, reasons
 
 
+def utv_fit(r) -> str | None:
+    """Can this trailer carry a 4-seat UTV (~11.5-13.5 ft long, 62-64 in wide, 2,000-2,500 lb)?
+    yes / maybe / no / unknown; None for anything that isn't a trailer."""
+    if _v(r, "category") != "trailer":
+        return None
+    length, width, height = _v(r, "len_ft"), _v(r, "width_ft"), _v(r, "height_ft")
+    axles, gvwr, kind = _v(r, "axles"), _v(r, "gvwr_lb"), _v(r, "trailer_type")
+    if kind == "dump":
+        return "no"
+    if length is None or width is None:
+        return "unknown"
+    if length < 12 or width < 6.3 or (gvwr is not None and gvwr < 3500) or (kind == "enclosed" and height and height < 6):
+        return "no"
+    strong = (axles or 0) >= 2 or (gvwr or 0) >= 5000
+    tall_enough = kind != "enclosed" or (height or 0) >= 6.5
+    if length >= 14 and width >= 6.5 and strong and tall_enough:
+        return "yes"
+    return "maybe"
+
+
+FIT_NOTE = {"yes": "Fits a 4-seat UTV (14 ft+ deck, 7 ft wide class, tandem/5,000 lb+).",
+            "maybe": "Might fit a 4-seat UTV - check deck length (14 ft+), width between fenders (~80 in), "
+                     "capacity (5,000 lb+ GVWR){height}.",
+            "no": "Too small or light for a 4-seat UTV - only worth it as a general-purpose trailer.",
+            "unknown": "Size not stated - ask for deck length, width between fenders and GVWR."}
+
+
 def _nice(x: float) -> int:
     """Round down to a number people actually offer."""
     step = 50 if x < 2000 else 100 if x < 10000 else 250
@@ -293,7 +327,13 @@ def offer(listing, expected, deal_pct, comps) -> dict | None:
     flags = json.loads(listing["red_flags"] or "[]")
     if flags:
         notes.append("Known issues (" + ", ".join(flags) + "): get a repair estimate and take it off these numbers.")
-    notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
+    if listing["category"] == "trailer":
+        fit = utv_fit(listing)
+        notes.append(FIT_NOTE[fit].format(height=", interior height ~7 ft" if listing["trailer_type"] == "enclosed" else ""))
+        notes.append("Check: title and VIN plate match, tire date codes (older than ~6 years = budget new tires), "
+                     "wheel bearings, floor boards, lights, and that the brakes work - brakes need a brake controller in the truck.")
+    else:
+        notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
     return {"open": open_, "aim": aim, "walk": walk, "notes": notes}
 
 
@@ -307,9 +347,10 @@ def rescore_all(con) -> None:
             exp = base = note = None
         s, pct, reasons = score(r, exp, n, usage_adjusted=note is not None)
         o = offer(r, exp, pct, n)
+        fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, usage_note=?, comps=?, deal_pct=?, score=?, reasons=?,
-                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=? WHERE id=?""",
+                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, utv_fit=? WHERE id=?""",
             (exp, base, note, n, pct, s, json.dumps(reasons),
-             o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None, r["id"]))
+             o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None, fit, r["id"]))
     con.commit()

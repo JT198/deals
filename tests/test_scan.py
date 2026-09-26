@@ -240,6 +240,30 @@ def test_alert_text_includes_offer():
     assert "Offer $13,000 · aim $13,500 · walk away above $14,500" in cap and "for use" in cap, cap
 
 
+def test_trailer_utv_fit():
+    from app.score import utv_fit
+    t = lambda **k: dict({"category": "trailer", "len_ft": None, "width_ft": None, "height_ft": None,
+                          "axles": None, "gvwr_lb": None, "trailer_type": "open"}, **k)
+    assert utv_fit(t(len_ft=16, width_ft=7, axles=2)) == "yes"
+    assert utv_fit(t(len_ft=16, width_ft=7, axles=2, trailer_type="enclosed", height_ft=7)) == "yes"
+    assert utv_fit(t(len_ft=16, width_ft=7, axles=2, trailer_type="enclosed")) == "maybe"      # height unknown
+    assert utv_fit(t(len_ft=12, width_ft=6.5, axles=1)) == "maybe"                               # short, single axle
+    assert utv_fit(t(len_ft=10, width_ft=5)) == "no"
+    assert utv_fit(t(len_ft=16, width_ft=7, axles=2, trailer_type="dump")) == "no"
+    assert utv_fit(t()) == "unknown"
+    assert utv_fit({"category": "utv4"}) is None
+
+
+def test_trailer_alerts_gate_on_fit():
+    base = {"category": "trailer", "family": "Open utility (rails / mesh sides)"}
+    con = reset([dict(base, utv_fit="yes", score=80),
+                 dict(base, id="facebook:1", ext_id="1", title="small", utv_fit="no", score=80),
+                 dict(base, id="facebook:2", ext_id="2", title="steal", utv_fit="no", score=90),
+                 dict(base, id="facebook:3", ext_id="3", title="fresh small", utv_fit="maybe", score=55)])
+    asyncio.run(alerts(con))
+    assert sorted(SENT) == ["facebook:0", "facebook:2"], SENT   # fits, or a small one that's an exceptional deal
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

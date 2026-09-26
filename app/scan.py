@@ -6,6 +6,7 @@ LLM, re-score everything, send alerts. Run by deals-scan.timer.
   python -m app.scan --backfill # first run: "best match" sort + no alert flood
   python -m app.scan --backfill --no-search   # just finish item pages + parsing
   python -m app.scan --quick    # 5-minute fast lane: only searches marked quick, newest first
+  python -m app.scan --quiet    # normal scan, but record alerts as seen instead of sending (rollouts)
 """
 import asyncio
 import fcntl
@@ -27,7 +28,7 @@ from .sources.facebook import Facebook, pause
 MAX_ALERTS_PER_RUN = 6
 MAX_FRESH_PER_RUN = 8
 ALERT_LOCK = "/tmp/deals-alert.lock"
-FB_SEARCHES_PER_RUN = 16      # keeps a run inside the 20-minute timer slot
+FB_SEARCHES_PER_RUN = 18      # keeps a run inside the 20-minute timer slot
 FB_DETAILS_PER_RUN = 40
 FB_RECHECKS_PER_RUN = 12
 CL_DETAILS_PER_RUN = 40
@@ -106,7 +107,7 @@ def in_active_hours(st) -> bool:
     return a <= time.localtime().tm_hour < b
 
 
-async def run(force=False, backfill=False, search=True, quick=False) -> None:
+async def run(force=False, backfill=False, search=True, quick=False, quiet=False) -> None:
     db.init()
     con = db.connect()
     st = db.settings(con)
@@ -256,7 +257,7 @@ async def run(force=False, backfill=False, search=True, quick=False) -> None:
         except Exception as e:
             errors.append(f"geocode: {e}")
 
-        alerts = await send_alerts(con, http, st, quiet=backfill)
+        alerts = await send_alerts(con, http, st, quiet=backfill or quiet)
 
     con.execute("UPDATE runs SET finished=?, found=?, new=?, alerts=?, errors=? WHERE id=?",
                 (db.now(), found, new, alerts, json.dumps(errors[:30]) if errors else None, run_id))
@@ -295,6 +296,12 @@ async def _send_alerts(con, http, st, quiet) -> int:
                 and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
                 and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
 
+    def fits_need(r, kind):
+        """Trailers that can't carry a 4-seat UTV only alert when the deal is exceptional."""
+        if r["category"] != "trailer" or r["utv_fit"] == "yes":
+            return True
+        return kind == "enabled" and (r["score"] or 0) >= cfg("trailer")["fit_gate"]
+
     def switched_on(r, kind):
         return bool((rules.get(r["category"]) or {}).get(kind))
 
@@ -329,7 +336,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
         f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
               AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10) {private}
             ORDER BY score DESC""", (threshold,)).fetchall()
-        if switched_on(r, "enabled") and passes_limits(r) and first_copy(r)]
+        if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and first_copy(r)]
 
     # "Just listed": fresh private listings priced normally or better with no known problems,
     # so Jon can message the seller first
@@ -342,7 +349,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
               AND COALESCE(listed_at, first_seen) >= ? {private}
             ORDER BY COALESCE(listed_at, first_seen) DESC""",
         (int(st.get("fresh_min_score") or 50), db.now() - window)).fetchall()
-        if r["id"] not in deal_ids and switched_on(r, "fresh") and passes_limits(r) and first_copy(r)]
+        if r["id"] not in deal_ids and switched_on(r, "fresh") and fits_need(r, "fresh") and passes_limits(r)
+        and first_copy(r)]
 
     if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
         mark(deal_mark, deal_ids, "backfill")
@@ -377,7 +385,7 @@ def main():
         return
     try:
         asyncio.run(run(force="--force" in sys.argv, backfill="--backfill" in sys.argv,
-                        search="--no-search" not in sys.argv, quick=quick))
+                        search="--no-search" not in sys.argv, quick=quick, quiet="--quiet" in sys.argv))
     except Exception:
         traceback.print_exc()
         sys.exit(1)

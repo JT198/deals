@@ -115,6 +115,11 @@ dialog#help code { background: var(--surface-2); padding: 0 5px; border-radius: 
 .checks { display: flex; gap: 14px; flex-wrap: wrap; color: var(--text-2); }
 textarea.draft { width: 100%; min-height: 220px; background: var(--surface); color: var(--text); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px; font: inherit; }
+.note { margin-top: 6px; }
+.note textarea { width: 100%; min-height: 48px; resize: vertical; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; }
+.note .shown { font-size: 13px; color: var(--text); background: var(--warn-bg); border-radius: 8px; padding: 6px 9px; cursor: text; white-space: pre-wrap; }
+.note .shown::before { content: "📝 "; }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
 .sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
@@ -187,7 +192,7 @@ td.t { white-space: normal; min-width: 240px; }
 <main>
   <section id="filtersec">
     <div class="filters">
-      <input id="f-q" type="search" placeholder="Search title / notes" style="width:200px">
+      <input id="f-q" type="search" placeholder="Search ads and notes" style="width:200px">
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
       <label>Min year <input id="f-year" type="number" min="1965" max="2030"></label>
       <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
@@ -317,6 +322,10 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Market</b> tab: every asking price seen for a model by year, a weekly <b>market pulse</b> (new listings, asking vs
         typical, how fast things go), and <b>recently sold or removed</b> listings with their last asking price - the closest
         thing to sold prices.</li>
+      <li><b>Note</b> on a card: a shared note for you and Alex ("messaged seller, wants $14k firm"). Notes are searchable.</li>
+      <li><b>Search</b> looks through titles, the full ad text, the AI summary, add-ons and notes.</li>
+      <li><b>Morning digest</b> at 7:00 on Telegram: the best new private listings per category from the last day,
+        your watched listings with any price drops, and how the market is pricing.</li>
       <li><b>Copy message</b> (inside Offer guidance): a ready opener for the seller with your offer - edit, copy, paste into Messenger.</li>
       <li><b>Sell mine</b> tab: describe your machine and get a list price, what to expect, a quick-sale price, the closest
         listings, and a drafted ad (written by the local AI from only what you enter).</li>
@@ -345,6 +354,7 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals.
                 set(k, v) { try { localStorage.setItem("deals." + k, JSON.stringify(v)); } catch {} } };
 
 let CATS = [], CAT = store.get("cat", "utv4");
+const SEARCH = { q: "", ids: new Set(), t: null };   // description matches come from the server
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
 if (!Array.isArray(SORT) || SORT.length !== 2) SORT = ["score", -1];
 if (!["deals", "all", "market", "setup", "sell"].includes(TAB)) TAB = "deals";
@@ -392,6 +402,8 @@ function filtered() { return mergeCopies(filteredRaw()); }
 function filteredRaw() {
   if (QUICK) return DATA.filter(d => !d.hidden && inQuick(d)).sort((a, b) => listedAt(b) - listedAt(a));
   const q = F.q.trim().toLowerCase();
+  if (q.length >= 2 && SEARCH.q !== q) { SEARCH.q = q; clearTimeout(SEARCH.t);
+    SEARCH.t = setTimeout(async () => { try { SEARCH.ids = new Set(await api("/api/search?q=" + encodeURIComponent(q))); render(); } catch {} }, 300); }
   return DATA.filter(d =>
     (CAT === "all" || d.category === CAT) &&
     (!F.fit || CAT !== "trailer" || d.utv_fit === "yes") &&
@@ -404,7 +416,8 @@ function filteredRaw() {
     (!F.fams.length || F.fams.includes(d.family)) &&
     (!F.age || (F.age === "visit" ? isNew(d) : listedAt(d) >= Date.now() / 1000 - parseInt(F.age) * 3600)) &&
     (!F.cond || (F.cond === "new" ? d.is_new === 1 : d.is_new !== 1)) &&
-    (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "")).toLowerCase().includes(q)));
+    (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "") + " " + (d.notes || "")).toLowerCase().includes(q)
+      || (SEARCH.q === q && SEARCH.ids.has(d.id))));
 }
 
 function famChips() {
@@ -467,6 +480,30 @@ document.addEventListener("click", e => {
   const b = e.target.closest("[data-copy]"); if (!b) return;
   const src = document.getElementById(b.dataset.copy); if (src) copyText(src.value, b);
 });
+function noteBox(d) {
+  const nid = "note-" + d.id.replace(/[^a-z0-9]/gi, "");
+  return d.notes ? `<div class="note"><div class="shown" data-note="${esc(d.id)}" title="Click to edit">${esc(d.notes)}</div></div>`
+    : `<div class="note" id="${nid}" hidden><textarea data-note-edit="${esc(d.id)}" placeholder="Note for you and Alex - e.g. messaged seller, wants $14k firm"></textarea></div>`;
+}
+document.addEventListener("click", e => {
+  const shown = e.target.closest("[data-note]");
+  if (shown) {   // open the note for editing
+    const d = DATA.find(x => x.id === shown.dataset.note); if (!d) return;
+    const box = shown.parentElement;     // 'shown' is detached once we replace the box's contents
+    box.innerHTML = `<textarea data-note-edit="${esc(d.id)}">${esc(d.notes || "")}</textarea>`;
+    box.querySelector("textarea").focus(); return;
+  }
+  const btn = e.target.closest("[data-act=note]");
+  if (btn) { const box = document.getElementById("note-" + btn.dataset.id.replace(/[^a-z0-9]/gi, "")); if (box) { box.hidden = false; box.querySelector("textarea").focus(); } }
+});
+document.addEventListener("focusout", async e => {
+  const ta = e.target.closest("[data-note-edit]"); if (!ta) return;
+  const d = DATA.find(x => x.id === ta.dataset.noteEdit); if (!d) return;
+  const text = ta.value.trim();
+  if (text === (d.notes || "")) { if (!text) ta.parentElement.hidden = true; return; }
+  await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ notes: text }) });
+  d.notes = text || null; render();
+});
 function offerBox(d) {
   if (!d.offer_aim) return "";
   const mid = "msg-" + d.id.replace(/[^a-z0-9]/gi, "");
@@ -517,6 +554,7 @@ function card(d) {
       <div class="facts">${facts(d)}</div>
       ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
       ${offerBox(d)}
+      ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
         `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>`).join(" · ")}</div>` : ""}
       <div class="tags">${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
@@ -527,6 +565,7 @@ function card(d) {
         <button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">${d.starred ? "★ Watching" : "☆ Star"}</button>
         <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
         <button class="btn" data-act="gone" data-id="${esc(d.id)}" title="It's no longer posted - remove it from the dashboard">Gone</button>
+        ${d.notes ? "" : `<button class="btn" data-act="note" data-id="${esc(d.id)}" title="Add a note (shared with Alex)">Note</button>`}
       </div>
     </div></article>`;
 }
@@ -586,7 +625,7 @@ function renderAll() {
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
   $("#tab-all").innerHTML = filterBar(rows.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
-    <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
+    <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}${d.notes ? ` <span class="hint">📝 ${esc(d.notes.slice(0, 60))}</span>` : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>
     <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${money(d.offer_aim)}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
@@ -856,7 +895,7 @@ function render() {
 }
 $("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB = t; store.set("tab", t); QUICK = null; render(); status(); };
 document.body.addEventListener("click", async e => {
-  const b = e.target.closest("[data-act]"); if (!b) return;
+  const b = e.target.closest("[data-act]"); if (!b || b.dataset.act === "note") return;
   const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
   const all = [d, ...(d.copies || [])];      // a merged card acts on every copy behind it
   const post = (x, body) => api("/api/listing/" + encodeURIComponent(x.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

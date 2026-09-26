@@ -21,5 +21,5 @@ ssh "$PVE" "pct exec $CT -- bash -c '
     echo "health check FAILED - rolling back"; rm -rf /opt/deals/app; mv /opt/deals/app.prev /opt/deals/app
     systemctl restart deals-web; exit 1
   fi
-  systemctl restart deals-scan.timer deals-quick.timer deals-sold.timer deals-backup.timer 2>/dev/null || true
+  systemctl restart deals-scan.timer deals-quick.timer deals-sold.timer deals-backup.timer deals-digest.timer 2>/dev/null || true
   echo deployed OK'"

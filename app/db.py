@@ -138,6 +138,7 @@ def init() -> None:
         "seen_active": "INTEGER NOT NULL DEFAULT 1",             # was ever seen for sale (sold-pull rows never were)
         "user_gone": "INTEGER NOT NULL DEFAULT 0",               # Jon pressed Gone: searches don't resurrect it
         "parse_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio
         # trailers

@@ -76,7 +76,7 @@ def _geo(con):
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, expected_sold, sold_comps, sold_basis,
+  reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit"""
 
 
@@ -99,6 +99,20 @@ def listings(include_gone: int = 0, include_irrelevant: int = 0):
     return out
 
 
+@app.get("/api/search")
+def search(q: str):
+    """Listing ids whose ad text matches - the dashboard only holds titles/summaries, not descriptions."""
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    con = db.connect()
+    like = f"%{q}%"
+    return [r["id"] for r in con.execute(
+        """SELECT id FROM listings WHERE status IN ('active', 'pending') AND relevant = 1 AND (
+             title LIKE ? OR description LIKE ? OR summary LIKE ? OR extras LIKE ? OR model LIKE ? OR notes LIKE ?)""",
+        (like,) * 6)]
+
+
 @app.get("/api/listing/{lid:path}/history")
 def history(lid: str):
     con = db.connect()
@@ -114,6 +128,9 @@ def mark(lid: str, body: dict = Body(...)):
     for k in ("starred", "hidden"):
         if k in body:
             con.execute(f"UPDATE listings SET {k} = ? WHERE id = ?", (1 if body[k] else 0, lid))
+    if "notes" in body:
+        note = str(body["notes"] or "").strip()[:2000]
+        con.execute("UPDATE listings SET notes = ? WHERE id = ?", (note or None, lid))
     if body.get("gone"):     # "Gone" button: the listing is no longer up (Jon checked); searches won't bring it back
         con.execute("UPDATE listings SET status = 'gone', user_gone = 1, last_checked = ? WHERE id = ?", (db.now(), lid))
         score.mark_ended(con)

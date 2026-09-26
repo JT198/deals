@@ -562,6 +562,31 @@ def test_gate_default_deny_and_csrf():
     assert c.post("/api/scan", headers={"x-real-ip": "10.10.10.50", "sec-fetch-site": "cross-site"}).status_code == 403
 
 
+def test_notes_and_search():
+    con = reset([{"description": "comes with a Warn winch and Boss plow", "summary": "clean unit"},
+                 {"id": "facebook:1", "ext_id": "1", "title": "other", "description": "nothing special"}])
+    c = client()
+    assert c.post("/api/listing/facebook:1", json={"notes": "  messaged seller  "}).status_code == 200
+    assert db.connect().execute("SELECT notes FROM listings WHERE id='facebook:1'").fetchone()[0] == "messaged seller"
+    assert c.get("/api/search?q=boss plow").json() == ["facebook:0"]
+    assert c.get("/api/search?q=messaged").json() == ["facebook:1"]
+    assert c.get("/api/search?q=x").json() == []                       # too short
+    assert c.post("/api/listing/facebook:1", json={"notes": ""}).status_code == 200
+    assert db.connect().execute("SELECT notes FROM listings WHERE id='facebook:1'").fetchone()[0] is None
+
+
+def test_digest_builds():
+    from app import digest
+    t = db.now()
+    con = reset([{"score": 82, "price": 12000, "expected": 16000, "first_seen": t - 3600, "location": "Anoka, MN"},
+                 {"id": "facebook:w", "ext_id": "w", "starred": 1, "price": 9000, "first_price": 10000, "status": "pending"},
+                 {"id": "facebook:d", "ext_id": "d", "score": 90, "price": 5000, "first_seen": t - 3600, "is_dealer": 1}])
+    text = digest.build(con)
+    assert "4-seat UTVs" in text and "$12,000" in text and "typical $16,000" in text, text
+    assert "Watching (1)" in text and "(was $10,000)" in text and "PENDING" in text, text
+    assert "facebook:d" not in text and "$5,000" not in text            # dealers don't make the digest
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

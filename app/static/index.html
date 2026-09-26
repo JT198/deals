@@ -258,7 +258,10 @@ td.t { white-space: normal; min-width: 240px; }
         (a full cab with heat and A/C is currently worth ~25%); a plow adds ~$600 and an included trailer ~$1,500.
         So a NorthStar isn't compared straight against open machines. The grey line shows these adjustments too.</li>
       <li>Trailers with too few same-size comparisons are priced <b>per foot</b> from trailers of the same type.</li>
-      <li>These are <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
+      <li><b>Typically sells around</b>: the same calculation run on listings marked <b>sold</b> on Facebook (pulled three times a
+        day with Facebook's Sold filter). When a model has too few sold listings, it's estimated from how far sold prices sit
+        under asking across the category. Offers anchor on this when it's there - it's what similar ones actually went for.</li>
+      <li>"Typical asking" uses <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
         With few listings of a model the number is rougher; the comps count tells you how many it's based on.</li>
       <li>New/dealer-stock units get no typical price (used comps don't apply); compare those to MSRP.</li>
     </ul>
@@ -425,7 +428,9 @@ function vsTypical(d) {
   if (!d.expected) return `<span class="typ">Typical: not enough comps yet (${d.comps || 0})</span>`;
   const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
   const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
-  return `<span class="typ">Typical ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` +
+  const sold = d.expected_sold ? `<span class="typ">Typically sells around <b>${money(d.expected_sold)}</b> · ${d.sold_basis === "sold"
+    ? `${d.sold_comps} sold` : `est. from ${d.sold_comps} sold in this category`}</span>` : "";
+  return `<span class="typ">Typical asking ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` + sold +
     (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
 }
 function sellerMessage(d) {
@@ -621,17 +626,19 @@ function pulsePanel(rows, cat) {
     <p class="hint">Week by week: how many used ones were listed, how they were priced against typical (+ = asking above), and how
       many sold or disappeared and how long they'd been up. This fills in as the weeks go by - watch for asking prices sliding
       and things sitting longer as winter comes on.</p>
-    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Week of</th><th>New listings</th><th>Asking vs typical</th><th>Sold / removed</th><th>Days listed (median)</th></tr></thead><tbody>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Week of</th><th>New listings</th><th>Asking vs typical</th><th>Sold / removed</th><th>Sold price vs typical asking</th><th>Days listed (median)</th></tr></thead><tbody>
       ${rows.slice().reverse().map(r => `<tr><td>${r.start ? new Date(r.start * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : r.week}</td>
         <td>${r.new}</td><td>${r.vs_typical == null ? "—" : (r.vs_typical > 0 ? "+" : "") + r.vs_typical + "%"}</td>
-        <td>${r.ended}</td><td>${r.days_listed ?? "—"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">No data yet.</p>'}</div>`;
+        <td>${r.ended}</td><td>${r.sold_vs_typical == null ? "—" : (r.sold_vs_typical > 0 ? "+" : "") + r.sold_vs_typical + "%"}</td>
+        <td>${r.days_listed ?? "—"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">No data yet.</p>'}</div>`;
 }
 function gonePanel(rows) {
   return `<div class="panel"><h2>Recently sold or removed: ${esc(MARKET_FAM)}</h2>
-    <p class="hint">Sold prices aren't public, so this is the next best thing: the last asking price when a listing disappeared
-      (it may have sold for a bit less). Some just expire or get relisted.</p>
-    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Listing</th><th>Year</th><th>Use / size</th><th>First asked</th><th>Last asked</th><th>Days listed</th><th>Gone</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="t"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td>${r.year ?? "—"}</td>
+    <p class="hint"><b>Sold</b> = the seller marked it sold on Facebook (pulled 3x a day with Facebook's Sold filter) - the price is
+      its last listed price, usually close to what it went for. <b>Removed</b> = it just disappeared (sold, expired, or relisted).</p>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Listing</th><th></th><th>Year</th><th>Use / size</th><th>First asked</th><th>Last asked</th><th>Days listed</th><th>When</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="t"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td>
+        <td>${r.status === "sold" ? '<span class="tag plus">Sold</span>' : '<span class="tag">Removed</span>'}</td><td>${r.year ?? "—"}</td>
         <td>${r.miles != null ? r.miles.toLocaleString() + " mi" : r.hours != null ? r.hours + " hrs" : r.deck_in ? r.deck_in + '"' : r.len_ft ? (r.width_ft ? r.width_ft + "x" : "") + r.len_ft : "—"}</td>
         <td>${money(r.first_price)}</td><td>${money(r.end_price)}</td><td>${r.days ?? "—"}</td><td>${ago(r.ended_at)}</td></tr>`).join("")}</tbody></table></div>`
       : '<p class="hint">None seen yet - the finder only started watching recently.</p>'}</div>`;

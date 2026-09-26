@@ -1,0 +1,10 @@
+[Unit]
+Description=Deal finder sold pull three times a day
+
+[Timer]
+OnCalendar=*-*-* 07,13,19:30
+RandomizedDelaySec=600
+Persistent=false
+
+[Install]
+WantedBy=timers.target

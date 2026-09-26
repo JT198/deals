@@ -60,6 +60,14 @@ def _seller(v):
     return "dealer" if "dealer" in v else "private" if "private" in v else None
 
 
+def search_url(location: str, query: str, radius_mi: int, sort: str = "newest", sold: bool = False) -> str:
+    """Marketplace search URL. sold=True uses the Availability: Sold filter (works logged out)."""
+    km = max(1, round(radius_mi * 1.609))
+    order = "&sortBy=creation_time_descend" if sort == "newest" else ""
+    return (f"https://www.facebook.com/marketplace/{location}/search/?query={quote(query)}&radius={km}{order}"
+            f"&exact=false" + ("&availability=out%20of%20stock" if sold else ""))
+
+
 class Facebook:
     def __init__(self, pw):
         self.pw = pw
@@ -77,7 +85,7 @@ class Facebook:
         await self.browser.close()
 
     async def search(self, query: str, location: str, radius_mi: int, sort: str = "newest",
-                     scrolls: int | None = None) -> list[dict]:
+                     scrolls: int | None = None, sold: bool = False) -> list[dict]:
         page = await self.ctx.new_page()
         found: list[dict] = []
 
@@ -95,10 +103,7 @@ class Facebook:
                     pass
 
         page.on("response", on_response)
-        km = max(1, round(radius_mi * 1.609))
-        order = "&sortBy=creation_time_descend" if sort == "newest" else ""
-        url = (f"https://www.facebook.com/marketplace/{location}/search/"
-               f"?query={quote(query)}&radius={km}{order}&exact=false")
+        url = search_url(location, query, radius_mi, sort, sold)
         try:
             await page.goto(url, timeout=45000, wait_until="domcontentloaded")
             await page.wait_for_timeout(4000 + random.randint(0, 2000))

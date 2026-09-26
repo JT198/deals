@@ -28,12 +28,13 @@ class Comp(tuple):
     id, year, price, deck, miles, hours, len_ft, axles, equip = (property(lambda t, i=i: t[i]) for i in range(9))
 
 
-def _comps(con) -> dict[str, list[Comp]]:
-    """family -> used asking prices."""
+def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
+    """family -> used asking prices, or (sold=True) the last price of listings marked sold."""
     rows = con.execute(
-        """SELECT id, family, year, price, deck_in, miles, hours, len_ft, axles, equipment FROM listings
-           WHERE relevant = 1 AND family IS NOT NULL
-             AND COALESCE(is_new, 0) = 0 AND price >= 300 AND last_seen >= ?""",
+        """SELECT id, family, year, COALESCE(end_price, price) price, deck_in, miles, hours, len_ft, axles, equipment
+           FROM listings WHERE relevant = 1 AND family IS NOT NULL
+             AND COALESCE(is_new, 0) = 0 AND COALESCE(end_price, price) >= 300 AND """ +
+        ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?"),
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
     for r in rows:
@@ -268,7 +269,8 @@ def _usage_note(use, typical_use, metric, exp, base):
             f"{int(round(typical_use, -2 if typical_use >= 1000 else -1)):,} {unit} on similar ones ({more} use)")
 
 
-def score(listing, expected, comps: int = 0, usage_adjusted: bool = False) -> tuple[int, float | None, list[str]]:
+def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
+          sold_typical: int | None = None) -> tuple[int, float | None, list[str]]:
     """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
     reasons: list[str] = []
     price = listing["price"]
@@ -299,6 +301,10 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False) -> tu
         drop = (was - price) / was
         s += 3 + min(7, drop * 35)
         reasons.append(f"price cut ${was - price:,} ({drop:.0%})")
+
+    if sold_typical and price and price <= 0.95 * sold_typical:
+        s += 4
+        reasons.append(f"below what similar ones sold for (~${sold_typical:,})")
 
     if listing["motivated"]:
         s += 3
@@ -372,7 +378,7 @@ def _nice(x: float) -> int:
 
 
 def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
-          sell_days: float | None = None) -> dict | None:
+          sell_days: float | None = None, sold_typical: int | None = None, sold_note: str | None = None) -> dict | None:
     """Opening offer / target / walk-away, plus talking points.
 
     Without a typical price (few comps, or new dealer stock) it still gives "rough" numbers off the
@@ -420,6 +426,10 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
                              " - good ones move fast." if sell_days <= 10 else "."))
 
     fair = price if rough else min(price, expected)
+    if sold_typical and not rough:
+        # what similar ones actually went for already includes the haggling, so anchor there with less extra room
+        fair = min(price, sold_typical)
+        room *= 0.6
     walk = price if fair >= price else _nice(fair)            # never "walk away above" something under the ask
     aim = _nice(fair * (1 - room))
     gap = 0.03 if great else 0.06                              # opening offer sits a bit under the target
@@ -434,7 +444,8 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
         notes.insert(0, f"Not enough {noun} listings yet ({comps}) to know the market price - these are standard "
                         "private-sale numbers off the asking price. Look at a few comparable listings before offering.")
     else:
-        notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby).")
+        notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby)."
+                     + (f" {sold_note}" if sold_note else ""))
     flags = json.loads(listing["red_flags"] or "[]")
     if flags:
         notes.append("Known issues (" + ", ".join(flags) + "): get a repair estimate and take it off these numbers.")
@@ -449,6 +460,18 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
     else:
         notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
     return {"open": open_, "aim": aim, "walk": walk, "notes": notes, "rough": rough}
+
+
+def sold_ratios(con) -> dict[str, tuple[float, int]]:
+    """category -> (median of last price when sold / typical asking at the time, how many). >= 8 sold only."""
+    out: dict[str, list] = {}
+    for r in con.execute("""SELECT category, COALESCE(end_price, price) p, expected FROM listings
+                            WHERE status = 'sold' AND relevant = 1 AND COALESCE(is_new, 0) = 0
+                              AND expected IS NOT NULL AND COALESCE(end_price, price) >= 300"""):
+        q = r["p"] / r["expected"]
+        if 0.4 <= q <= 1.6:                      # ignore mismatches (wrong family, parts, typos)
+            out.setdefault(r["category"], []).append(q)
+    return {c: (min(1.05, statistics.median(v)), len(v)) for c, v in out.items() if len(v) >= 8}
 
 
 def mark_ended(con) -> None:
@@ -488,19 +511,35 @@ def rescore_all(con) -> None:
     except (TypeError, ValueError):
         tow = None
     pace = days_to_sell(con)
+    sold_comps = _comps(con, sold=True)
+    ratios = sold_ratios(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
     for r in rows:
         exp, n, base, note, pre = expected_price(r, comps, effects)
         if r["is_new"] == 1:
             exp = base = note = pre = None
-        s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note))
-        o = offer(r, exp, pct, n, tow, pace.get(r["family"]))
+        # "typically sells around": from sold listings of the same family when there are enough,
+        # else typical asking x how far sold prices sit under asking in this category
+        sold_exp = sold_n = basis = sold_note = None
+        if exp:
+            se, sn, *_ = expected_price(r, sold_comps, effects)
+            if se and sn >= 4:
+                sold_exp, sold_n, basis = min(se, int(exp * 1.1)), sn, "sold"
+                sold_note = f"Similar ones have sold for about ${sold_exp:,} ({sn} marked sold)."
+            elif r["category"] in ratios:
+                q, qn = ratios[r["category"]]
+                sold_exp, sold_n, basis = int(exp * q), qn, "est"
+                sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "
+                             f"({qn} sold), so expect about ${sold_exp:,}.")
+        s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp)
+        o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note)
         fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, expected_pre=?, usage_note=?, comps=?, deal_pct=?, score=?,
-                 reasons=?, offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=? WHERE id=?""",
+                 reasons=?, offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=?,
+                 expected_sold=?, sold_comps=?, sold_basis=? WHERE id=?""",
             (exp, base, pre, note, n, pct, s, json.dumps(reasons),
              o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None,
-             o and int(o["rough"]), fit, r["id"]))
+             o and int(o["rough"]), fit, sold_exp, sold_n, basis, r["id"]))
     con.commit()

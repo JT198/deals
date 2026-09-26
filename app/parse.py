@@ -24,6 +24,8 @@ Categories:
 - mower: zero-turn riding mower (lap-bar or steering-wheel zero-turn such as Cub Cadet RZT S). NOT lawn tractors, push mowers, or walk-behinds.
 - trailer: a towable trailer sold on its own - utility/landscape, enclosed cargo, car hauler, tilt/flatbed, equipment/deckover, dump, snowmobile/ATV drive-on. NOT campers/RVs/fifth-wheel campers, boat trailers, or a machine that merely comes "with trailer" (that ad's category is the machine).
 
+The ad may already be marked SOLD - classify it exactly as if it were still for sale (sold ads are used as price history).
+
 Seat hints: "MAX", "Crew", "XP 4", "4-seat", "Teryx4", "KRX4", "X4", "RMAX4", "General 4", "Pioneer 1000-5/6", "6-passenger", "Viking VI" mean 4+ seats (utv4). A plain "General", "General 1000", "Ranger XP 1000", "Ranger 570", "RZR XP 1000", "RZR Pro XP", "Defender HD10", "Pioneer 1000", "Pioneer 700", "Teryx", "Wolverine X2" with no 4-seat marker are 2-3 seat models (utv2). Only use utv4 when the ad actually indicates 4+ seats.
 Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family.
 

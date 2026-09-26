@@ -135,6 +135,8 @@ def init() -> None:
         "offer_rough": "INTEGER",                                # offer from asking price only (few comps / new)
         "watch_price": "INTEGER", "watch_status": "TEXT",        # starred: last state Jon was told about
         "ended_at": "INTEGER", "end_price": "INTEGER",           # when it went sold/gone, and its last asking price
+        "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
+        "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio
         # trailers
         "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
         "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT",

@@ -58,7 +58,7 @@ def _geo(con):
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment,
+  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit"""
 
 
@@ -143,6 +143,13 @@ def trends(category: str):
                 WHERE relevant = 1 AND category = ? AND COALESCE(is_new, 0) = 0 AND deal_pct IS NOT NULL
                   AND COALESCE(listed_at, first_seen) > ?""", (category, db.now() - 120 * 86400)):
         pct.setdefault(r["w"], []).append(r["deal_pct"])
+    sold_vs: dict[str, list] = {}
+    for r in con.execute(
+            f"""SELECT {wk.format(col='ended_at')} w, COALESCE(end_price, price) * 1.0 / expected q FROM listings
+                WHERE relevant = 1 AND category = ? AND status = 'sold' AND COALESCE(is_new, 0) = 0
+                  AND expected IS NOT NULL AND ended_at > ?""", (category, db.now() - 120 * 86400)):
+        if 0.4 <= r["q"] <= 1.6:
+            sold_vs.setdefault(r["w"], []).append(r["q"])
     ended: dict[str, list] = {}
     for r in con.execute(
             f"""SELECT {wk.format(col='ended_at')} w, ended_at - COALESCE(listed_at, first_seen) secs FROM listings
@@ -156,7 +163,8 @@ def trends(category: str):
         e = ended.get(w, [])
         out.append({"week": w, "start": new.get(w, {}).get("t"), "new": new.get(w, {}).get("n", 0),
                     "vs_typical": round(-st.median(p) * 100, 1) if len(p) >= 3 else None,   # + = asking above typical
-                    "priced": len(p), "ended": len(e), "days_listed": round(st.median(e), 1) if e else None})
+                    "priced": len(p), "ended": len(e), "days_listed": round(st.median(e), 1) if e else None,
+                    "sold_vs_typical": round((st.median(sold_vs[w]) - 1) * 100, 1) if len(sold_vs.get(w, [])) >= 3 else None})
     return out
 
 

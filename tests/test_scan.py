@@ -373,6 +373,43 @@ def test_appraise_rough_when_few_listings():
     assert a["rough"] and a["typical"] == 1800 and a["list_price"] > a["target"] > a["quick_sale"], a
 
 
+def test_sold_search_url():
+    from app.sources.facebook import search_url
+    assert "availability=out%20of%20stock" in search_url("plymouth-mn", "ranger crew", 100, sold=True)
+    assert "availability" not in search_url("plymouth-mn", "ranger crew", 100)
+
+
+def test_typically_sells_around_from_sold_listings():
+    from app import score
+    con = reset([])
+    _family(con)                                                        # 12 asking comps
+    t = db.now()
+    for i in range(6):                                                  # 6 sold ones, ~10% under asking
+        year, miles = 2021 + i % 3, 2000 + 1000 * i
+        price = int(0.9 * 16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
+                         status, parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 's', ?, ?, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
+                    (f"facebook:s{i}", f"s{i}", price, price, t, t, t, year, miles))
+    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
+                     category, family, year, miles, is_new, red_flags, reasons, listed_at)
+                   VALUES ('facebook:me', 'facebook', 'me', 'u', 'me', 15500, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 5000,
+                           0, '[]', '[]', ?)""", (t, t, t - 5 * 86400))
+    con.commit()
+    score.rescore_all(con)
+    r = con.execute("SELECT * FROM listings WHERE id = 'facebook:me'").fetchone()
+    assert r["sold_basis"] == "sold" and r["sold_comps"] >= 4, dict(r)
+    assert 0.85 * r["expected"] < r["expected_sold"] < 0.95 * r["expected"], (r["expected"], r["expected_sold"])
+    assert r["offer_walk"] <= r["expected_sold"] and "sold for about" in r["offer_notes"], r["offer_notes"]
+
+
+def test_sold_estimate_from_category_ratio():
+    from app import score
+    con = reset([{"id": f"facebook:q{i}", "ext_id": f"q{i}", "status": "sold", "family": f"F{i}",
+                  "price": 8000, "end_price": 8000, "expected": 10000, "ended_at": db.now()} for i in range(8)])
+    assert score.sold_ratios(con)["utv4"] == (0.8, 8)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

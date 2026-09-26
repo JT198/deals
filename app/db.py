@@ -94,6 +94,7 @@ DEFAULT_SETTINGS = {
     "active_hours": "6-23",        # local hours the scanner runs
     # per category: {"utv4": {"enabled": true, "max_price": "", "min_year": ""}, ...}
     "alert_rules": json.dumps({c: _default_rule(c) for c in CATEGORIES}),
+    "tow_capacity_lb": "12700",    # Jon's 2024 F-150 PowerBoost (max rating; see door-jamb sticker)
     "fresh_window_min": "120",     # "just listed" = posted within this many minutes
     "fresh_min_score": "50",       # ...and not overpriced / not red-flagged
     "seed_version": "1",

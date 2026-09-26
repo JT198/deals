@@ -205,6 +205,8 @@ td.t { white-space: normal; min-width: 240px; }
       <li>Trailers are compared by type and size (length within 2 ft, same axle count).</li>
       <li>Alerts: trailers that fit a UTV alert normally; anything else only when it's an exceptional deal (score 85+).
         Just-listed alerts are for UTV-size trailers only. Tick <b>Fits a 4-seat UTV</b> in the filters to see just those.</li>
+      <li>Trailers whose loaded rating (GVWR) is above your truck's towing capacity (Setup; default 12,700 lb for the
+        F-150 PowerBoost) get a warning tag - fine if you never load them near capacity.</li>
       <li>Before buying: title and VIN plate match, tire date codes, bearings, floor, lights, brakes (brakes need a brake
         controller in your truck), and that its loaded weight is within your truck's towing capacity.</li>
     </ul>
@@ -392,11 +394,13 @@ function trailerSize(d) {
   return [dims + (d.trailer_type ? " " + d.trailer_type : ""), { 1: "single axle", 2: "tandem" }[d.axles] || (d.axles ? d.axles + " axles" : ""),
     d.gvwr_lb ? d.gvwr_lb.toLocaleString() + " lb" : "", d.brakes === 1 ? "brakes" : ""].filter(x => x.trim()).join(" · ") || null;
 }
+let TOW = 12700;
 function fitTag(d) {
   if (d.category !== "trailer") return "";
+  const over = d.gvwr_lb && TOW && d.gvwr_lb > TOW ? `<span class="tag flag">Over truck's ${TOW.toLocaleString()} lb rating if fully loaded</span>` : "";
   const t = { yes: ["plus", "✓ Fits a 4-seat UTV"], maybe: ["", "? May fit a UTV - check size"],
               no: ["", "Too small for a UTV"], unknown: ["", "Size not stated"] }[d.utv_fit];
-  return t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "";
+  return (t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "") + over;
 }
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
@@ -548,6 +552,7 @@ async function renderSetup() {
     <label>Just-listed minimum score<input name="fresh_min_score" type="number" value="${esc(v.fresh_min_score)}"><span class="hint">50 = priced normally or better, no red flags</span></label>
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
       <option value="0" ${v.alert_private_only !== "1" ? "selected" : ""}>Private and dealers</option></select></label>
+    <label>Truck towing capacity (lb)<input name="tow_capacity_lb" type="number" step="100" value="${esc(v.tow_capacity_lb)}"><span class="hint">2024 F-150 PowerBoost max is ~12,700; your exact number is on the door-jamb sticker</span></label>
     <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
   </div>
   <h2 style="margin-top:16px">Alerts by category</h2>
@@ -644,6 +649,7 @@ $("#helpclose").onclick = () => $("#help").close();
 $("#help").addEventListener("click", e => { if (e.target.id === "help") $("#help").close(); });   // click outside
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
+  try { TOW = +(await api("/api/settings")).settings.tow_capacity_lb || 0; } catch {}
   DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }
 window.addEventListener("resize", () => { if (TAB === "market") renderMarket(); });
 bindFilters(); load();

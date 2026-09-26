@@ -279,7 +279,7 @@ def _nice(x: float) -> int:
     return int(x // step * step)
 
 
-def offer(listing, expected, deal_pct, comps) -> dict | None:
+def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -> dict | None:
     """Opening offer / target / walk-away, plus talking points. None when we can't price it."""
     price = listing["price"]
     if not expected or not price or listing["is_new"] == 1 or price < 0.2 * expected:
@@ -330,6 +330,9 @@ def offer(listing, expected, deal_pct, comps) -> dict | None:
     if listing["category"] == "trailer":
         fit = utv_fit(listing)
         notes.append(FIT_NOTE[fit].format(height=", interior height ~7 ft" if listing["trailer_type"] == "enclosed" else ""))
+        if tow_capacity and listing["gvwr_lb"] and listing["gvwr_lb"] > tow_capacity:
+            notes.append(f"Rated {listing['gvwr_lb']:,} lb loaded - more than your truck's {tow_capacity:,} lb towing "
+                         "rating. Fine as long as you never load it near capacity.")
         notes.append("Check: title and VIN plate match, tire date codes (older than ~6 years = budget new tires), "
                      "wheel bearings, floor boards, lights, and that the brakes work - brakes need a brake controller in the truck.")
     else:
@@ -339,6 +342,10 @@ def offer(listing, expected, deal_pct, comps) -> dict | None:
 
 def rescore_all(con) -> None:
     comps = _comps(con)
+    try:
+        tow = int(con.execute("SELECT value FROM settings WHERE key = 'tow_capacity_lb'").fetchone()[0])
+    except (TypeError, ValueError):
+        tow = None
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
     for r in rows:
@@ -346,7 +353,7 @@ def rescore_all(con) -> None:
         if r["is_new"] == 1:
             exp = base = note = None
         s, pct, reasons = score(r, exp, n, usage_adjusted=note is not None)
-        o = offer(r, exp, pct, n)
+        o = offer(r, exp, pct, n, tow)
         fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, usage_note=?, comps=?, deal_pct=?, score=?, reasons=?,

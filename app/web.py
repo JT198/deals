@@ -143,7 +143,7 @@ def get_settings():
             "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
 
-EDITABLE = {"radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
+EDITABLE = {"tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
 

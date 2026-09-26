@@ -308,6 +308,9 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>"Listed in the last hour" / "new since your last visit"</b> in the header are quick views - click to see
         just those, click again (or ✕) to go back. Your filters aren't changed.</li>
       <li><b>NEW</b> marks listings added since your last visit in this browser; <b>Just listed</b> = posted within a day.</li>
+      <li>Listings are re-checked to catch removals: anything scoring 60+ every 3 hours, the rest about daily. When a
+        listing fails to load it's tagged <b>⚠ May be sold/removed</b>, sinks in the list, and is re-checked every scan -
+        three misses in a row and it's gone (usually within an hour). The <b>Gone</b> button removes one right away.</li>
       <li><b>Star</b> to watch one: it's re-checked every scan and Telegram tells you when the price drops, it goes
         pending, or it's sold/removed. <b>Hide</b> to get it out of the way (Show hidden brings them back).
         Stars and hides are shared by everyone who uses this dashboard.</li>
@@ -501,6 +504,7 @@ function card(d) {
   return `<article class="card">
     <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image ? `background-image:url('${esc(d.image)}')` : ""}">
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
+        : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold/removed</span>'
         : isNew(d) ? '<span class="ribbon new">NEW</span>'
         : listedAt(d) > Date.now() / 1000 - 86400 ? '<span class="ribbon">Just listed</span>' : ""}</a>
     <div class="body">
@@ -519,6 +523,7 @@ function card(d) {
         <a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
         <button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">${d.starred ? "★ Watching" : "☆ Star"}</button>
         <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
+        <button class="btn" data-act="gone" data-id="${esc(d.id)}" title="It's no longer posted - remove it from the dashboard">Gone</button>
       </div>
     </div></article>`;
 }
@@ -561,7 +566,7 @@ document.addEventListener("click", e => {
   Object.assign(F, DEFAULTS, { fams: [] }); bindFilters(); famChips(); save();
 });
 function renderDeals() {
-  const by = { score: (a, b) => (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
+  const by = { score: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
@@ -840,6 +845,10 @@ $("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB 
 document.body.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
+  if (b.dataset.act === "gone") {
+    await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gone: true }) });
+    DATA = DATA.filter(x => x.id !== d.id); render(); return;
+  }
   const body = b.dataset.act === "star" ? { starred: !d.starred } : { hidden: !d.hidden };
   await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   Object.assign(d, { starred: body.starred ?? d.starred, hidden: body.hidden ?? d.hidden }); render();

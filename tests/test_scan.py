@@ -455,6 +455,27 @@ def test_sold_estimate_from_category_ratio():
     assert score.sold_ratios(con)["utv4"] == (0.8, 8)
 
 
+def test_recheck_order_suspects_first_then_hot():
+    t = db.now()
+    base = {"detail_fetched": 1, "last_checked": t - 10 * 3600}
+    con = reset([dict(base, id="facebook:plain", ext_id="plain", score=40),
+                 dict(base, id="facebook:hot", ext_id="hot", score=85),
+                 dict(base, id="facebook:fresh-hot", ext_id="fresh-hot", score=90, last_checked=t - 600),
+                 dict(base, id="facebook:suspect", ext_id="suspect", score=30, detail_misses=1)])
+    ids = [r["id"] for r in scan.recheck_candidates(con)]
+    assert ids[0] == "facebook:suspect" and ids[1] == "facebook:hot", ids
+    assert ids.index("facebook:fresh-hot") > ids.index("facebook:plain") or "facebook:fresh-hot" not in ids[:2], ids
+
+
+def test_gone_button():
+    from fastapi.testclient import TestClient
+    from app import web
+    con = reset([{}])
+    TestClient(web.app).post("/api/listing/facebook:0", json={"gone": True})
+    r = db.connect().execute("SELECT status, ended_at FROM listings").fetchone()
+    assert r["status"] == "gone" and r["ended_at"], dict(r)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -32,7 +32,7 @@ ALERT_LOCK = "/tmp/deals-alert.lock"
 FB_SEARCHES_PER_RUN = 18      # keeps a run inside the 20-minute timer slot
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
-FB_RECHECKS_PER_RUN = 12
+FB_RECHECKS_PER_RUN = 10
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
 PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
@@ -90,6 +90,37 @@ def apply_detail(con, lid, d: dict | None, old_price):
         (d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
          d.get("status", "active"), t, t, lid))
     set_price(con, lid, old_price, d.get("price"))
+
+
+HOT_SCORE = 60                # listings worth showing get re-checked every HOT_RECHECK_SECS
+HOT_RECHECK_SECS = 3 * 3600
+HOT_RECHECKS_PER_RUN = 10
+
+
+def recheck_candidates(con) -> list:
+    """Facebook item pages to re-open this full scan, to notice price cuts, pending, sold and removed:
+      1. suspects - failed to load last time; retried every scan so a removed listing is confirmed in ~an hour
+      2. starred listings, every scan (watch alerts)
+      3. listings scoring HOT_SCORE+ not checked in HOT_RECHECK_SECS (the ones Jon actually looks at)
+      4. a round-robin of everything else relevant, oldest check first"""
+    live = "source='facebook' AND detail_fetched=1 AND status IN ('active','pending')"
+    now = db.now()
+    groups = [
+        con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0").fetchall(),
+        con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND starred = 1").fetchall(),
+        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1 AND score >= ?
+                        AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
+                    (HOT_SCORE, now - HOT_RECHECK_SECS, HOT_RECHECKS_PER_RUN)).fetchall(),
+        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1
+                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall(),
+    ]
+    out, seen = [], set()
+    for g in groups:
+        for r in g:
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                out.append(r)
+    return out
 
 
 def record_miss(con, lid):
@@ -190,16 +221,9 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                        WHERE source='facebook' AND detail_fetched=0 AND """ + fb_status + ("" if sold else only_new) + """
                        ORDER BY first_seen DESC LIMIT ?""",
                     ((SOLD_DETAILS_PER_RUN if sold else FB_DETAILS_PER_RUN) * boost,)).fetchall()
-                # every starred listing, every full scan (watch alerts: price drop / pending / sold)
-                seen_ids = {r["id"] for r in todo}
-                todo += [] if (quick or sold) else [r for r in con.execute(
-                    """SELECT id, ext_id, price FROM listings WHERE source='facebook' AND starred=1
-                       AND status IN ('active','pending')""").fetchall() if r["id"] not in seen_ids]
-                # plus a few older relevant ones, to notice price cuts / sold / removed
-                todo += [] if (quick or sold) else con.execute(
-                    """SELECT id, ext_id, price FROM listings
-                       WHERE source='facebook' AND detail_fetched=1 AND relevant=1 AND status IN ('active','pending')
-                       ORDER BY COALESCE(last_checked, 0) ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall()
+                if not (quick or sold):
+                    seen_ids = {r["id"] for r in todo}
+                    todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
                 ok, missed = 0, []
                 for r in todo:
                     try:

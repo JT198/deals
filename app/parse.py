@@ -79,12 +79,27 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
     r = await http.post(f"{OLLAMA_URL}/api/generate", json={
         "model": OLLAMA_MODEL, "prompt": prompt, "format": "json", "stream": False,
         "think": False, "keep_alive": "30m", "options": {"temperature": 0},
-    }, timeout=180)
+    }, timeout=90)
     r.raise_for_status()
     try:
         d = json.loads(r.json()["response"])
     except (ValueError, KeyError):
         return None
+    if not isinstance(d, dict):     # "null", a bare string, a list - deterministic at temperature 0, so don't retry forever
+        return None
+
+    def text(v):
+        """Free-text field: the model sometimes answers with a list or a number."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, (list, tuple)):
+            return ", ".join(str(x) for x in v if x is not None)[:200] or None
+        return str(v)[:200]
+
+    def items(v):
+        if isinstance(v, str):
+            v = [v]
+        return [str(x)[:80] for x in (v or []) if x is not None][:6] if isinstance(v, (list, tuple)) else []
 
     def num(v):
         try:
@@ -118,15 +133,15 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         "relevant": 1 if (flag(d.get("relevant")) and cat) else 0,
         "category": cat,
         "year": year if year and 1965 <= year <= 2030 else None,
-        "make": d.get("make"),
-        "model": d.get("model"),
+        "make": text(d.get("make")),
+        "model": text(d.get("model")),
         "family": fam,
-        "trim": d.get("trim"),
+        "trim": text(d.get("trim")),
         "seats": num(d.get("seats")),
         "hours": num(d.get("hours")),
         "miles": num(d.get("miles")),
         "deck_in": deck if deck and 28 <= deck <= 80 else None,
-        "engine": d.get("engine"),
+        "engine": text(d.get("engine")),
         "trailer_type": ttype,
         "len_ft": feet(d.get("len_ft"), 4, 53) if trailer else None,
         "width_ft": feet(d.get("width_ft"), 3, 9) if trailer else None,
@@ -138,7 +153,7 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         "is_new": flag(d.get("is_new")),
         "is_dealer": flag(d.get("is_dealer")),
         "motivated": flag(d.get("motivated")) or 0,
-        "extras": json.dumps([str(x) for x in (d.get("extras") or [])][:6]),
-        "red_flags": json.dumps([str(x) for x in (d.get("red_flags") or [])][:6]),
-        "summary": d.get("summary"),
+        "extras": json.dumps(items(d.get("extras"))),
+        "red_flags": json.dumps(items(d.get("red_flags"))),
+        "summary": text(d.get("summary")),
     }

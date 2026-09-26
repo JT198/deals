@@ -16,7 +16,7 @@ CATEGORIES = {
         "label": "4-seat UTVs", "emoji": "🚙",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
-        "cl_cat": "sna", "every_min": 20,
+        "cl_cat": "sna", "every_min": 40,
         "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
@@ -87,7 +87,7 @@ CATEGORIES = {
         "label": "Zero-turn mowers", "emoji": "🌱",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 25, "high_hpy": 100,
         "usage": {"hours": (-0.04, 100)},
-        "cl_cat": "grd", "every_min": 20,
+        "cl_cat": "grd", "every_min": 40,
         "quick": ["zero turn", "zero turn mower"],   # also run by the 5-minute fast lane
         "families": [
             "Cub Cadet RZT S (steering wheel)", "Cub Cadet ZT1/ZT2 (lap bar)", "Cub Cadet Ultima ZT",
@@ -109,7 +109,7 @@ CATEGORIES = {
         "label": "Trailers", "emoji": "🚚",
         "dep": 0.04, "window": 2, "fit": True, "low_hpy": 0, "high_hpy": 10**9,
         "usage": {},
-        "cl_cat": "tra", "every_min": 20, "fit_gate": 85,
+        "cl_cat": "tra", "every_min": 40, "fit_gate": 85,
         "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
         "families": [
             "Enclosed cargo", "Enclosed car hauler (8.5 wide)", "Open utility (rails / mesh sides)",

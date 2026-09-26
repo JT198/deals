@@ -3,8 +3,11 @@
 Requests arriving through the Cloudflare tunnel (CF-Gateway, 10.10.10.5) must
 carry a Cloudflare Access identity from ALLOWED_EMAILS; LAN requests are trusted.
 """
+import asyncio
+import ipaddress
 import json
 import re
+import time
 import os
 import subprocess
 from pathlib import Path
@@ -19,6 +22,14 @@ from .equipment import APPLIES
 from .parse import OLLAMA_MODEL, OLLAMA_URL
 
 TUNNEL_IPS = set(os.environ.get("TUNNEL_IPS", "10.10.10.5").split(","))
+LAN_NETS = [ipaddress.ip_network(n) for n in os.environ.get("LAN_NETS", "10.10.10.0/24,127.0.0.0/8").split(",")]
+
+
+def _lan(ip: str) -> bool:
+    try:
+        return any(ipaddress.ip_address(ip) in n for n in LAN_NETS)
+    except ValueError:
+        return False
 ALLOWED = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
 STATIC = Path(__file__).parent / "static"
 
@@ -33,6 +44,10 @@ async def gate(request: Request, call_next):
         email = (request.headers.get("cf-access-authenticated-user-email") or "").lower()
         if not email or email not in ALLOWED:
             return JSONResponse({"error": "forbidden"}, status_code=403)
+    elif not _lan(ip):
+        return JSONResponse({"error": "forbidden"}, status_code=403)      # default deny, not default allow
+    if request.method != "GET" and request.headers.get("sec-fetch-site") == "cross-site":
+        return JSONResponse({"error": "cross-site request"}, status_code=403)
     resp = await call_next(request)
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -46,7 +61,10 @@ def index():
 
 def _geo(con):
     st = db.settings(con)
-    hlat, hlon = float(st["home_lat"]), float(st["home_lon"])
+    try:
+        hlat, hlon = float(st["home_lat"]), float(st["home_lon"])
+    except (TypeError, ValueError):       # a bad Setup entry must not take the whole dashboard down
+        hlat, hlon = float(db.DEFAULT_SETTINGS["home_lat"]), float(db.DEFAULT_SETTINGS["home_lon"])
     cache = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
 
     def dist(location):
@@ -91,11 +109,13 @@ def history(lid: str):
 @app.post("/api/listing/{lid:path}")
 def mark(lid: str, body: dict = Body(...)):
     con = db.connect()
+    if not con.execute("SELECT 1 FROM listings WHERE id = ?", (lid,)).fetchone():
+        raise HTTPException(404, "no such listing")
     for k in ("starred", "hidden"):
         if k in body:
             con.execute(f"UPDATE listings SET {k} = ? WHERE id = ?", (1 if body[k] else 0, lid))
-    if body.get("gone"):     # "Gone" button: the listing is no longer up (Jon checked)
-        con.execute("UPDATE listings SET status = 'gone', last_checked = ? WHERE id = ?", (db.now(), lid))
+    if body.get("gone"):     # "Gone" button: the listing is no longer up (Jon checked); searches won't bring it back
+        con.execute("UPDATE listings SET status = 'gone', user_gone = 1, last_checked = ? WHERE id = ?", (db.now(), lid))
         score.mark_ended(con)
     if "starred" in body:   # watching starts from the current price/status
         con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
@@ -115,7 +135,7 @@ def market(family: str):
            ORDER BY year""", (family,))]
     pts = [p for p in rows if p["year"]]
     undated = sorted(p["price"] for p in rows if not p["year"])
-    comps = score._comps(con)
+    comps, _ = _market_inputs(con)
     years = sorted({p["year"] for p in pts})
     curve = []
     if years:
@@ -129,6 +149,18 @@ def market(family: str):
         p["dealer"] = bool(p["is_dealer"] == 1 or p["seller_type"] == "dealer")
     return {"points": pts, "curve": curve,
             "undated": {"count": len(undated), "median": undated[len(undated) // 2] if undated else None}}
+
+
+_MARKET_CACHE: dict = {}
+
+
+def _market_inputs(con):
+    """Comps + equipment effects, recomputed only after a scan has finished (they scan the whole table)."""
+    key = tuple(con.execute("SELECT (SELECT MAX(id) FROM runs WHERE finished IS NOT NULL), COUNT(*), MAX(rowid), "
+                            "SUM(parsed) FROM listings").fetchone())
+    if "comps" not in _MARKET_CACHE or _MARKET_CACHE["key"] != key:
+        _MARKET_CACHE.update(key=key, comps=score._comps(con), effects=score.equipment_effects(con))
+    return _MARKET_CACHE["comps"], _MARKET_CACHE["effects"]
 
 
 @app.get("/api/trends")
@@ -150,7 +182,7 @@ def trends(category: str):
     for r in con.execute(
             f"""SELECT {wk.format(col='ended_at')} w, COALESCE(end_price, price) * 1.0 / expected q FROM listings
                 WHERE relevant = 1 AND category = ? AND status = 'sold' AND COALESCE(is_new, 0) = 0
-                  AND expected IS NOT NULL AND ended_at > ?""", (category, db.now() - 120 * 86400)):
+                  AND COALESCE(expected, 0) > 0 AND ended_at > ?""", (category, db.now() - 120 * 86400)):
         if 0.4 <= r["q"] <= 1.6:
             sold_vs.setdefault(r["w"], []).append(r["q"])
     ended: dict[str, list] = {}
@@ -190,13 +222,21 @@ def _appraisal(body: dict) -> dict:
     cat = body.get("category")
     if cat not in CATEGORIES:
         raise HTTPException(400, "unknown category")
-    num = lambda k: (float(body[k]) if str(body.get(k) or "").strip() else None)
+    def num(k):
+        v = str(body.get(k) or "").strip()
+        if not v:
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            raise HTTPException(400, f"{k} must be a number")
     me = {"id": "", "category": cat, "family": body.get("family"), "year": int(num("year")) if num("year") else None,
           "miles": int(num("miles")) if num("miles") else None, "hours": int(num("hours")) if num("hours") else None,
           "deck_in": int(num("deck_in")) if num("deck_in") else None, "len_ft": num("len_ft"),
           "axles": int(num("axles")) if num("axles") else None,
           "equipment": json.dumps([f for f in (body.get("equipment") or []) if isinstance(f, str)])}
-    exp, n, base, note, pre = score.expected_price(me, score._comps(con), score.equipment_effects(con))
+    comps, effects = _market_inputs(con)
+    exp, n, base, note, pre = score.expected_price(me, comps, effects)
     cond = CONDITION.get(body.get("condition") or "good", 1.0)
     pace = score.days_to_sell(con).get(me["family"])
     # closest comparable listings (same family): nearest year, then use, then size
@@ -239,6 +279,9 @@ def appraise(body: dict = Body(...)):
     return _appraisal(body)
 
 
+_DRAFT_LOCK = asyncio.Semaphore(1)
+
+
 @app.post("/api/appraise/draft")
 async def appraise_draft(body: dict = Body(...)):
     """Local model writes a for-sale ad from the seller's details (only when asked - it takes a few seconds)."""
@@ -255,10 +298,10 @@ async def appraise_draft(body: dict = Body(...)):
         f"Details: {json.dumps(facts)}\n"
         + (f"Asking price: ${price:,}\n" if price else "") +
         "Return just the ad text.")
-    async with httpx.AsyncClient() as http:
+    async with _DRAFT_LOCK, httpx.AsyncClient() as http:
         r = await http.post(f"{OLLAMA_URL}/api/generate", json={
             "model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "think": False,
-            "keep_alive": "30m", "options": {"temperature": 0.2}}, timeout=120)
+            "keep_alive": "30m", "options": {"temperature": 0.2}}, timeout=110)
     r.raise_for_status()
     text = r.json().get("response", "").strip()
     if not facts.get("year"):   # belt and braces: never let the model invent a model year
@@ -289,6 +332,10 @@ def get_settings():
             "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
 
+# key -> (min, max, blank allowed)
+NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "tow_capacity_lb": (0, 40000, True),
+           "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
+           "home_lat": (-90, 90, False), "home_lon": (-180, 180, False), "home_zip": (501, 99950, False)}
 EDITABLE = {"tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
@@ -299,7 +346,28 @@ def put_settings(body: dict = Body(...)):
     for k, v in body.items():
         if k not in EDITABLE:
             raise HTTPException(400, f"unknown setting {k}")
+        if k in NUMERIC:
+            lo, hi, blank_ok = NUMERIC[k]
+            sv = str(v).strip()
+            if not sv and blank_ok:
+                v = ""
+            else:
+                try:
+                    f = float(sv)
+                except ValueError:
+                    raise HTTPException(400, f"{k} must be a number")
+                if not lo <= f <= hi:
+                    raise HTTPException(400, f"{k} must be between {lo} and {hi}")
+                v = str(int(f)) if k not in ("home_lat", "home_lon") else sv
+        if k == "active_hours" and not re.fullmatch(r"\d{1,2}-\d{1,2}", str(v).strip()):
+            raise HTTPException(400, "active_hours looks like 6-23")
         if k == "alert_rules":
+            if not isinstance(v, dict) or not all(isinstance(r, dict) for r in v.values()):
+                raise HTTPException(400, "alert_rules must be an object of objects")
+            for r in v.values():
+                for f in ("max_price", "min_year"):
+                    if str(r.get(f) or "").strip() and not str(r.get(f)).strip().lstrip("-").replace(".", "", 1).isdigit():
+                        raise HTTPException(400, f"{f} must be a number")
             v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
                                 "max_price": str(r.get("max_price") or ""),
                                 "min_year": str(r.get("min_year") or "")}
@@ -348,10 +416,19 @@ def status():
     c = con.execute("""SELECT COUNT(*) total,
                          SUM(relevant = 1 AND status IN ('active','pending')) live,
                          SUM(parsed = 0) unparsed FROM listings""").fetchone()
-    states = subprocess.run(["systemctl", "is-active", "deals-scan.service", "deals-scan-now.service"],
-                            capture_output=True, text=True).stdout.split()
-    running = "activating" in states
+    running = _scanning()
     return {"runs": runs, "counts": dict(c), "scanning": running}
+
+
+_SCAN_STATE = {"t": 0.0, "v": False}
+
+
+def _scanning() -> bool:
+    if time.time() - _SCAN_STATE["t"] > 5:      # several tabs poll this; one systemctl call per 5 s is plenty
+        states = subprocess.run(["systemctl", "is-active", "deals-scan.service", "deals-scan-now.service"],
+                                capture_output=True, text=True).stdout.split()
+        _SCAN_STATE.update(t=time.time(), v="activating" in states)
+    return _SCAN_STATE["v"]
 
 
 @app.post("/api/scan")

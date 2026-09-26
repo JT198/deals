@@ -1,0 +1,8 @@
+# pip install -r requirements.txt && playwright install --with-deps chromium
+playwright==1.63.0
+fastapi
+uvicorn[standard]
+httpx
+jinja2
+selectolax
+psycopg[binary]

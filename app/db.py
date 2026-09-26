@@ -135,6 +135,9 @@ def init() -> None:
         "offer_rough": "INTEGER",                                # offer from asking price only (few comps / new)
         "watch_price": "INTEGER", "watch_status": "TEXT",        # starred: last state Jon was told about
         "ended_at": "INTEGER", "end_price": "INTEGER",           # when it went sold/gone, and its last asking price
+        "seen_active": "INTEGER NOT NULL DEFAULT 1",             # was ever seen for sale (sold-pull rows never were)
+        "user_gone": "INTEGER NOT NULL DEFAULT 0",               # Jon pressed Gone: searches don't resurrect it
+        "parse_attempts": "INTEGER NOT NULL DEFAULT 0",
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio
         # trailers
@@ -159,6 +162,19 @@ def init() -> None:
         con.execute("UPDATE settings SET value = ? WHERE key = 'seed_version'", (str(SEED_VERSION),))
     con.commit()
     con.close()
+
+
+def prune(con) -> None:
+    """Keep the DB from growing forever: old run rows, old alert history, old ended listings (never starred)."""
+    cutoff = now() - 90 * 86400
+    con.execute("DELETE FROM runs WHERE started < ?", (cutoff,))
+    con.execute("DELETE FROM alert_log WHERE ts < ?", (cutoff,))
+    old = [r[0] for r in con.execute("""SELECT id FROM listings WHERE status IN ('gone', 'sold') AND starred = 0
+                                        AND COALESCE(ended_at, last_seen) < ?""", (now() - 200 * 86400,))]
+    if old:
+        con.executemany("DELETE FROM price_history WHERE listing_id = ?", [(i,) for i in old])
+        con.executemany("DELETE FROM listings WHERE id = ?", [(i,) for i in old])
+    con.commit()
 
 
 def settings(con) -> dict:

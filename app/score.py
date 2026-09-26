@@ -491,7 +491,7 @@ def days_to_sell(con) -> dict[str, float]:
     """family -> median days listed before it sold / disappeared (last 120 days, used only, >= 5 of them)."""
     out: dict[str, list] = {}
     for r in con.execute("""SELECT family, ended_at - COALESCE(listed_at, first_seen) secs FROM listings
-                            WHERE ended_at IS NOT NULL AND relevant = 1 AND family IS NOT NULL
+                            WHERE ended_at IS NOT NULL AND relevant = 1 AND family IS NOT NULL AND seen_active = 1
                               AND COALESCE(is_new, 0) = 0 AND ended_at > ?""", (int(time.time()) - 120 * 86400,)):
         if r["secs"] and r["secs"] > 0:
             out.setdefault(r["family"], []).append(r["secs"] / 86400)
@@ -502,7 +502,7 @@ def rescore_all(con) -> None:
     mark_ended(con)
     # 1. equipment from the ad text (cheap, deterministic - recomputed every run)
     for r in con.execute("SELECT id, category, title, description, extras, summary FROM listings "
-                         "WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall():
+                         "WHERE parsed = 1 AND relevant = 1 AND status != 'gone' AND equipment IS NULL").fetchall():
         con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(detect(r)), r["id"]))
     con.commit()
     # 2. what each feature is worth, from last run's pre-equipment typical prices
@@ -516,7 +516,7 @@ def rescore_all(con) -> None:
     sold_comps = _comps(con, sold=True)
     ratios = sold_ratios(con)
     rows = con.execute(
-        "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
+        "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status IN ('active', 'pending')").fetchall()
     for r in rows:
         exp, n, base, note, pre = expected_price(r, comps, effects)
         if r["is_new"] == 1:

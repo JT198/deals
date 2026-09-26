@@ -11,6 +11,8 @@ LLM, re-score everything, send alerts. Run by deals-scan.timer.
 """
 import asyncio
 import fcntl
+import html
+import os
 import json
 import random
 import re
@@ -28,8 +30,10 @@ from .sources.facebook import Facebook, pause
 
 MAX_ALERTS_PER_RUN = 6
 MAX_FRESH_PER_RUN = 8
-ALERT_LOCK = "/tmp/deals-alert.lock"
-FB_SEARCHES_PER_RUN = 18      # keeps a run inside the 20-minute timer slot
+LOCK_DIR = os.path.join(os.path.dirname(db.DB_PATH), "locks")
+ALERT_LOCK = os.path.join(LOCK_DIR, "alert.lock")
+PROBLEM_ALERT_EVERY = 6 * 3600   # Telegram "scanner has a problem" at most this often
+FB_SEARCHES_PER_RUN = 26      # ~6-7 min of searching; keeps a run inside the 20-minute timer slot
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
 FB_RECHECKS_PER_RUN = 10
@@ -42,24 +46,29 @@ STALE_AFTER = 5 * 86400
 def upsert(con, source: str, item: dict) -> bool:
     lid = f"{source}:{item['ext_id']}"
     t = db.now()
-    row = con.execute("SELECT price, status FROM listings WHERE id = ?", (lid,)).fetchone()
+    status = item.get("status", "active")
+    row = con.execute("SELECT price, status, user_gone FROM listings WHERE id = ?", (lid,)).fetchone()
     if row is None:
-        con.execute(
-            """INSERT INTO listings(id, source, ext_id, url, title, price, first_price, strike_price,
-                 location, image, listed_at, first_seen, last_seen, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        # OR IGNORE: the quick lane and a full scan can both see a new listing in the same minute
+        cur = con.execute(
+            """INSERT OR IGNORE INTO listings(id, source, ext_id, url, title, price, first_price, strike_price,
+                 location, image, listed_at, first_seen, last_seen, status, seen_active)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (lid, source, item["ext_id"], item["url"], item["title"], item["price"], item["price"],
              item.get("strike_price"), item.get("location"), item.get("image"),
-             item.get("listed_at"), t, t, item.get("status", "active")))
-        if item["price"]:
+             item.get("listed_at"), t, t, status, int(status == "active")))
+        if cur.rowcount and item["price"]:
             con.execute("INSERT INTO price_history VALUES (?,?,?)", (lid, t, item["price"]))
-        return True
+        return bool(cur.rowcount)
+    if row["user_gone"] and status != "sold":
+        status = "gone"          # Jon said it's gone; a cached search result doesn't overrule him
     con.execute(
-        """UPDATE listings SET last_seen = ?, status = ?, title = ?,
+        """UPDATE listings SET last_seen = ?, status = ?, title = ?, detail_misses = 0,
+             seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END,
              strike_price = COALESCE(?, strike_price), image = COALESCE(image, ?),
              listed_at = COALESCE(listed_at, ?), location = COALESCE(location, ?)
            WHERE id = ?""",
-        (t, item.get("status", "active"), item["title"], item.get("strike_price"), item.get("image"),
+        (t, status, item["title"], status, item.get("strike_price"), item.get("image"),
          item.get("listed_at"), item.get("location"), lid))
     set_price(con, lid, row["price"], item["price"])
     return False
@@ -86,9 +95,10 @@ def apply_detail(con, lid, d: dict | None, old_price):
     con.execute(
         """UPDATE listings SET description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
              listed_at = COALESCE(?, listed_at), image = COALESCE(?, image), status = ?,
-             detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ? WHERE id = ?""",
+             detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ?,
+             seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END WHERE id = ?""",
         (d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
-         d.get("status", "active"), t, t, lid))
+         d.get("status", "active"), t, t, d.get("status", "active"), lid))
     set_price(con, lid, old_price, d.get("price"))
 
 
@@ -106,7 +116,8 @@ def recheck_candidates(con) -> list:
     live = "source='facebook' AND detail_fetched=1 AND status IN ('active','pending')"
     now = db.now()
     groups = [
-        con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0").fetchall(),
+        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0
+                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT 20""").fetchall(),
         con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND starred = 1").fetchall(),
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1 AND score >= ?
                         AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
@@ -127,8 +138,10 @@ def record_miss(con, lid):
     """An item page we couldn't read. Retry; after a few misses stop waiting for the description
     (parse from the title) and, for FB, treat it as removed - deleted listings redirect to login."""
     con.execute("UPDATE listings SET detail_misses = detail_misses + 1, last_checked = ? WHERE id = ?", (db.now(), lid))
-    con.execute("""UPDATE listings SET detail_fetched = 1,
-                     status = CASE WHEN source = 'facebook' THEN 'gone' ELSE status END
+    con.execute("""UPDATE listings SET
+                     status = CASE WHEN source = 'facebook' AND detail_fetched = 1 AND status = 'active'
+                                   THEN 'gone' ELSE status END,
+                     detail_fetched = 1
                    WHERE id = ? AND detail_misses >= ?""", (lid, MAX_DETAIL_MISSES))
 
 
@@ -161,7 +174,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         # Facebook: each search runs on its category's cadence (4-seat UTVs + mowers every run, others hourly)
         due = [s for s in searches if backfill or not s["last_run"]
                or s["last_run"] <= t0 - cfg(s["category"])["every_min"] * 60 + 180]
-        due.sort(key=lambda s: s["last_run"] or 0)
+        due.sort(key=lambda s: (s["last_run"] or 0) + cfg(s["category"])["every_min"] * 60)   # most overdue first
         if not backfill:
             due = due[:FB_SEARCHES_PER_RUN]
     # the fast lane and the sold pull only follow up on what they found themselves
@@ -273,29 +286,42 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
             """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
                  AND (detail_fetched = 1 OR first_seen < ?)""" + (only_new if quick else "") + """
                ORDER BY first_seen DESC LIMIT ?""", (db.now() - 3600, PARSES_PER_RUN * boost)).fetchall()
-        gate = asyncio.Semaphore(PARSE_CONCURRENCY)
+        gate = asyncio.Semaphore(1 if (quick or sold) else PARSE_CONCURRENCY)
+        failures = {"streak": 0}
 
         async def parse_one(r):
             async with gate:
+                if failures["streak"] >= 3:      # Ollama is down or wedged: stop hammering it, still score + alert
+                    return
                 try:
                     p = await parse.parse(http, dict(r))
+                    if p is not None:
+                        cols = ", ".join(f"{k} = ?" for k in p)
+                        con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
+                    else:
+                        # the model gave unusable output; it's deterministic, so give up after a few tries
+                        con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
+                        con.execute("""UPDATE listings SET parsed = 1, relevant = 0, summary = 'could not read this ad'
+                                       WHERE id = ? AND parse_attempts >= 3""", (r["id"],))
+                    con.commit()
+                    failures["streak"] = 0
                 except Exception as e:
+                    failures["streak"] += 1
                     errors.append(f"parse {r['id']}: {e}")
-                    return
-            if p is None:
-                return
-            cols = ", ".join(f"{k} = ?" for k in p)
-            con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
-            con.commit()
         await asyncio.gather(*(parse_one(r) for r in rows))
+        if failures["streak"] >= 3:
+            errors.append("LLM parsing failed repeatedly - Ollama down? (skipped the rest this run)")
 
         # listings we haven't seen or confirmed in a while are probably gone
-        if not (quick or sold):
+        fb_blocked = any("login wall" in e for e in errors)
+        if not (quick or sold) and not fb_blocked and found > 0:
             con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
                         (db.now() - STALE_AFTER,))
             con.commit()
 
         score.rescore_all(con)
+        if not (quick or sold):
+            db.prune(con)
         try:
             await geo.fill(con)
         except Exception as e:
@@ -309,11 +335,27 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     print(f"found={found} new={new} alerts={alerts} errors={len(errors)}")
     for e in errors[:10]:
         print("  !", e)
+    serious = [e for e in errors if "login wall" in e or "Ollama down" in e]
+    if serious and not quiet:
+        async with httpx.AsyncClient(timeout=30) as http:
+            await problem_alert(con, http, mode, serious[0])
+
+
+async def problem_alert(con, http, mode: str, what: str) -> None:
+    """The scanner itself has a problem. Tell Jon, at most once every PROBLEM_ALERT_EVERY."""
+    last = con.execute("SELECT value FROM settings WHERE key = 'last_problem_alert'").fetchone()
+    if last and db.now() - int(last[0]) < PROBLEM_ALERT_EVERY:
+        return
+    if await notify.send_text(http, f"⚠️ <b>Deal Finder problem</b> ({mode} scan): {html.escape(what)}\n"
+                                    f"Check Setup → Recent scans on the <a href=\"{notify.DASHBOARD_URL}\">dashboard</a>."):
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('last_problem_alert', ?)", (str(db.now()),))
+        con.commit()
 
 
 async def send_alerts(con, http, st, quiet=False) -> int:
     # The full scan and the fast lane both alert. One shared lock around select -> send -> mark
     # means a listing is claimed by exactly one of them.
+    os.makedirs(LOCK_DIR, exist_ok=True)
     with open(ALERT_LOCK, "w") as lock:
         await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
         return await _send_alerts(con, http, st, quiet)
@@ -448,7 +490,8 @@ async def _watch_alerts(con, http, quiet) -> int:
 
 def main():
     quick, sold = "--quick" in sys.argv, "--sold" in sys.argv
-    lock = open("/tmp/deals-quick.lock" if quick else "/tmp/deals-sold.lock" if sold else "/tmp/deals-scan.lock", "w")
+    os.makedirs(LOCK_DIR, exist_ok=True)
+    lock = open(os.path.join(LOCK_DIR, "quick.lock" if quick else "sold.lock" if sold else "scan.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -457,9 +500,19 @@ def main():
     try:
         asyncio.run(run(force="--force" in sys.argv, backfill="--backfill" in sys.argv,
                         search="--no-search" not in sys.argv, quick=quick, quiet="--quiet" in sys.argv, sold=sold))
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
+        try:      # the run crashed outright - say so, or Telegram just goes quiet
+            con = db.connect()
+            asyncio.run(_crash_alert(con, quick, sold, f"{type(e).__name__}: {e}"[:300]))
+        except Exception:
+            traceback.print_exc()
         sys.exit(1)
+
+
+async def _crash_alert(con, quick, sold, what):
+    async with httpx.AsyncClient(timeout=30) as http:
+        await problem_alert(con, http, "sold" if sold else "quick" if quick else "full", "crashed: " + what)
 
 
 if __name__ == "__main__":

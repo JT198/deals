@@ -30,9 +30,10 @@ def trailer_size(r) -> str | None:
 
 def listing_caption(r, header: str | None = None) -> str:
     e = html.escape
-    bits = ([header] if header else []) + [f"{cfg(r['category'])['emoji']} <b>{e(r['title'])}</b>",
-            f"<b>${r['price']:,}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
-            + f"  ·  score {r['score']}"]
+    price = f"${r['price']:,}" if r["price"] else "no price listed"
+    bits = ([header] if header else []) + [f"{cfg(r['category'])['emoji']} <b>{e(r['title'][:120])}</b>",
+            f"<b>{price}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
+            + (f"  ·  score {r['score']}" if r["score"] is not None else "")]
     facts = [x for x in (
         trailer_size(r),
         r["location"],
@@ -50,21 +51,26 @@ def listing_caption(r, header: str | None = None) -> str:
         o = f"Offer ${r['offer_open']:,}" + (f" · aim ${r['offer_aim']:,}" if r["offer_open"] < r["offer_aim"] else "")
         bits.append(f"💬 {e(o)} · walk away above ${r['offer_walk']:,}" + (" (rough - few comps)" if r["offer_rough"] else ""))
     if r["summary"]:
-        bits.append(e(r["summary"]))
+        bits.append(e(r["summary"][:300]))
     if r["reasons"]:
-        bits.append("Why: " + e("; ".join(json.loads(r["reasons"]))))
-    bits.append(f'<a href="{e(r["url"])}">Open listing</a>  ·  <a href="{e(DASHBOARD_URL)}">Dashboard</a>')
-    return "\n".join(bits)
+        bits.append("Why: " + e("; ".join(json.loads(r["reasons"]))[:300]))
+    links = f'<a href="{e(r["url"])}">Open listing</a>  ·  <a href="{e(DASHBOARD_URL)}">Dashboard</a>'
+    body = "\n".join(bits)
+    # Telegram caption limit is 1024; trim the text, never the links or a tag
+    room = 1000 - len(links)
+    if len(body) > room:
+        body = body[:room].rsplit("\n", 1)[0]
+    return body + "\n" + links
 
 
 async def send_listing(http: httpx.AsyncClient, r, header: str | None = None) -> bool:
     if not enabled():
         return False
-    cap = listing_caption(r, header)[:1020]
     base = f"https://api.telegram.org/bot{TOKEN}"
     try:
+        cap = listing_caption(r, header)
         return await _send(http, base, r, cap)
-    except httpx.HTTPError:
+    except Exception:      # a malformed row must never take the whole alert stage down
         return False
 
 

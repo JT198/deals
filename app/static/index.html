@@ -236,8 +236,8 @@ td.t { white-space: normal; min-width: 240px; }
 
     <h3>How often it looks</h3>
     <ul>
-      <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook, 4-seat UTV and mower
-        searches every scan (plus trailers) and the other categories hourly.</li>
+      <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook about 26 searches per scan,
+        most-overdue first - 4-seat UTV, mower and trailer searches roughly every 40 minutes, the other categories hourly.</li>
       <li><b>⚡ Fast lane</b> every 5 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 5-10 minutes after it's posted.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
@@ -346,8 +346,11 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals.
 
 let CATS = [], CAT = store.get("cat", "utv4");
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
+if (!Array.isArray(SORT) || SORT.length !== 2) SORT = ["score", -1];
+if (!["deals", "all", "market", "setup", "sell"].includes(TAB)) TAB = "deals";
 const F = Object.assign({ fit: false, q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
-  store.get("filters", {}));
+  store.get("filters", {}) || {});
+if (!Array.isArray(F.fams)) F.fams = [];
 const listedAt = d => d.listed_at || d.first_seen;
 if (/^\d+$/.test(F.age || "")) F.age = (+F.age * 24) + "h";   // old day-based values
 if (store.get("ver", 1) < 2) { F.age = ""; F.sort = "score"; store.set("filters", F); store.set("ver", 2); }
@@ -594,7 +597,8 @@ function renderAll() {
 }
 
 // ---------- Market: asking price by model year for one family ----------
-let MARKET_FAM = store.get("marketFam", null);
+let MARKET_FAM = store.get("marketFam", null), LAST_MARKET = null;
+renderMarket.token = 0;
 async function renderMarket() {
   const fams = await api("/api/families");
   if (!fams.length) { $("#tab-market").innerHTML = `<div class="empty">No parsed listings yet.</div>`; return; }
@@ -602,6 +606,8 @@ async function renderMarket() {
   const pool = inCat.length ? inCat : fams;
   if (!MARKET_FAM || !pool.some(f => f.family === MARKET_FAM)) MARKET_FAM = [...pool].sort((a, b) => b.count - a.count)[0].family;
   const m = await api("/api/market?family=" + encodeURIComponent(MARKET_FAM));
+  LAST_MARKET = m;
+  const token = ++renderMarket.token;
   $("#tab-market").innerHTML = `<div class="panel">
     <div class="filters"><label>Model <select id="m-fam">${CATS.map(c => {
       const fs = fams.filter(f => f.category === c.key); if (!fs.length) return "";
@@ -618,8 +624,13 @@ async function renderMarket() {
   $("#m-fam").onchange = e => { MARKET_FAM = e.target.value; store.set("marketFam", MARKET_FAM); renderMarket(); };
   drawScatter($("#chart"), m);
   const famCat = (fams.find(f => f.family === MARKET_FAM) || {}).category;
-  const [tr, gone] = await Promise.all([api("/api/trends?category=" + famCat), api("/api/ended?family=" + encodeURIComponent(MARKET_FAM))]);
-  $("#tab-market").insertAdjacentHTML("beforeend", pulsePanel(tr, famCat) + gonePanel(gone));
+  const [tr, gone] = await Promise.all([
+    api("/api/trends?category=" + famCat).catch(e => ({ error: e.message })),
+    api("/api/ended?family=" + encodeURIComponent(MARKET_FAM)).catch(e => ({ error: e.message }))]);
+  if (token !== renderMarket.token) return;    // a newer render started meanwhile
+  $("#tab-market").insertAdjacentHTML("beforeend",
+    (tr.error ? `<div class="panel"><p class="hint">Market pulse unavailable (${esc(tr.error)}).</p></div>` : pulsePanel(tr, famCat)) +
+    (gone.error ? `<div class="panel"><p class="hint">Recently sold unavailable (${esc(gone.error)}).</p></div>` : gonePanel(gone)));
 }
 function pulsePanel(rows, cat) {
   const label = catOf(cat).label || "";
@@ -738,7 +749,9 @@ async function renderSetup() {
   $("#savebtn").onclick = async () => {
     const body = {};
     document.querySelectorAll("#setform [name]").forEach(i => {
-      if (i.name === "home_latlon") { const [a, b] = i.value.split(",").map(x => x.trim()); body.home_lat = a; body.home_lon = b; }
+      if (i.name === "home_latlon") { const [a, b] = i.value.split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
+        if (isNaN(parseFloat(a)) || isNaN(parseFloat(b))) { $("#savemsg").textContent = "Home lat, lon needs two numbers like 45.04, -93.49"; throw new Error("bad latlon"); }
+        body.home_lat = a; body.home_lon = b; }
       else body[i.name] = i.value; });
     body.alert_rules = {};
     document.querySelectorAll("[data-rule]").forEach(tr => { const r = {};
@@ -845,13 +858,15 @@ $("#tabs").onclick = e => { const t = e.target.dataset.tab; if (!t) return; TAB 
 document.body.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
+  const all = [d, ...(d.copies || [])];      // a merged card acts on every copy behind it
+  const post = (x, body) => api("/api/listing/" + encodeURIComponent(x.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (b.dataset.act === "gone") {
-    await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gone: true }) });
-    DATA = DATA.filter(x => x.id !== d.id); render(); return;
+    await Promise.all(all.map(x => post(x, { gone: true })));
+    const ids = new Set(all.map(x => x.id)); DATA = DATA.filter(x => !ids.has(x.id)); render(); return;
   }
   const body = b.dataset.act === "star" ? { starred: !d.starred } : { hidden: !d.hidden };
-  await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  Object.assign(d, { starred: body.starred ?? d.starred, hidden: body.hidden ?? d.hidden }); render();
+  await Promise.all(all.map(x => post(x, body)));
+  all.forEach(x => Object.assign(x, { starred: body.starred ?? x.starred, hidden: body.hidden ?? x.hidden })); render();
 });
 $("#scanbtn").onclick = async () => { $("#scanbtn").disabled = true; $("#scanbtn").textContent = "Scanning…";
   await api("/api/scan", { method: "POST" }); setTimeout(status, 3000); };
@@ -867,7 +882,8 @@ async function status() {
     (fresh ? ` · <a class="pill ${QUICK === "visit" ? "on" : ""}" data-age="visit">${fresh} new since your last visit</a>` : "") +
     (st.scanning ? " · scanning now…" : "");
   $("#scanbtn").disabled = st.scanning; $("#scanbtn").textContent = st.scanning ? "Scanning…" : "Scan now";
-  if (st.scanning) setTimeout(status, 15000);
+  clearTimeout(status.timer);
+  if (st.scanning) status.timer = setTimeout(status, 15000);
 }
 function setQuick(v) {
   QUICK = QUICK === v ? null : v;
@@ -880,13 +896,25 @@ document.addEventListener("click", e => { if (e.target.id === "quickoff") setQui
 $("#helpbtn").onclick = () => $("#help").showModal();
 $("#helpclose").onclick = () => $("#help").close();
 $("#help").addEventListener("click", e => { if (e.target.id === "help") $("#help").close(); });   // click outside
+function busy() {   // typing, an open offer box, or a non-listing tab: don't redraw under the user
+  const a = document.activeElement;
+  return (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) ||
+    document.querySelector("details.offer[open]") || !(TAB === "deals" || TAB === "all");
+}
+async function refresh() {   // the 2-minute background poll
+  if (busy()) { status(); return; }
+  await load();
+}
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
+  if (!CATS.some(c => c.key === CAT) && CAT !== "all") { CAT = "all"; store.set("cat", CAT); }
   try { TOW = +(await api("/api/settings")).settings.tow_capacity_lb || 0; } catch {}
   DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }
-window.addEventListener("resize", () => { if (TAB === "market") renderMarket(); });
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (TAB === "market" && LAST_MARKET && $("#chart")) drawScatter($("#chart"), LAST_MARKET); }, 200); });
 bindFilters(); load();
-setInterval(load, 2 * 60 * 1000);   // matches the 5-minute fast lane closely enough
+setInterval(refresh, 2 * 60 * 1000);   // matches the 5-minute fast lane closely enough
 </script>
 </body>
 </html>

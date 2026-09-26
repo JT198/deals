@@ -57,6 +57,13 @@ def reset(rows, **settings):
     return con
 
 
+def client():
+    """API test client that looks like a LAN browser (the gate default-denies unknown sources)."""
+    from fastapi.testclient import TestClient
+    from app import web
+    return TestClient(web.app, headers={"x-real-ip": "10.10.10.50"})
+
+
 def rules(**per_cat):
     r = db.alert_rules({})
     for cat, v in per_cat.items():
@@ -103,11 +110,11 @@ def test_overlapping_scans_alert_once():
 
 
 def test_unreadable_detail_is_not_removal():
-    con = reset([{"detail_fetched": 0}])
+    con = reset([{"detail_fetched": 1}])      # a listing we had read before, now failing to load
     scan.apply_detail(con, "facebook:0", None, 10000)
     scan.record_miss(con, "facebook:0")
     row = con.execute("SELECT status, detail_fetched, detail_misses FROM listings").fetchone()
-    assert (row["status"], row["detail_fetched"], row["detail_misses"]) == ("active", 0, 1), dict(row)
+    assert (row["status"], row["detail_fetched"], row["detail_misses"]) == ("active", 1, 1), dict(row)
     for _ in range(scan.MAX_DETAIL_MISSES - 1):
         scan.record_miss(con, "facebook:0")
     row = con.execute("SELECT status, detail_fetched FROM listings").fetchone()
@@ -356,10 +363,10 @@ def test_appraise_endpoint():
     con = reset([])
     _family(con)
     body = {"category": "utv4", "family": "RZR XP 4", "year": "2022", "miles": "3000", "condition": "good"}
-    a = TestClient(web.app).post("/api/appraise", json=body).json()
+    a = client().post("/api/appraise", json=body).json()
     assert a["typical"] and a["quick_sale"] < a["target"] < a["list_price"], a
     assert len(a["similar"]) == 8 and a["similar"][0]["year"] == 2022, a["similar"][0]
-    worse = TestClient(web.app).post("/api/appraise", json=dict(body, condition="needs work")).json()
+    worse = client().post("/api/appraise", json=dict(body, condition="needs work")).json()
     assert worse["target"] < a["target"], (worse["target"], a["target"])
 
 
@@ -368,7 +375,7 @@ def test_appraise_rough_when_few_listings():
     from app import web
     con = reset([{"id": f"facebook:m{i}", "ext_id": f"m{i}", "category": "mower", "year": None,
                   "family": "Cub Cadet RZT S (steering wheel)", "price": p} for i, p in enumerate((1800, 1800, 1500, 2750))])
-    a = TestClient(web.app).post("/api/appraise", json={"category": "mower", "family": "Cub Cadet RZT S (steering wheel)",
+    a = client().post("/api/appraise", json={"category": "mower", "family": "Cub Cadet RZT S (steering wheel)",
                                                         "hours": "274", "deck_in": "42", "condition": "good"}).json()
     assert a["rough"] and a["typical"] == 1800 and a["list_price"] > a["target"] > a["quick_sale"], a
 
@@ -471,9 +478,88 @@ def test_gone_button():
     from fastapi.testclient import TestClient
     from app import web
     con = reset([{}])
-    TestClient(web.app).post("/api/listing/facebook:0", json={"gone": True})
+    client().post("/api/listing/facebook:0", json={"gone": True})
     r = db.connect().execute("SELECT status, ended_at FROM listings").fetchone()
     assert r["status"] == "gone" and r["ended_at"], dict(r)
+
+
+def test_parse_coerces_odd_llm_output():
+    from app import parse as P
+    class R:   # fake httpx response
+        def __init__(self, body): self._b = body
+        def raise_for_status(self): pass
+        def json(self): return {"response": self._b}
+    class H:
+        def __init__(self, body): self.body = body
+        async def post(self, *a, **k): return R(self.body)
+    row = {"source": "facebook", "title": "t", "price": 1, "location": None, "seller_type": None, "description": ""}
+    odd = json.dumps({"category": "utv4", "relevant": True, "family": "RZR XP 4", "trim": ["Premium", "EPS"],
+                      "model": 2022, "extras": "winch", "red_flags": None, "summary": ["a", "b"]})
+    p = asyncio.run(P.parse(H(odd), row))
+    assert p["trim"] == "Premium, EPS" and p["model"] == "2022" and p["extras"] == '["winch"]' and p["summary"] == "a, b", p
+    assert asyncio.run(P.parse(H("null"), row)) is None and asyncio.run(P.parse(H('"str"'), row)) is None
+
+
+def test_search_hit_resets_misses_and_user_gone_sticks():
+    con = reset([{"detail_fetched": 1, "detail_misses": 2, "status": "gone"},
+                 {"id": "facebook:1", "ext_id": "1", "status": "gone", "user_gone": 1}])
+    item = {"ext_id": "0", "url": "u", "title": "t0", "price": 10000, "status": "active"}
+    assert scan.upsert(con, "facebook", item) is False
+    r = con.execute("SELECT status, detail_misses FROM listings WHERE id='facebook:0'").fetchone()
+    assert (r["status"], r["detail_misses"]) == ("active", 0), dict(r)
+    scan.upsert(con, "facebook", dict(item, ext_id="1", title="t1"))
+    assert con.execute("SELECT status FROM listings WHERE id='facebook:1'").fetchone()[0] == "gone"
+    con.commit()
+
+
+def test_never_fetched_listing_is_not_marked_gone_by_misses():
+    con = reset([{"detail_fetched": 0}])
+    for _ in range(scan.MAX_DETAIL_MISSES):
+        scan.record_miss(con, "facebook:0")
+    r = con.execute("SELECT status, detail_fetched FROM listings").fetchone()
+    assert (r["status"], r["detail_fetched"]) == ("active", 1), dict(r)     # parse from the title, still live
+    con.commit()
+
+
+def test_caption_survives_null_price_and_long_text():
+    con = reset([{"price": None, "summary": "x" * 2000, "reasons": json.dumps(["y" * 500])}])
+    cap = notify.listing_caption(con.execute("SELECT * FROM listings").fetchone())
+    assert "no price listed" in cap and len(cap) <= 1024 and cap.rstrip().endswith("Dashboard</a>"), (len(cap), cap[-80:])
+
+
+def test_days_to_sell_ignores_sold_pull_rows():
+    from app import score
+    t = db.now()
+    rows = [{"id": f"facebook:a{i}", "ext_id": f"a{i}", "status": "gone", "listed_at": t - 10 * 86400,
+             "ended_at": t, "end_price": 1, "seen_active": 1} for i in range(5)]
+    rows += [{"id": f"facebook:s{i}", "ext_id": f"s{i}", "status": "sold", "listed_at": t - 90 * 86400,
+              "ended_at": t, "end_price": 1, "seen_active": 0} for i in range(5)]
+    con = reset(rows)
+    assert 9.5 < score.days_to_sell(con)["RZR XP 4"] < 10.5
+
+
+def test_settings_validation():
+    from fastapi.testclient import TestClient
+    from app import web
+    reset([])
+    c = client()
+    assert c.put("/api/settings", json={"home_lat": "45.04 -93.49"}).status_code == 400
+    assert c.put("/api/settings", json={"radius_mi": ""}).status_code == 400
+    assert c.put("/api/settings", json={"alert_rules": "x"}).status_code == 400
+    assert c.put("/api/settings", json={"radius_mi": "150", "home_lat": "45.1", "home_lon": "-93.5"}).status_code == 200
+    assert c.post("/api/appraise", json={"category": "utv4", "family": "RZR XP 4", "year": "abc"}).status_code == 400
+
+
+def test_gate_default_deny_and_csrf():
+    from fastapi.testclient import TestClient
+    from app import web
+    reset([])
+    from fastapi.testclient import TestClient
+    from app import web
+    c = TestClient(web.app)
+    assert c.get("/api/status", headers={"x-real-ip": "8.8.8.8"}).status_code == 403
+    assert c.get("/api/status", headers={"x-real-ip": "10.10.10.50"}).status_code == 200
+    assert c.post("/api/scan", headers={"x-real-ip": "10.10.10.50", "sec-fetch-site": "cross-site"}).status_code == 403
 
 
 if __name__ == "__main__":

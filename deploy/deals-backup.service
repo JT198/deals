@@ -1,0 +1,6 @@
+[Unit]
+Description=Deal finder nightly SQLite backup
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deals/backup.sh

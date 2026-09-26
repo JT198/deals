@@ -33,6 +33,7 @@
   --good: #5fd08a; --good-bg: #16301f; --warn: #f0b457; --warn-bg: #33270f; --bad: #ff8a80; --bad-bg: #3a1a17;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* flex labels etc. must still honour hidden */
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--accent); }
@@ -82,6 +83,10 @@ details.offer[open] summary::after { content: " ▾"; }
 details.offer .nums { display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 details.offer .nums b { font-size: 15px; }
 details.offer .nums span { color: var(--text-2); font-weight: 400; font-size: 12px; display: block; }
+details.offer .rough { font-weight: 400; font-size: 12px; color: var(--warn); margin-left: 4px; }
+.filterbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: -4px 0 14px; color: var(--text-2); font-size: 13px; }
+.filterbar b { color: var(--text); }
+.filters .changed, .filters select.changed { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 details.offer ul { margin: 8px 0 2px; padding-left: 18px; color: var(--text-2); }
 details.offer li { margin: 3px 0; }
 dialog#help { max-width: 760px; width: calc(100% - 32px); max-height: 85vh; border: 1px solid var(--border); border-radius: 14px;
@@ -384,7 +389,7 @@ function offerBox(d) {
   const nums = d.offer_open < d.offer_aim
     ? `<div><b>${money(d.offer_open)}</b><span>open with</span></div><div><b>${money(d.offer_aim)}</b><span>aim to pay</span></div>`
     : `<div><b>${money(d.offer_open)}</b><span>offer</span></div>`;
-  return `<details class="offer"><summary>Offer guidance</summary>
+  return `<details class="offer"><summary>Offer guidance${d.offer_rough ? ' <span class="rough">rough - few comps</span>' : ""}</summary>
     <div class="nums" style="margin-top:6px">${nums}<div><b>${money(d.offer_walk)}</b><span>walk away above</span></div></div>
     <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`;
 }
@@ -439,12 +444,45 @@ function quickBar(n) {
   return QUICK ? `<div class="quickbar"><span>Showing <b>${n}</b> ${QUICK_LABEL[QUICK]} (all categories, newest first)</span>
     <button class="btn" id="quickoff">✕ Show everything</button></div>` : "";
 }
+// What's narrowing the results right now (besides the category), so a remembered filter is never invisible
+const DEFAULTS = { q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fit: false };
+const AGE_LABEL = { visit: "new since my last visit", "1h": "last hour", "6h": "last 6 hours", "24h": "last 24 hours", "72h": "last 3 days", "168h": "last 7 days" };
+function activeFilters() {
+  const a = [];
+  if (F.q.trim()) a.push(`search "${F.q.trim()}"`);
+  if (F.max) a.push(`max $${(+F.max).toLocaleString()}`);
+  if (F.year) a.push(`${F.year}+`);
+  if (F.dist) a.push(`within ${F.dist} mi`);
+  if (F.age) a.push(`listed: ${AGE_LABEL[F.age] || F.age}`);
+  if (F.cond) a.push(F.cond === "new" ? "new only" : "used only");
+  if (F.priv) a.push("private only");
+  if (F.star) a.push("starred only");
+  if (F.fit && CAT === "trailer") a.push("fits a 4-seat UTV");
+  if (F.fams.length) a.push(F.fams.join(", "));
+  return a;
+}
+function filterBar(n) {
+  if (QUICK) return "";
+  const a = activeFilters();
+  document.querySelectorAll("#filtersec [id^=f-]").forEach(el => {
+    const k = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond" }[el.id];
+    if (k) el.classList.toggle("changed", !!F[k]);
+  });
+  if (!a.length) return "";
+  const total = DATA.filter(d => (CAT === "all" || d.category === CAT) && (F.hidden || !d.hidden)).length;
+  return `<div class="filterbar"><span>Showing <b>${n}</b> of ${total} · ${a.map(esc).join(" · ")}</span>
+    <button class="btn" id="clearfilters">✕ Clear filters</button></div>`;
+}
+document.addEventListener("click", e => {
+  if (e.target.id !== "clearfilters") return;
+  Object.assign(F, DEFAULTS, { fams: [] }); bindFilters(); famChips(); save();
+});
 function renderDeals() {
   const by = { score: (a, b) => (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
-  $("#tab-deals").innerHTML = quickBar(rows.length) + (rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
+  $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
     : `<div class="empty">No listings match these filters yet.</div>`);
 }
 
@@ -455,7 +493,7 @@ function renderAll() {
   filtered().forEach(d => d.listed = listedAt(d));
   const rows = filtered().sort((a, b) => { const x = a[k], y = b[k];
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
-  $("#tab-all").innerHTML = `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
+  $("#tab-all").innerHTML = filterBar(rows.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
     <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>

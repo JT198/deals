@@ -54,7 +54,7 @@ def _geo(con):
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes,
+  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit"""
 
 

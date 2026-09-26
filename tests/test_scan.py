@@ -264,6 +264,16 @@ def test_trailer_alerts_gate_on_fit():
     assert sorted(SENT) == ["facebook:0", "facebook:2"], SENT   # fits, or a small one that's an exceptional deal
 
 
+def test_rough_offer_without_comps():
+    from app import score
+    con = reset([{"price": 13400}])
+    r = con.execute("SELECT * FROM listings").fetchone()
+    o = score.offer(r, None, None, 2)
+    assert o and o["rough"] and o["walk"] == 13400 and o["open"] <= o["aim"] < 13400, o
+    assert "standard private-sale numbers" in o["notes"][0], o["notes"][0]
+    assert score.offer(dict(r) | {"price": 3}, None, None, 2) is None       # placeholder price
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

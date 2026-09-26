@@ -280,10 +280,17 @@ def _nice(x: float) -> int:
 
 
 def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -> dict | None:
-    """Opening offer / target / walk-away, plus talking points. None when we can't price it."""
+    """Opening offer / target / walk-away, plus talking points.
+
+    Without a typical price (few comps, or new dealer stock) it still gives "rough" numbers off the
+    asking price - standard private-sale negotiating room - and says so. None only for no/placeholder prices.
+    """
     price = listing["price"]
-    if not expected or not price or listing["is_new"] == 1 or price < 0.2 * expected:
+    if not price or price < 100 or (expected and price < 0.2 * expected):
         return None
+    if listing["is_new"] == 1:
+        expected = None           # used comps don't apply to new units
+    rough = not expected
     now = time.time()
     days = int((now - (listing["listed_at"] or listing["first_seen"])) / 86400)
     dealer = listing["is_dealer"] == 1 or listing["seller_type"] == "dealer"
@@ -315,15 +322,22 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -
     if was > price:
         notes.append(f"Already cut ${was - price:,} from ${was:,} - they may go lower.")
 
-    fair = min(price, expected)
-    walk = _nice(fair)
+    fair = price if rough else min(price, expected)
+    walk = price if fair >= price else _nice(fair)            # never "walk away above" something under the ask
     aim = _nice(fair * (1 - room))
     gap = 0.03 if great else 0.06                              # opening offer sits a bit under the target
     open_ = max(_nice(aim * (1 - gap)), _nice(price * (0.95 if great else 0.75)))   # never insulting / never lose a steal
     open_ = min(open_, aim)
 
     noun = f"similar {listing['family']}" if listing["family"] else "similar machines"
-    notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby).")
+    if rough and listing["is_new"] == 1:
+        notes.insert(0, "New / dealer unit: these are rough numbers off the asking price. Compare against MSRP and other "
+                        "dealers' prices, and ask for freight, prep and doc fees to be waived.")
+    elif rough:
+        notes.insert(0, f"Not enough {noun} listings yet ({comps}) to know the market price - these are standard "
+                        "private-sale numbers off the asking price. Look at a few comparable listings before offering.")
+    else:
+        notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby).")
     flags = json.loads(listing["red_flags"] or "[]")
     if flags:
         notes.append("Known issues (" + ", ".join(flags) + "): get a repair estimate and take it off these numbers.")
@@ -337,7 +351,7 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -
                      "wheel bearings, floor boards, lights, and that the brakes work - brakes need a brake controller in the truck.")
     else:
         notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
-    return {"open": open_, "aim": aim, "walk": walk, "notes": notes}
+    return {"open": open_, "aim": aim, "walk": walk, "notes": notes, "rough": rough}
 
 
 def rescore_all(con) -> None:
@@ -357,7 +371,8 @@ def rescore_all(con) -> None:
         fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, usage_note=?, comps=?, deal_pct=?, score=?, reasons=?,
-                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, utv_fit=? WHERE id=?""",
+                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=? WHERE id=?""",
             (exp, base, note, n, pct, s, json.dumps(reasons),
-             o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None, fit, r["id"]))
+             o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None,
+             o and int(o["rough"]), fit, r["id"]))
     con.commit()

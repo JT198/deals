@@ -181,6 +181,11 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                     """SELECT id, ext_id, price FROM listings
                        WHERE source='facebook' AND detail_fetched=0 AND status='active'""" + only_new + """
                        ORDER BY first_seen DESC LIMIT ?""", (FB_DETAILS_PER_RUN * boost,)).fetchall()
+                # every starred listing, every full scan (watch alerts: price drop / pending / sold)
+                seen_ids = {r["id"] for r in todo}
+                todo += [] if quick else [r for r in con.execute(
+                    """SELECT id, ext_id, price FROM listings WHERE source='facebook' AND starred=1
+                       AND status IN ('active','pending')""").fetchall() if r["id"] not in seen_ids]
                 # plus a few older relevant ones, to notice price cuts / sold / removed
                 todo += [] if quick else con.execute(
                     """SELECT id, ext_id, price FROM listings
@@ -209,10 +214,14 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         except Exception as e:
             errors.append(f"facebook: {e}")
 
-        # --- Craigslist posting pages
-        for r in con.execute(
+        # --- Craigslist posting pages (new ones, plus every starred one on full scans)
+        cl_todo = con.execute(
                 """SELECT id, url, price FROM listings WHERE source='craigslist' AND detail_fetched=0""" + only_new + """
-                   ORDER BY first_seen DESC LIMIT ?""", (CL_DETAILS_PER_RUN * boost,)).fetchall():
+                   ORDER BY first_seen DESC LIMIT ?""", (CL_DETAILS_PER_RUN * boost,)).fetchall()
+        if not quick:
+            cl_todo += con.execute("""SELECT id, url, price FROM listings WHERE source='craigslist' AND starred=1
+                                      AND detail_fetched=1 AND status IN ('active','pending')""").fetchall()
+        for r in cl_todo:
             try:
                 d = await craigslist.detail(http, r["url"])
                 if d is None:
@@ -355,6 +364,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
     if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
         mark(deal_mark, deal_ids, "backfill")
         mark(fresh_mark, [r["id"] for r in fresh], "backfill")
+        await _watch_alerts(con, http, quiet=True)
         return 0
 
     # markers are written only after Telegram accepts the message, so failures retry next run
@@ -372,6 +382,32 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
             sent += 1
             mark(fresh_mark, [r["id"]], "fresh")
+    sent += await _watch_alerts(con, http, quiet)
+    return sent
+
+
+async def _watch_alerts(con, http, quiet) -> int:
+    """Starred listings: tell Jon when the price drops, it goes pending, or it's sold / removed.
+    watch_price / watch_status hold the last state he was told about (set when starred)."""
+    rows = con.execute("""SELECT * FROM listings WHERE starred = 1 AND watch_status IS NOT NULL
+                          AND (price < watch_price OR status != watch_status)""").fetchall()
+    sent = 0
+    for r in rows:
+        header = None
+        if r["status"] != r["watch_status"] and r["status"] in ("pending", "sold", "gone"):
+            header = {"pending": "⭐ <b>Now pending</b> - ask to be next in line if it falls through",
+                      "sold": "⭐ <b>Marked sold</b>", "gone": "⭐ <b>Removed</b> (sold or taken down)"}[r["status"]]
+        elif r["watch_price"] and r["price"] and r["price"] < r["watch_price"]:
+            header = (f"⭐ <b>Price drop</b> ${r['watch_price']:,} → ${r['price']:,} "
+                      f"(−${r['watch_price'] - r['price']:,}) on a listing you're watching")
+        elif r["status"] == "active" and r["watch_status"] in ("pending", "sold", "gone"):
+            header = "⭐ <b>Back on the market</b>"
+        ok = quiet or header is None or await notify.send_listing(http, r, header=header)
+        if ok:      # a failed send keeps the old state, so it's retried next scan
+            con.execute("UPDATE listings SET watch_price = ?, watch_status = ? WHERE id = ?",
+                        (r["price"], r["status"], r["id"]))
+            con.commit()
+            sent += bool(header) and not quiet
     return sent
 
 

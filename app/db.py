@@ -132,7 +132,9 @@ def init() -> None:
                                    "offer_notes": "TEXT",
                                    # trailers
                                    "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
-                                   "offer_rough": "INTEGER",   # offer numbers from asking price only (few comps / new)
+                                   "offer_rough": "INTEGER",
+                                   "equipment": "TEXT", "expected_pre": "INTEGER",   # detected cab/heat/...; typical before equipment
+                                   "watch_price": "INTEGER", "watch_status": "TEXT",   # starred: last state told to Jon   # offer numbers from asking price only (few comps / new)
                                    "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT"})
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:

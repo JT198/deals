@@ -9,6 +9,7 @@ import statistics
 import time
 
 from .categories import cfg
+from .equipment import APPLIES, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -23,21 +24,22 @@ def _v(listing, key):
 
 
 class Comp(tuple):
-    """(id, year, price, deck_in, miles, hours, len_ft, axles)"""
-    id, year, price, deck, miles, hours, len_ft, axles = (property(lambda t, i=i: t[i]) for i in range(8))
+    """(id, year, price, deck_in, miles, hours, len_ft, axles, equip)"""
+    id, year, price, deck, miles, hours, len_ft, axles, equip = (property(lambda t, i=i: t[i]) for i in range(9))
 
 
 def _comps(con) -> dict[str, list[Comp]]:
     """family -> used asking prices."""
     rows = con.execute(
-        """SELECT id, family, year, price, deck_in, miles, hours, len_ft, axles FROM listings
+        """SELECT id, family, year, price, deck_in, miles, hours, len_ft, axles, equipment FROM listings
            WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND price >= 300 AND last_seen >= ?""",
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
     for r in rows:
         by_fam.setdefault(r["family"], []).append(
-            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"])))
+            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
+                  frozenset(json.loads(r["equipment"] or "[]")))))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -98,11 +100,23 @@ def _use_per_year(comps, metric):
     return statistics.median(rates) if len(rates) >= 5 else None
 
 
-def expected_price(listing, comps_by_fam) -> tuple[int | None, int, int | None, str | None]:
-    """(expected, comps used, expected before the usage adjustment, plain-English usage note)."""
+def _equip(listing) -> frozenset:
+    try:
+        return frozenset(json.loads(_v(listing, "equipment") or "[]"))
+    except ValueError:
+        return frozenset()
+
+
+def expected_price(listing, comps_by_fam, effects=None):
+    """-> (expected, comps used, expected before any adjustment, plain-English note, expected before equipment).
+
+    Comps are lined up to this machine: model year (dep/yr), then miles/hours, then equipment
+    (cab/heat/A-C as learned percentages, plow/trailer as dollars). effects comes from equipment_effects().
+    """
+    none = (None, 0, None, None, None)
     fam, year = _v(listing, "family"), _v(listing, "year")
     if not fam:
-        return None, 0, None, None
+        return none
     cat = _v(listing, "category")
     c = cfg(cat)
     others = [x for x in comps_by_fam.get(fam, []) if x.id != _v(listing, "id")]
@@ -118,10 +132,25 @@ def expected_price(listing, comps_by_fam) -> tuple[int | None, int, int | None, 
                      and (not axles or not x.axles or x.axles == axles)]
         if len(same_size) >= 4:
             others = same_size
+        else:
+            # Not enough same-size trailers of this type: trailer prices scale roughly with length, so
+            # price it per foot from every trailer of this type (same axle count when there are enough).
+            sized = [x for x in others if x.len_ft]
+            same_axles = [x for x in sized if axles and x.axles == axles]
+            pool = same_axles if len(same_axles) >= 5 else sized
+            if len(pool) >= 5:
+                def per_ft(x):   # line up for age too when both years are known
+                    return x.price / x.len_ft * ((1 + c["dep"]) ** (year - x.year) if year and x.year else 1)
+                exp = int(statistics.median(per_ft(x) for x in pool) * length)
+                return exp, len(pool), exp, f"priced per foot from {len(pool)} {fam.lower()} trailers of other sizes", exp
+            return None, len(same_size), None, None, None
+
     metric = _usage_metric(listing, cat)
     use = _v(listing, metric) if metric else None
     slope = usage_slope(others, metric, cat) if metric else 0.0
     rate = _use_per_year(others, metric) if metric else None
+    feats = _equip(listing)
+    eff = (effects or {}).get(cat, {})
 
     def comp_use(x):
         u = getattr(x, metric) if metric else None
@@ -134,37 +163,100 @@ def expected_price(listing, comps_by_fam) -> tuple[int | None, int, int | None, 
             return 1.0
         return min(USAGE_CLAMP[1], max(USAGE_CLAMP[0], math.exp(slope * (use - u))))
 
+    def equip_adjust(p, has):
+        """Move a comp priced p with equipment `has` (a set, or {feature: share} for a typical comp) to ours."""
+        if not eff:
+            return p
+        share = has if isinstance(has, dict) else {f: 1.0 for f in has}
+        mult, dollars = 1.0, 0.0
+        for f, e in eff.items():
+            d = (f in feats) - share.get(f, 0.0)
+            if f in MULT_PRIOR:
+                mult *= (1 + e) ** d
+            else:
+                dollars += e * d
+        return min(1.6 * p, max(0.6 * p, p * mult + dollars))
+
+    def shares(pool):
+        return {f: sum(f in x.equip for x in pool) / len(pool) for f in eff} if pool else {}
+
     if not year:
-        # no model year (common for mowers): compare against the whole family, still adjusted for use
+        # no model year (common for mowers): compare against the whole family, still adjusted for use/equipment
         if len(others) < 5:
-            return None, len(others), None, None
+            return None, len(others), None, None, None
         base = int(statistics.median(x.price for x in others))
         with_use = [getattr(x, metric) for x in others if metric and getattr(x, metric) is not None]
         typical_use = statistics.median(with_use) if len(with_use) >= 5 else None
-        exp = int(base * usage_factor(typical_use))
+        pre = int(base * usage_factor(typical_use))
+        exp = int(equip_adjust(pre, shares(others)))
         n = len(others)
-        return exp, n, base, _usage_note(use, typical_use, metric, exp, base)
-
-    dated = [x for x in others if x.year]
-    near = [x for x in dated if abs(x.year - year) <= c["window"]]
-    if len(near) >= 4:
-        aligned = [(x.price * (1 + c["dep"]) ** (year - x.year), comp_use(x)) for x in near]
-        base = int(statistics.median(p for p, _ in aligned))
-        exp = int(statistics.median(p * usage_factor(u) for p, u in aligned))
-        typical_use = [u for _, u in aligned if u is not None]
-        typical_use = statistics.median(typical_use) if typical_use else None
-        n = len(near)
     else:
-        yrs = [x.year for x in dated]
-        if not (c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1):
-            return None, len(others), None, None
-        a, b = _fit(dated)
-        base = int(math.exp(a + b * year))
-        typical_use = rate * max(1, NOW_YEAR - year + 1) if rate is not None else None
-        exp = int(base * usage_factor(typical_use))
-        n = len(dated)
+        dated = [x for x in others if x.year]
+        near = [x for x in dated if abs(x.year - year) <= c["window"]]
+        if len(near) >= 4:
+            aligned = [(x.price * (1 + c["dep"]) ** (year - x.year), comp_use(x), x.equip) for x in near]
+            base = int(statistics.median(p for p, _, _ in aligned))
+            pre = int(statistics.median(p * usage_factor(u) for p, u, _ in aligned))
+            exp = int(statistics.median(equip_adjust(p * usage_factor(u), eq) for p, u, eq in aligned))
+            typical_use = [u for _, u, _ in aligned if u is not None]
+            typical_use = statistics.median(typical_use) if typical_use else None
+            pool, n = near, len(near)
+        else:
+            yrs = [x.year for x in dated]
+            if not (c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1):
+                return None, len(others), None, None, None
+            a, b = _fit(dated)
+            base = int(math.exp(a + b * year))
+            typical_use = rate * max(1, NOW_YEAR - year + 1) if rate is not None else None
+            pre = int(base * usage_factor(typical_use))
+            exp = int(equip_adjust(pre, shares(dated)))
+            pool, n = dated, len(dated)
+        others = pool
 
-    return exp, n, base, _usage_note(use, typical_use, metric, exp, base)
+    notes = [x for x in (_usage_note(use, typical_use, metric, pre, base),
+                         _equip_note(feats, shares(others), exp, pre)) if x]
+    return exp, n, base, "; ".join(notes) or None, pre
+
+
+def _equip_note(feats, share, exp, pre):
+    if abs(exp - pre) < max(100, 0.015 * pre):
+        return None
+    if exp > pre:
+        what = [LABEL[f] for f in share if f in feats and share[f] < 0.9] or [LABEL[f] for f in feats]
+        return f"+${exp - pre:,} for equipment: has {', '.join(what)}"
+    what = [LABEL[f] for f in share if f not in feats and share[f] >= 0.3]
+    return f"−${pre - exp:,} for equipment: no {' / '.join(what) or 'extras'} (common on similar ones)"
+
+
+def equipment_effects(con) -> dict:
+    """category -> {feature: effect}. Cab/heat/A-C as a fraction of price, learned from how much listings
+    with the feature ask above their pre-equipment typical price vs listings without; shrunk toward the prior.
+    Plow / trailer use their dollar priors."""
+    rows = con.execute(
+        """SELECT category, equipment, price, expected_pre FROM listings
+           WHERE relevant = 1 AND parsed = 1 AND COALESCE(is_new, 0) = 0 AND price >= 300
+             AND expected_pre IS NOT NULL AND category IN ('utv4', 'utv2', 'atv')""").fetchall()
+    ratios: dict[str, list] = {}
+    for r in rows:
+        group = "utv" if r["category"] in ("utv4", "utv2") else r["category"]
+        ratios.setdefault(group, []).append((set(json.loads(r["equipment"] or "[]")), r["price"] / r["expected_pre"]))
+    out = {}
+    for cat, feats in APPLIES.items():
+        group = "utv" if cat in ("utv4", "utv2") else cat
+        pts = ratios.get(group, [])
+        eff = {}
+        for f in feats:
+            if f in MULT_PRIOR:
+                prior = MULT_PRIOR[f]
+                has = [q for e, q in pts if f in e]
+                hasnt = [q for e, q in pts if f not in e]
+                n = len(has) if len(has) >= 5 and len(hasnt) >= 5 else 0
+                data = statistics.median(has) / statistics.median(hasnt) - 1 if n else prior
+                eff[f] = min(2.5 * prior, max(0.0, (n * data + USAGE_SHRINK * prior) / (n + USAGE_SHRINK)))
+            else:
+                eff[f] = DOLLAR_PRIOR[f]
+        out[cat] = eff
+    return out
 
 
 def _usage_note(use, typical_use, metric, exp, base):
@@ -355,6 +447,13 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None) -
 
 
 def rescore_all(con) -> None:
+    # 1. equipment from the ad text (cheap, deterministic - recomputed every run)
+    for r in con.execute("SELECT id, category, title, description, extras, summary FROM listings "
+                         "WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall():
+        con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(detect(r)), r["id"]))
+    con.commit()
+    # 2. what each feature is worth, from last run's pre-equipment typical prices
+    effects = equipment_effects(con)
     comps = _comps(con)
     try:
         tow = int(con.execute("SELECT value FROM settings WHERE key = 'tow_capacity_lb'").fetchone()[0])
@@ -363,16 +462,16 @@ def rescore_all(con) -> None:
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status != 'gone'").fetchall()
     for r in rows:
-        exp, n, base, note = expected_price(r, comps)
+        exp, n, base, note, pre = expected_price(r, comps, effects)
         if r["is_new"] == 1:
-            exp = base = note = None
-        s, pct, reasons = score(r, exp, n, usage_adjusted=note is not None)
+            exp = base = note = pre = None
+        s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note))
         o = offer(r, exp, pct, n, tow)
         fit = utv_fit(r)
         con.execute(
-            """UPDATE listings SET expected=?, expected_base=?, usage_note=?, comps=?, deal_pct=?, score=?, reasons=?,
-                 offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=? WHERE id=?""",
-            (exp, base, note, n, pct, s, json.dumps(reasons),
+            """UPDATE listings SET expected=?, expected_base=?, expected_pre=?, usage_note=?, comps=?, deal_pct=?, score=?,
+                 reasons=?, offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=? WHERE id=?""",
+            (exp, base, pre, note, n, pct, s, json.dumps(reasons),
              o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None,
              o and int(o["rough"]), fit, r["id"]))
     con.commit()

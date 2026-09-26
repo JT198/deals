@@ -207,7 +207,8 @@ td.t { white-space: normal; min-width: 240px; }
       <li>Every trailer gets a <b>fits a 4-seat UTV</b> check: open deck 14 ft+ (16 ideal), 7 ft wide class
         (~80 in between fenders; UTVs are 62-64 in), tandem axle or 5,000 lb+ GVWR, and ~7 ft inside if enclosed.
         "May fit" means one of those isn't stated or is borderline - ask the seller.</li>
-      <li>Trailers are compared by type and size (length within 2 ft, same axle count).</li>
+      <li>Trailers are compared by type and size (length within 2 ft, same axle count), or per foot when there
+        aren't enough the same size. Most trailers on Marketplace are new dealer stock - set Condition to "used only" to hide them.</li>
       <li>Alerts: trailers that fit a UTV alert normally; anything else only when it's an exceptional deal (score 85+).
         Just-listed alerts are for UTV-size trailers only. Tick <b>Fits a 4-seat UTV</b> in the filters to see just those.</li>
       <li>Trailers whose loaded rating (GVWR) is above your truck's towing capacity (Setup; default 12,700 lb for the
@@ -236,6 +237,10 @@ td.t { white-space: normal; min-width: 240px; }
         before taking the middle price. How much a mile or an hour is worth is learned from the listings for that model,
         starting from a sensible default (about 2.5% per 1,000 miles for UTVs, 4% per 100 hours for mowers). The grey
         line under "Typical" shows the adjustment.</li>
+      <li><b>Adjusted for equipment:</b> cab, heat and A/C (UTVs) are worth a percentage learned from the listings
+        (a full cab with heat and A/C is currently worth ~25%); a plow adds ~$600 and an included trailer ~$1,500.
+        So a NorthStar isn't compared straight against open machines. The grey line shows these adjustments too.</li>
+      <li>Trailers with too few same-size comparisons are priced <b>per foot</b> from trailers of the same type.</li>
       <li>These are <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
         With few listings of a model the number is rougher; the comps count tells you how many it's based on.</li>
       <li>New/dealer-stock units get no typical price (used comps don't apply); compare those to MSRP.</li>
@@ -269,6 +274,8 @@ td.t { white-space: normal; min-width: 240px; }
         jumps 10+ points (e.g. a price cut).</li>
       <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
         and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
+      <li><b>⭐ Watch alerts</b> - for starred listings: price drops, pending, sold/removed, back on the market.
+        Stars are shared, so Alex's stars notify you too.</li>
       <li>Per category you can turn each alert type on or off and set a max price and minimum year. Listings far outside
         the radius and cross-posts of something already sent are skipped.</li>
     </ul>
@@ -279,7 +286,8 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>"Listed in the last hour" / "new since your last visit"</b> in the header are quick views - click to see
         just those, click again (or ✕) to go back. Your filters aren't changed.</li>
       <li><b>NEW</b> marks listings added since your last visit in this browser; <b>Just listed</b> = posted within a day.</li>
-      <li><b>Star</b> to keep track of one, <b>Hide</b> to get it out of the way (Show hidden brings them back).
+      <li><b>Star</b> to watch one: it's re-checked every scan and Telegram tells you when the price drops, it goes
+        pending, or it's sold/removed. <b>Hide</b> to get it out of the way (Show hidden brings them back).
         Stars and hides are shared by everyone who uses this dashboard.</li>
       <li><b>Market</b> tab: every asking price seen for a model by year - handy for knowing what yours is worth, too.</li>
       <li><b>Setup</b>: radius and home ZIP, alert rules, searches (add your own; ⚡ puts one in the fast lane), and
@@ -334,7 +342,21 @@ function bindFilters() {
 }
 function save() { store.set("filters", F); render(); }
 
-function filtered() {
+// Cross-posts (same ad on Facebook and Craigslist, or reposted): show one card, link the copies.
+const postKey = d => (d.title || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + d.price;
+function mergeCopies(rows) {
+  const by = new Map();
+  for (const d of rows) {
+    const k = postKey(d), keep = by.get(k);
+    if (!keep) { d.copies = []; by.set(k, d); continue; }
+    const better = (d.starred - keep.starred) || ((d.score ?? -1) - (keep.score ?? -1)) || (listedAt(d) - listedAt(keep));
+    if (better > 0) { d.copies = [...keep.copies, keep]; keep.copies = []; by.set(k, d); }
+    else keep.copies.push(d);
+  }
+  return [...by.values()];
+}
+function filtered() { return mergeCopies(filteredRaw()); }
+function filteredRaw() {
   if (QUICK) return DATA.filter(d => !d.hidden && inQuick(d)).sort((a, b) => listedAt(b) - listedAt(a));
   const q = F.q.trim().toLowerCase();
   return DATA.filter(d =>
@@ -429,12 +451,14 @@ function card(d) {
       <div class="facts">${facts(d)}</div>
       ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
       ${offerBox(d)}
+      ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
+        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>`).join(" · ")}</div>` : ""}
       <div class="tags">${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">
         <a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
-        <button class="btn" data-act="star" data-id="${esc(d.id)}">${d.starred ? "★ Starred" : "☆ Star"}</button>
+        <button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">${d.starred ? "★ Watching" : "☆ Star"}</button>
         <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
       </div>
     </div></article>`;

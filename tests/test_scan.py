@@ -274,6 +274,67 @@ def test_rough_offer_without_comps():
     assert score.offer(dict(r) | {"price": 3}, None, None, 2) is None       # placeholder price
 
 
+def test_equipment_detection():
+    from app.equipment import detect
+    d = lambda title, desc="", cat="utv4": detect({"category": cat, "title": title, "description": desc,
+                                                   "extras": "[]", "summary": ""})
+    assert d("2022 Ranger XP 1000 NorthStar Ultimate") == ["cab", "heat", "ac"]
+    assert d("Defender MAX", "full cab with heat and AC, plow") == ["cab", "heat", "ac", "plow"]
+    assert d("RZR XP 4", "comes with 7x14 tandem trailer") == ["trailer"]
+    assert d("RZR XP 4", "trailer not included") == []
+    assert d("AC Wildcat 4X") == [] and d("General 4", "heated grips") == []
+    assert d("Sportsman 570", "with plow", cat="atv") == ["plow"] and d("Toro", cat="mower") == []
+
+
+def test_equipment_moves_typical():
+    import json as _j
+    from app import score
+    con = reset([])
+    _family(con)
+    con.execute("UPDATE listings SET equipment = ? WHERE id IN ('facebook:c0','facebook:c1','facebook:c2')",
+                (_j.dumps(["cab", "heat"]),))
+    con.execute("UPDATE listings SET equipment = '[]' WHERE equipment IS NULL"); con.commit()
+    comps = score._comps(con)
+    eff = {"utv4": {"cab": 0.08, "heat": 0.05, "ac": 0.03, "plow": 600, "trailer": 1500}}
+    row = {"id": "x", "family": "RZR XP 4", "year": 2022, "category": "utv4", "deck_in": None, "miles": None, "hours": None}
+    cab = score.expected_price(dict(row, equipment='["cab","heat"]'), comps, eff)
+    bare = score.expected_price(dict(row, equipment="[]"), comps, eff)
+    assert cab[0] > cab[4] and "has cab" in cab[3], cab
+    assert bare[0] <= bare[4], bare
+    plow = score.expected_price(dict(row, equipment='["plow"]'), comps, eff)
+    assert 500 <= plow[0] - bare[0] <= 700, (plow, bare)   # fixed-dollar feature: ~$600 over the same machine without
+
+
+def test_trailer_priced_per_foot_when_sizes_are_thin():
+    from app import score
+    con = reset([])
+    t = db.now()
+    for i, length in enumerate((10, 12, 14, 20, 24)):           # none within 2 ft of 17
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed,
+                         relevant, category, family, len_ft, axles, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 't', ?, ?, ?, 'active', 1, 1, 'trailer', 'Enclosed cargo', ?, 2, 0, '[]', '[]')""",
+                    (f"facebook:t{i}", f"t{i}", length * 400, t, t, length))
+    con.commit()
+    exp = score.expected_price({"id": "x", "family": "Enclosed cargo", "category": "trailer", "len_ft": 17, "axles": 2,
+                                "year": None, "deck_in": None}, score._comps(con))
+    assert exp[0] == 17 * 400 and "per foot" in exp[3], exp
+
+
+def test_watch_alerts_price_drop_pending_and_retry():
+    con = reset([{"starred": 1, "watch_price": 15000, "watch_status": "active", "price": 14000, "score": 40}])
+    FAIL["on"] = True
+    asyncio.run(alerts(con))
+    assert SENT == [] and con.execute("SELECT watch_price FROM listings").fetchone()[0] == 15000   # retried later
+    FAIL["on"] = False
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"] and con.execute("SELECT watch_price FROM listings").fetchone()[0] == 14000
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT                      # nothing new
+    con.execute("UPDATE listings SET status = 'pending'"); con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0", "facebook:0"], SENT
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

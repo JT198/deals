@@ -54,7 +54,7 @@ def _geo(con):
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough,
+  reasons, starred, hidden, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit"""
 
 
@@ -90,6 +90,9 @@ def mark(lid: str, body: dict = Body(...)):
     for k in ("starred", "hidden"):
         if k in body:
             con.execute(f"UPDATE listings SET {k} = ? WHERE id = ?", (1 if body[k] else 0, lid))
+    if "starred" in body:   # watching starts from the current price/status
+        con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
+                         watch_status = CASE WHEN starred = 1 THEN status END WHERE id = ?""", (lid,))
     con.commit()
     return {"ok": True}
 
@@ -112,7 +115,7 @@ def market(family: str):
         for y in range(years[0], years[-1] + 1):
             fake = {"id": "", "family": family, "year": y, "category": FAMILY_CATEGORY.get(family),
                     "deck_in": None}
-            exp, n, _, _ = score.expected_price(fake, comps)
+            exp, n, *_ = score.expected_price(fake, comps)
             if exp:
                 curve.append({"year": y, "price": exp})
     for p in pts:

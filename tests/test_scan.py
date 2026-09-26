@@ -403,6 +403,51 @@ def test_typically_sells_around_from_sold_listings():
     assert r["offer_walk"] <= r["expected_sold"] and "sold for about" in r["offer_notes"], r["offer_notes"]
 
 
+def test_sold_typical_is_bounded_and_skips_red_flags():
+    from app import score
+    con = reset([])
+    _family(con)
+    t = db.now()
+    for i in range(6):   # "sold" junk: half price, several with red flags
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
+                         status, parsed, relevant, category, family, year, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 'j', 7000, 7000, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, ?, '[]')""",
+                    (f"facebook:j{i}", f"j{i}", t, t, t, '["doesn\'t run"]' if i < 3 else "[]"))
+    con.commit()
+    assert len(score._comps(con, sold=True)["RZR XP 4"]) == 3            # red-flagged sold ones left out
+    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
+                     category, family, year, is_new, red_flags, reasons) VALUES ('facebook:me', 'facebook', 'me', 'u', 'me',
+                     15000, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, '[]', '[]')""", (t, t))
+    # a 4th clean sold one at half price: enough to count, still far under asking
+    con.execute("INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen, status, parsed, relevant, category, family, year, is_new, red_flags, reasons) VALUES ('facebook:j9','facebook','j9','u','j',7000,7000,?,?,?,'sold',1,1,'utv4','RZR XP 4',2022,0,'[]','[]')", (t, t, t))
+    con.commit()
+    score.rescore_all(con)
+    r = con.execute("SELECT expected, expected_sold FROM listings WHERE id = 'facebook:me'").fetchone()
+    assert r["expected_sold"] >= 0.75 * r["expected"] - 1, dict(r)       # clamped, not 45% under
+
+
+def test_sold_at_asking_means_holding_not_a_second_number():
+    from app import score
+    con = reset([])
+    _family(con)
+    t = db.now()
+    for i in range(6):   # sold at the same prices things are asking
+        year, miles = 2021 + i % 3, 2000 + 1000 * i
+        price = int(16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
+                         status, parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 's', ?, ?, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
+                    (f"facebook:h{i}", f"h{i}", price, price, t, t, t, year, miles))
+    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
+                     category, family, year, miles, is_new, red_flags, reasons) VALUES ('facebook:me', 'facebook', 'me', 'u',
+                     'me', 15500, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 5000, 0, '[]', '[]')""", (t, t))
+    con.commit()
+    score.rescore_all(con)
+    r = con.execute("SELECT * FROM listings WHERE id = 'facebook:me'").fetchone()
+    assert r["sold_basis"] == "holding" and r["expected_sold"] is None, dict(r)
+    assert "selling at about asking" in r["offer_notes"], r["offer_notes"]
+
+
 def test_sold_estimate_from_category_ratio():
     from app import score
     con = reset([{"id": f"facebook:q{i}", "ext_id": f"q{i}", "status": "sold", "family": f"F{i}",

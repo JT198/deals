@@ -34,7 +34,9 @@ def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
         """SELECT id, family, year, COALESCE(end_price, price) price, deck_in, miles, hours, len_ft, axles, equipment
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND COALESCE(end_price, price) >= 300 AND """ +
-        ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?"),
+        # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
+        ("status = 'sold' AND COALESCE(red_flags, '[]') = '[]' AND COALESCE(ended_at, last_seen) >= ?"
+         if sold else "last_seen >= ?"),
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
     for r in rows:
@@ -471,7 +473,7 @@ def sold_ratios(con) -> dict[str, tuple[float, int]]:
         q = r["p"] / r["expected"]
         if 0.4 <= q <= 1.6:                      # ignore mismatches (wrong family, parts, typos)
             out.setdefault(r["category"], []).append(q)
-    return {c: (min(1.05, statistics.median(v)), len(v)) for c, v in out.items() if len(v) >= 8}
+    return {c: (min(1.05, max(0.75, statistics.median(v))), len(v)) for c, v in out.items() if len(v) >= 8}
 
 
 def mark_ended(con) -> None:
@@ -519,15 +521,20 @@ def rescore_all(con) -> None:
         exp, n, base, note, pre = expected_price(r, comps, effects)
         if r["is_new"] == 1:
             exp = base = note = pre = None
-        # "typically sells around": from sold listings of the same family when there are enough,
-        # else typical asking x how far sold prices sit under asking in this category
+        # Sold listings (Facebook "Sold" filter). Their price is the last listed price, so they mostly tell us
+        # whether things are selling at asking. Only when similar ones sold clearly under typical asking do we
+        # show a separate "typically sells around" number and anchor the offer on it.
         sold_exp = sold_n = basis = sold_note = None
         if exp:
             se, sn, *_ = expected_price(r, sold_comps, effects)
             if se and sn >= 4:
-                sold_exp, sold_n, basis = min(se, int(exp * 1.1)), sn, "sold"
-                sold_note = f"Similar ones have sold for about ${sold_exp:,} ({sn} marked sold)."
-            elif r["category"] in ratios:
+                if se < 0.97 * exp:
+                    sold_exp, sold_n, basis = int(max(0.75 * exp, se)), sn, "sold"
+                    sold_note = f"Similar ones have sold for about ${sold_exp:,} ({sn} marked sold)."
+                else:
+                    sold_n, basis = sn, "holding"
+                    sold_note = f"Similar ones have been selling at about asking ({sn} marked sold) - sellers are getting their price."
+            elif r["category"] in ratios and 0.8 <= ratios[r["category"]][0] < 0.97:
                 q, qn = ratios[r["category"]]
                 sold_exp, sold_n, basis = int(exp * q), qn, "est"
                 sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "

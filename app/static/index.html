@@ -260,7 +260,9 @@ td.t { white-space: normal; min-width: 240px; }
       <li>Trailers with too few same-size comparisons are priced <b>per foot</b> from trailers of the same type.</li>
       <li><b>Typically sells around</b>: the same calculation run on listings marked <b>sold</b> on Facebook (pulled three times a
         day with Facebook's Sold filter). When a model has too few sold listings, it's estimated from how far sold prices sit
-        under asking across the category. Offers anchor on this when it's there - it's what similar ones actually went for.</li>
+        under asking across the category. Offers anchor on this when it's there - it's what similar ones actually went for.
+        Facebook only shows the last listed price of a sold item, so when similar ones sold at about asking the card just
+        says <b>✓ Selling at about asking</b> - a sign sellers are getting their price and there's less room to haggle.</li>
       <li>"Typical asking" uses <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
         With few listings of a model the number is rougher; the comps count tells you how many it's based on.</li>
       <li>New/dealer-stock units get no typical price (used comps don't apply); compare those to MSRP.</li>
@@ -429,7 +431,8 @@ function vsTypical(d) {
   const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
   const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
   const sold = d.expected_sold ? `<span class="typ">Typically sells around <b>${money(d.expected_sold)}</b> · ${d.sold_basis === "sold"
-    ? `${d.sold_comps} sold` : `est. from ${d.sold_comps} sold in this category`}</span>` : "";
+    ? `${d.sold_comps} sold` : `est. from ${d.sold_comps} sold in this category`}</span>`
+    : d.sold_basis === "holding" ? `<span class="typ">✓ Selling at about asking (${d.sold_comps} sold)</span>` : "";
   return `<span class="typ">Typical asking ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` + sold +
     (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
 }

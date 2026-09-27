@@ -15,22 +15,25 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:27b-64k")
 
 FAMILY_MENU = "\n".join(f'  {cat} ({c["label"]}): {json.dumps(c["families"])}' for cat, c in CATEGORIES.items())
 
-PROMPT = """You read used classified ads for a buyer shopping for powersports machines and zero-turn mowers.
+PROMPT = """You read used classified ads for a buyer shopping for powersports machines (incl. jet skis and snowmobiles) and zero-turn mowers.
 Categories:
 - utv4: side-by-side / UTV with 4 or more seats
 - utv2: side-by-side / UTV with 2 or 3 seats
 - atv: ATV / quad / four-wheeler (straddle seat, handlebars, 4 wheels)
 - trike: 3-wheeler ATV (e.g. Honda ATC, Yamaha Tri-Z). NOT 3-wheel motorcycles like Can-Am Spyder/Ryker or Polaris Slingshot.
 - mower: zero-turn riding mower (lap-bar or steering-wheel zero-turn such as Cub Cadet RZT S). NOT lawn tractors, push mowers, or walk-behinds.
-- trailer: a towable trailer sold on its own - utility/landscape, enclosed cargo, car hauler, tilt/flatbed, equipment/deckover, dump, snowmobile/ATV drive-on. NOT campers/RVs/fifth-wheel campers, boat trailers, or a machine that merely comes "with trailer" (that ad's category is the machine).
+- pwc: personal watercraft / jet ski / Sea-Doo / WaveRunner / Kawasaki Jet Ski. NOT boats, pontoons, jet boats or kayaks.
+- sled: snowmobile (Ski-Doo, Polaris, Arctic Cat, Yamaha). NOT snowblowers, snow plows, or "sled" trailers/decks sold alone.
+- trailer: a towable trailer sold on its own - utility/landscape, enclosed cargo, car hauler, tilt/flatbed, equipment/deckover, dump, snowmobile/ATV drive-on. NOT campers/RVs/fifth-wheel campers, boat or jet-ski-only trailers, or a machine that merely comes "with trailer" (that ad's category is the machine).
 
 The ad may already be marked SOLD - classify it exactly as if it were still for sale (sold ads are used as price history).
 
 Seat hints: "MAX", "Crew", "XP 4", "4-seat", "Teryx4", "KRX4", "X4", "RMAX4", "General 4", "Pioneer 1000-5/6", "6-passenger", "Viking VI" mean 4+ seats (utv4). A plain "General", "General 1000", "Ranger XP 1000", "Ranger 570", "RZR XP 1000", "RZR Pro XP", "Defender HD10", "Pioneer 1000", "Pioneer 700", "Teryx", "Wolverine X2" with no 4-seat marker are 2-3 seat models (utv2). Only use utv4 when the ad actually indicates 4+ seats.
+Jet skis are often sold as a PAIR on a double trailer ("two Sea-Doos", "his and hers", "2 skis") - that is one pwc listing with units 2.
 Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family.
 
 Return ONLY a JSON object with these keys:
-- category: one of "utv4", "utv2", "atv", "trike", "mower", "trailer", or "none" (anything else: snowmobiles, dirt bikes, golf carts, lawn tractors, campers, boats, cars)
+- category: one of "utv4", "utv2", "atv", "trike", "mower", "trailer", "pwc", "sled", or "none" (anything else: dirt bikes, golf carts, lawn tractors, campers, boats, cars)
 - relevant: true only if the ad sells one complete machine in one of the categories above. false for parts, accessories, attachments alone, "wanted"/"looking for" ads, rentals, services, and category "none".
 - family: exactly one family from the list for that category (or null):
 {families}
@@ -41,6 +44,9 @@ Return ONLY a JSON object with these keys:
 - seats: integer seat count for UTVs, else null
 - hours: engine hours as an integer, or null
 - miles: odometer miles as an integer, or null (convert km to miles)
+- units: how many complete machines the one price buys (a pair of jet skis = 2, two snowmobiles = 2), else 1
+- track_in (snowmobiles only): track length in inches (e.g. "129", "137", "146", "154", "165"; "15x137" means 137), else null
+- cc: engine displacement in cc as an integer if stated or implied by the model name (e.g. "850" = 850, "600R" = 600, "1.8L" = 1800, "Spark 90" = 900), else null
 - deck_in: mower cutting deck width in inches as an integer (mowers only), else null
 - trailer_type (trailers only, else null): "enclosed", "open", "tilt", "dump", "deckover", "drive-on" or "other"
 - len_ft / width_ft (trailers only): deck or box length and width in feet as numbers. "7x16" or "16x7" means 7 wide, 16 long; "82 inch between fenders" is about 6.8 wide; an 8.5-wide car hauler is 8.5. Exclude the tongue and V-nose from length. null if not stated.
@@ -48,8 +54,8 @@ Return ONLY a JSON object with these keys:
 - axles (trailers only): number of axles (single = 1, tandem = 2), else null
 - gvwr_lb (trailers only): GVWR / capacity in pounds (a "7K" or "7000 lb" trailer = 7000), else null
 - brakes (trailers only): true if it has electric or surge brakes, false if it says no brakes, else null
-- engine: short engine description if stated (e.g. "Kohler 22 HP", "Kawasaki FR691V 23 HP", "850cc", "EFI 1000"), else null
-- turbo: true/false/null
+- engine: short engine description if stated (e.g. "Kohler 22 HP", "Kawasaki FR691V 23 HP", "850cc", "EFI 1000", "Rotax 300 supercharged", "Patriot 9R"), else null
+- turbo: true if turbocharged or supercharged, false if not, else null
 - is_new: true if this is a new/unregistered unit (dealer stock, current or next model year with no use, "new", "demo"/"demonstrator" counts as new), false if used
 - is_dealer: true if a dealership/business is selling (financing offers, "call Dave at <dealer>", stock numbers, "plus tax/fees", MSRP/"save $X"), false if it reads like a private owner, null if unclear
 - motivated: true if the seller signals urgency (must sell, moving, divorce, need it gone, priced to sell, first $X takes it, OBO, make an offer, price drop), else false
@@ -117,6 +123,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         cat = FAMILY_CATEGORY[fam]    # the family is the more specific answer
     year = num(d.get("year"))
     deck = num(d.get("deck_in"))
+    units = num(d.get("units"))
+    track = num(d.get("track_in")) if cat == "sled" else None
+    cc = num(d.get("cc"))
 
     def feet(v, lo, hi):
         try:
@@ -140,6 +149,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         "seats": num(d.get("seats")),
         "hours": num(d.get("hours")),
         "miles": num(d.get("miles")),
+        "units": units if units and 2 <= units <= 6 else 1,
+        "track_in": track if track and 100 <= track <= 180 else None,
+        "cc": cc if cc and 49 <= cc <= 2500 else None,
         "deck_in": deck if deck and 28 <= deck <= 80 else None,
         "engine": text(d.get("engine")),
         "trailer_type": ttype,

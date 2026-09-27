@@ -38,6 +38,8 @@ def listing_caption(r, header: str | None = None) -> str:
         trailer_size(r),
         r["location"],
         f"{r['deck_in']}\" deck" if r["deck_in"] else None,
+        f"pair - {r['units']} for one price" if (r["units"] or 1) > 1 else None,
+        f"{r['track_in']}\" track" if r["track_in"] else None,
         r["engine"],
         f"{r['miles']:,} mi" if r["miles"] is not None else None,
         f"{r['hours']:,} hrs" if r["hours"] is not None else None,

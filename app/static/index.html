@@ -221,7 +221,7 @@ td.t { white-space: normal; min-width: 240px; }
   <div class="bd">
     <h3>What it does</h3>
     <p>It watches Facebook Marketplace and Craigslist within your radius (Setup tab) for 4-seat and 2-seat UTVs,
-      ATVs, 3-wheelers, zero-turn mowers and trailers. It reads every ad, works out what similar machines usually list for,
+      ATVs, 3-wheelers, jet skis, snowmobiles, zero-turn mowers and trailers. It reads every ad, works out what similar machines usually list for,
       and flags the ones priced well below that. Private sellers are the focus; dealers are shown but marked.</p>
 
     <h3>Trailers</h3>
@@ -241,8 +241,9 @@ td.t { white-space: normal; min-width: 240px; }
 
     <h3>How often it looks</h3>
     <ul>
-      <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook about 26 searches per scan,
-        most-overdue first - 4-seat UTV, mower and trailer searches roughly every 40 minutes, the other categories hourly.</li>
+      <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook about 32 searches per scan,
+        most-overdue first - 4-seat UTV, mower and trailer searches roughly every 40 minutes, ATVs, 2-seat UTVs and
+        3-wheelers hourly, jet skis and snowmobiles every 90 minutes.</li>
       <li><b>⚡ Fast lane</b> every 5 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 5-10 minutes after it's posted.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
@@ -254,13 +255,15 @@ td.t { white-space: normal; min-width: 240px; }
     <ul>
       <li>The middle asking price of the same model family (e.g. <i>RZR XP 4</i>, <i>Toro TimeCutter</i>) seen in the
         last 6 months, within a model year either side, adjusted about 8% per year of age. Mowers are matched on deck
-        size when there are enough. Vintage 3-wheelers don't lose value with age, so no age adjustment for those.</li>
+        size when there are enough; snowmobiles on track length (within 9") and engine size (within 150cc).
+        Jet skis sold as a pair are priced per ski - "typical" for the pair is two skis plus one trailer. Vintage 3-wheelers don't lose value with age, so no age adjustment for those.</li>
       <li><b>Adjusted for use:</b> when the ad states miles or hours, similar machines are lined up to the same use
         before taking the middle price. How much a mile or an hour is worth is learned from the listings for that model,
-        starting from a sensible default (about 2.5% per 1,000 miles for UTVs, 4% per 100 hours for mowers). The grey
+        starting from a sensible default (about 2.5% per 1,000 miles for UTVs, 4% per 1,000 miles for snowmobiles, 6% per 100 hours for jet skis,
+        4% per 100 hours for mowers). The grey
         line under "Typical" shows the adjustment.</li>
       <li><b>Adjusted for equipment:</b> cab, heat and A/C (UTVs) are worth a percentage learned from the listings
-        (a full cab with heat and A/C is currently worth ~25%); a plow adds ~$600 and an included trailer ~$1,500.
+        (a full cab with heat and A/C is currently worth ~25%); a plow adds ~$600 and an included trailer ~$1,500 (~$900 with a jet ski, ~$1,200 with a snowmobile).
         So a NorthStar isn't compared straight against open machines. The grey line shows these adjustments too.</li>
       <li>Trailers with too few same-size comparisons are priced <b>per foot</b> from trailers of the same type.</li>
       <li><b>Typically sells around</b>: the same calculation run on listings marked <b>sold</b> on Facebook (pulled three times a
@@ -533,7 +536,8 @@ function fitTag(d) {
 }
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
-    d.deck_in ? d.deck_in + '" deck' : null, d.engine || null, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
+    d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
+    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
     .filter(Boolean).map(esc).join(" · ");
@@ -773,7 +777,7 @@ async function renderSetup() {
       <td><input type="number" data-r="min_year" value="${esc(r.min_year)}" placeholder="any"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
-  <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 5 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV and mower searches every scan (20 min) and the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
+  <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 5 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
     ${CATS.map(c => { const qs = s.searches.filter(q => q.category === c.key); return `<h3 style="font-size:13px;margin:14px 0 6px">${c.emoji} ${esc(c.label)}</h3>
     <div class="searchlist">${qs.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
       <span>${esc(q.query)}</span><button class="btn qbtn ${q.quick ? "on" : ""}" data-quick="${q.id}" data-on="${q.quick ? 1 : 0}"

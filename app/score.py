@@ -9,7 +9,7 @@ import statistics
 import time
 
 from .categories import cfg
-from .equipment import APPLIES, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
+from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -24,14 +24,15 @@ def _v(listing, key):
 
 
 class Comp(tuple):
-    """(id, year, price, deck_in, miles, hours, len_ft, axles, equip)"""
-    id, year, price, deck, miles, hours, len_ft, axles, equip = (property(lambda t, i=i: t[i]) for i in range(9))
+    """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc)"""
+    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc = (property(lambda t, i=i: t[i]) for i in range(11))
 
 
 def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
     """family -> used asking prices, or (sold=True) the last price of listings marked sold."""
     rows = con.execute(
-        """SELECT id, family, year, COALESCE(end_price, price) price, deck_in, miles, hours, len_ft, axles, equipment
+        """SELECT id, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
+                  deck_in, miles, hours, len_ft, axles, equipment, track_in, cc
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
@@ -41,8 +42,8 @@ def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
     by_fam: dict[str, list[Comp]] = {}
     for r in rows:
         by_fam.setdefault(r["family"], []).append(
-            Comp((r["id"], r["year"], r["price"], r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
-                  frozenset(json.loads(r["equipment"] or "[]")))))
+            Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
+                  frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"])))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -113,6 +114,27 @@ def _equip(listing) -> frozenset:
 def expected_price(listing, comps_by_fam, effects=None):
     """-> (expected, comps used, expected before any adjustment, plain-English note, expected before equipment).
 
+    A listing selling several machines for one price (a pair of jet skis) is priced per machine, then
+    multiplied back up, so the numbers still compare with its asking price.
+    """
+    units = _v(listing, "units") or 1
+    if units <= 1:
+        return _expected_one(listing, comps_by_fam, effects)
+    # one trailer carries them all: price each machine without it, then add the trailer once
+    feats = _equip(listing)
+    trailer = (effects or {}).get(_v(listing, "category"), {}).get("trailer", 0) if "trailer" in feats else 0
+    one = dict(listing)
+    one["equipment"] = json.dumps(sorted(feats - {"trailer"}))
+    exp, n, base, note, pre = _expected_one(one, comps_by_fam, effects)
+    if not exp:
+        return exp, n, base, note, pre
+    each = f"{units} machines at about ${exp:,} each" + (f" + ${trailer:,} trailer" if trailer else "")
+    return (exp * units + trailer, n, base * units, f"{each}; {note}" if note else each, pre * units)
+
+
+def _expected_one(listing, comps_by_fam, effects=None):
+    """Expected price of one machine (see expected_price).
+
     Comps are lined up to this machine: model year (dep/yr), then miles/hours, then equipment
     (cab/heat/A-C as learned percentages, plow/trailer as dollars). effects comes from equipment_effects().
     """
@@ -128,6 +150,12 @@ def expected_price(listing, comps_by_fam, effects=None):
         same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]
         if len(same_deck) >= 4:
             others = same_deck
+    for field, tol in (("track", 9), ("cc", 150)):   # sleds: a 129" 600 and a 154" 850 are different machines
+        mine = _v(listing, "track_in" if field == "track" else field)
+        if mine and cat == "sled":
+            same = [x for x in others if getattr(x, field) and abs(getattr(x, field) - mine) <= tol]
+            if len(same) >= 4:
+                others = same
     length = _v(listing, "len_ft")
     if length:   # trailers: a 5x8 single-axle and a 7x18 tandem are different things
         axles = _v(listing, "axles")
@@ -257,7 +285,7 @@ def equipment_effects(con) -> dict:
                 data = statistics.median(has) / statistics.median(hasnt) - 1 if n else prior
                 eff[f] = min(2.5 * prior, max(0.0, (n * data + USAGE_SHRINK * prior) / (n + USAGE_SHRINK)))
             else:
-                eff[f] = DOLLAR_PRIOR[f]
+                eff[f] = DOLLAR_BY_CAT.get(cat, {}).get(f, DOLLAR_PRIOR[f])
         out[cat] = eff
     return out
 
@@ -318,10 +346,10 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         mpy = (listing["miles"] or 0) / age
         hpy = (listing["hours"] or 0) / age
         c = cfg(listing["category"])
-        if (listing["miles"] is not None and mpy < 800) or (listing["hours"] is not None and hpy < c["low_hpy"]):
+        if (listing["miles"] is not None and mpy < c.get("low_mpy", 800)) or (listing["hours"] is not None and hpy < c["low_hpy"]):
             s += 3
             reasons.append("low use")
-        elif mpy > 3000 or hpy > c["high_hpy"]:
+        elif mpy > c.get("high_mpy", 3000) or hpy > c["high_hpy"]:
             s -= 6
             reasons.append("high use")
 

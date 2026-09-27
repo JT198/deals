@@ -100,7 +100,7 @@ DEFAULT_SETTINGS = {
     "seed_version": "1",
 }
 
-SEED_VERSION = 4   # bump when categories.py gains default searches
+SEED_VERSION = 5   # bump when categories.py gains default searches
 
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -144,6 +144,9 @@ def init() -> None:
         # trailers
         "trailer_type": "TEXT", "len_ft": "REAL", "width_ft": "REAL", "height_ft": "REAL",
         "axles": "INTEGER", "gvwr_lb": "INTEGER", "brakes": "INTEGER", "utv_fit": "TEXT",
+        # jet skis / snowmobiles
+        "units": "INTEGER",                                      # machines the one price buys (a pair of skis = 2)
+        "track_in": "INTEGER", "cc": "INTEGER",                  # sled track length; engine displacement
     })
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:

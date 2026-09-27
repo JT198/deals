@@ -587,6 +587,62 @@ def test_digest_builds():
     assert "facebook:d" not in text and "$5,000" not in text            # dealers don't make the digest
 
 
+def _insert(con, rows):
+    t = db.now()
+    for i, r in enumerate(rows):
+        base = dict(id=f"facebook:k{i}", source="facebook", ext_id=f"k{i}", url="u", title="c", first_seen=t, last_seen=t,
+                    status="active", parsed=1, relevant=1, is_new=0, red_flags="[]", reasons="[]")
+        base.update(r)
+        con.execute(f"INSERT INTO listings({','.join(base)}) VALUES ({','.join('?' * len(base))})", list(base.values()))
+    con.commit()
+
+
+def test_jet_ski_pair_priced_per_ski_with_one_trailer():
+    from app import score
+    con = reset([])
+    fam = "Sea-Doo GTI/GTS"
+    _insert(con, [dict(category="pwc", family=fam, year=2021, price=9000, units=1) for _ in range(5)]
+            + [dict(category="pwc", family=fam, year=2021, price=18000, units=2)])       # a pair: $9,000 each
+    comps = score._comps(con)
+    assert all(c.price == 9000 for c in comps[fam]), comps
+    eff = {"pwc": {"trailer": 900}}
+    row = {"id": "x", "family": fam, "year": 2021, "category": "pwc", "hours": None, "miles": None}
+    pair = score.expected_price(dict(row, units=2, equipment='["trailer"]'), comps, eff)
+    assert pair[0] == 2 * 9000 + 900 and "2 machines" in pair[3], pair
+    one = score.expected_price(dict(row, units=1, equipment='["trailer"]'), comps, eff)
+    assert one[0] == 9900, one
+
+
+def test_sleds_compared_on_track_length():
+    from app import score
+    con = reset([])
+    fam = "Polaris Indy/Switchback/Rush (trail/crossover)"
+    _insert(con, [dict(category="sled", family=fam, year=2020, price=8000, track_in=129) for _ in range(4)]
+            + [dict(category="sled", family=fam, year=2020, price=12000, track_in=146) for _ in range(4)])
+    comps = score._comps(con)
+    row = {"id": "x", "family": fam, "year": 2020, "category": "sled", "miles": None, "hours": None, "equipment": "[]"}
+    assert score.expected_price(dict(row, track_in=129), comps)[0] == 8000
+    assert score.expected_price(dict(row, track_in=146), comps)[0] == 12000
+
+
+def test_parse_pwc_and_sled_fields():
+    from app import parse as P
+    class R:
+        def __init__(self, body): self._b = body
+        def raise_for_status(self): pass
+        def json(self): return {"response": self._b}
+    class H:
+        def __init__(self, body): self.body = body
+        async def post(self, *a, **k): return R(self.body)
+    row = {"source": "facebook", "title": "t", "price": 1, "location": None, "seller_type": None, "description": ""}
+    sled = asyncio.run(P.parse(H(json.dumps({"category": "sled", "relevant": True, "family": "Ski-Doo Summit/Freeride (mountain)",
+                                              "track_in": "154", "cc": 850, "units": 1})), row))
+    assert sled["category"] == "sled" and sled["track_in"] == 154 and sled["cc"] == 850 and sled["units"] == 1, sled
+    pwc = asyncio.run(P.parse(H(json.dumps({"category": "pwc", "relevant": True, "family": "Yamaha VX",
+                                             "units": 2, "track_in": 137})), row))
+    assert pwc["units"] == 2 and pwc["track_in"] is None, pwc
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

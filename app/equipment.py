@@ -11,11 +11,15 @@ import re
 MULT_PRIOR = {"cab": 0.08, "heat": 0.05, "ac": 0.03}
 # fixed-dollar features: roughly what the add-on sells for on its own
 DOLLAR_PRIOR = {"plow": 600, "trailer": 1500}
+# ...where a category's add-on is worth something else (a jet ski trailer is cheaper than a UTV trailer)
+DOLLAR_BY_CAT = {"pwc": {"trailer": 900}, "sled": {"trailer": 1200}}
 
 APPLIES = {
     "utv4": ("cab", "heat", "ac", "plow", "trailer"),
     "utv2": ("cab", "heat", "ac", "plow", "trailer"),
     "atv": ("plow", "trailer"),
+    "pwc": ("trailer",),
+    "sled": ("trailer",),
 }
 
 LABEL = {"cab": "cab", "heat": "heat", "ac": "A/C", "plow": "plow", "trailer": "trailer included"}

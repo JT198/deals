@@ -4,7 +4,8 @@ dep        yearly depreciation used to line up comps from neighbouring model yea
 window     +/- model years that count as "near" comps
 fit        allow the log-linear price-vs-year fit when near comps are thin
 low_hpy / high_hpy   engine hours per year that count as light / heavy use
-cl_cat     Craigslist category to search (sna = atvs/utvs/snowmobiles, grd = farm & garden)
+low_mpy / high_mpy   same for miles per year (default 800 / 3000)
+cl_cat     Craigslist category to search (sna = atvs/utvs/snowmobiles, grd = farm & garden, boo = boats/PWC)
 usage      prior for how price falls with use: {"miles": (log-change, per N miles), "hours": (...)}.
            Each family blends this with what its own listings show (more data -> more weight).
 every_min  how often each search in this category runs on Facebook
@@ -119,6 +120,42 @@ CATEGORIES = {
         "searches": [
             "tandem axle trailer", "car hauler trailer", "7x16 trailer", "7x14 trailer",
             "flatbed trailer", "tilt trailer", "sled trailer", "landscape trailer",
+        ],
+    },
+    "pwc": {
+        # jet skis often sell in pairs on a double trailer: the listing price is split per ski (see score.expected_price)
+        "label": "Jet skis", "emoji": "🌊",
+        "dep": 0.08, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 60,
+        "usage": {"hours": (-0.06, 100)},
+        "cl_cat": "boo", "every_min": 90,
+        "families": [
+            "Sea-Doo Spark", "Sea-Doo GTI/GTS", "Sea-Doo GTX/Wake/Explorer/FishPro (touring)",
+            "Sea-Doo RXP/RXT (performance)", "Yamaha EX", "Yamaha VX", "Yamaha FX", "Yamaha GP/SuperJet",
+            "Kawasaki Ultra", "Kawasaki STX/SX-R", "Vintage / 2-stroke PWC", "Other jet ski",
+        ],
+        "searches": [
+            "jet ski", "sea doo", "sea doo spark", "waverunner", "yamaha waverunner", "kawasaki ultra", "pwc",
+        ],
+    },
+    "sled": {
+        # a 129" trail sled and a 154" mountain sled are different markets: comps match on track length and cc
+        "label": "Snowmobiles", "emoji": "❄️",
+        "dep": 0.09, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 80, "low_mpy": 700, "high_mpy": 2500,
+        "usage": {"miles": (-0.04, 1000)},
+        "cl_cat": "sna", "every_min": 90,
+        "families": [
+            "Ski-Doo MXZ/Renegade/Backcountry (trail/crossover)", "Ski-Doo Summit/Freeride (mountain)",
+            "Ski-Doo Expedition/Skandic/Grand Touring (utility/touring)",
+            "Polaris Indy/Switchback/Rush (trail/crossover)", "Polaris RMK/Khaos (mountain)",
+            "Polaris Titan/Voyageur/Widetrak (utility)",
+            "Arctic Cat ZR/Riot/Blast (trail/crossover)", "Arctic Cat M/Alpha One (mountain)",
+            "Arctic Cat Norseman/Bearcat/Pantera (utility/touring)",
+            "Yamaha Sidewinder/SRViper (trail/crossover)", "Yamaha Venture/Transporter/VK (utility/touring)",
+            "Youth snowmobile (120/200cc)", "Vintage snowmobile (pre-2000)", "Other snowmobile",
+        ],
+        "searches": [
+            "snowmobile", "ski doo", "polaris snowmobile", "arctic cat snowmobile", "yamaha sidewinder",
+            "polaris indy", "ski doo renegade", "polaris switchback",
         ],
     },
 }

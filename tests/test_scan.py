@@ -668,6 +668,41 @@ def test_scorecard_buckets_and_snapshot():
     assert api["history"][0]["buckets"][0]["pct"] == 50.0 and api["listings"] == 60, api["history"]
 
 
+def test_usage_doubt():
+    from app import usage
+    u = lambda desc, **k: usage.doubt(dict({"title": "t", "description": desc, "category": "utv4", "year": 2022,
+                                            "is_new": 0, "miles": None, "hours": None}, **k))
+    assert "since a repair" in u("brand new primary and secondary clutch replaced 60 miles ago", miles=60)
+    assert "since a repair" in u("6500 miles on rebuilt motor. $7500 obo", miles=6500, year=2016)
+    assert "since a repair" in u("800 miles on new top end", miles=800, category="sled", year=1998)
+    assert u("pristine condition with only 36 hours on the engine", hours=36, category="pwc", year=2024) is None
+    assert u("has 4,200 miles, clutch replaced 60 miles ago", miles=4200) is None          # total is stated
+    assert u("only 60 miles, basically new", miles=60) is None                              # clearly stated
+    assert "unusually low" in u("great machine", miles=60)                                  # 2022 with 60 mi, unexplained
+    assert u("great machine", miles=60, year=2026) is None and u("nice", miles=3000) is None
+    assert "60 miles since a repair" in u("clutch replaced 60 miles ago")                   # nothing recorded, still flagged
+    assert u("runs great") is None and u("clutch replaced 60 miles ago", category="mower") is None
+
+
+def test_doubtful_mileage_does_not_move_the_price():
+    from app import score
+    con = reset([])
+    _family(con)
+    t = db.now()
+    for lid, desc in (("facebook:doubt", "clutch replaced 60 miles ago"), ("facebook:real", "only 60 miles on it")):
+        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, description, price, first_seen, last_seen, status,
+                         parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
+                       VALUES (?, 'facebook', ?, 'u', 't', ?, 15000, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 60,
+                               0, '[]', '[]')""", (lid, lid, desc, t, t))
+    con.commit()
+    score.rescore_all(con)
+    d = con.execute("SELECT * FROM listings WHERE id = 'facebook:doubt'").fetchone()
+    r = con.execute("SELECT * FROM listings WHERE id = 'facebook:real'").fetchone()
+    assert d["usage_doubt"] and "for use" not in (d["usage_note"] or ""), dict(d)
+    assert "Ask for the actual miles" in d["offer_notes"], d["offer_notes"]
+    assert r["usage_doubt"] is None and "for use" in r["usage_note"] and r["expected"] > d["expected"], (r["expected"], d["expected"])
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

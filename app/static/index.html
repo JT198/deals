@@ -271,6 +271,9 @@ td.t { white-space: normal; min-width: 240px; }
         starting from a sensible default (about 2.5% per 1,000 miles for UTVs, 4% per 1,000 miles for snowmobiles, 6% per 100 hours for jet skis,
         4% per 100 hours for mowers). The grey
         line under "Typical" shows the adjustment.</li>
+      <li><b>⚠ Miles unclear</b>: ads say things like "clutches replaced 60 miles ago" - that's not the odometer. When the
+        only number is "since a repair", or the mileage is implausibly low for the machine's age and not clearly stated,
+        the finder ignores it for pricing and tells you to ask.</li>
       <li><b>Adjusted for equipment:</b> cab, heat and A/C (UTVs) are worth a percentage learned from the listings
         (a full cab with heat and A/C is currently worth ~25%); a plow adds ~$600 and an included trailer ~$1,500 (~$900 with a jet ski, ~$1,200 with a snowmobile).
         So a NorthStar isn't compared straight against open machines. The grey line shows these adjustments too.</li>
@@ -548,7 +551,8 @@ function fitTag(d) {
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
     d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
-    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.miles != null ? d.miles.toLocaleString() + " mi" : null, d.hours != null ? d.hours.toLocaleString() + " hrs" : null,
+    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt ? d.miles.toLocaleString() + " mi" : null,
+    d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
     .filter(Boolean).map(esc).join(" · ");
@@ -572,7 +576,7 @@ function card(d) {
       ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
         `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>`).join(" · ")}</div>` : ""}
-      <div class="tags">${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+      <div class="tags">${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">

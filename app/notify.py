@@ -41,8 +41,9 @@ def listing_caption(r, header: str | None = None) -> str:
         f"pair - {r['units']} for one price" if (r["units"] or 1) > 1 else None,
         f"{r['track_in']}\" track" if r["track_in"] else None,
         r["engine"],
-        f"{r['miles']:,} mi" if r["miles"] is not None else None,
-        f"{r['hours']:,} hrs" if r["hours"] is not None else None,
+        "miles unclear - ask" if r["usage_doubt"] else None,
+        f"{r['miles']:,} mi" if r["miles"] is not None and not r["usage_doubt"] else None,
+        f"{r['hours']:,} hrs" if r["hours"] is not None and not r["usage_doubt"] else None,
         "dealer" if (r["is_dealer"] == 1 or r["seller_type"] == "dealer") else "private seller",
         r["source"],
     ) if x]

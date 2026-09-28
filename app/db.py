@@ -133,6 +133,7 @@ def init() -> None:
         "alerted_price": "INTEGER",                              # price when the last alert went out
         "expected_base": "INTEGER", "usage_note": "TEXT",        # typical before any adjustment; adjustment notes
         "expected_pre": "INTEGER",                               # typical before equipment (learns equipment worth)
+        "usage_doubt": "TEXT",                                   # why the stated miles/hours can't be trusted (usage.py)
         "equipment": "TEXT",                                     # detected cab / heat / A-C / plow / trailer
         "offer_open": "INTEGER", "offer_aim": "INTEGER", "offer_walk": "INTEGER", "offer_notes": "TEXT",
         "offer_rough": "INTEGER",                                # offer from asking price only (few comps / new)

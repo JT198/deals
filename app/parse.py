@@ -42,8 +42,11 @@ Return ONLY a JSON object with these keys:
 - model: the model as the seller wrote it, cleaned up (e.g. "RZR XP 4 1000 Premium", "RZT S 42", "ATC 250R")
 - trim: trim/edition words if any (e.g. "Premium", "Ultimate", "NorthStar", "EPS", "Zeta"), else null
 - seats: integer seat count for UTVs, else null
-- hours: engine hours as an integer, or null
-- miles: odometer miles as an integer, or null (convert km to miles)
+- hours: the machine's TOTAL engine hours as an integer, or null
+- miles: the machine's TOTAL odometer miles as an integer, or null (convert km to miles)
+  Only total use counts. "clutches replaced 60 miles ago", "800 miles on new top end", "6500 miles on rebuilt motor",
+  "20 hours since rebuild" describe a repair, NOT the machine's total - use null for miles/hours in that case and do
+  not mention that number as the mileage in the summary.
 - units: how many complete machines the one price buys (a pair of jet skis = 2, two snowmobiles = 2), else 1
 - track_in (snowmobiles only): track length in inches (e.g. "129", "137", "146", "154", "165"; "15x137" means 137), else null
 - cc: engine displacement in cc as an integer if stated or implied by the model name (e.g. "850" = 850, "600R" = 600, "1.8L" = 1800, "Spark 90" = 900), else null

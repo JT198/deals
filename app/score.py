@@ -9,6 +9,7 @@ import statistics
 import time
 
 from .categories import FAMILY_CATEGORY, cfg
+from . import usage
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
 
 COMP_WINDOW = 180 * 86400
@@ -32,7 +33,8 @@ def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
     """family -> used asking prices, or (sold=True) the last price of listings marked sold."""
     rows = con.execute(
         """SELECT id, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
-                  deck_in, miles, hours, len_ft, axles, equipment, track_in, cc
+                  deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
+                  CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = 0 AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
@@ -489,6 +491,11 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
                      "wheel bearings, floor boards, lights, and that the brakes work - brakes need a brake controller in the truck.")
     else:
         notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
+    doubt = _v(listing, "usage_doubt")
+    if doubt:
+        notes.insert(1, f"Ask for the actual miles/hours before you offer: {doubt}. Priced here as if use is average.")
+    elif listing["category"] in usage.VEHICLES and listing["miles"] is None and listing["hours"] is None:
+        notes.insert(1, "Miles/hours aren't stated - ask; priced here as if use is average for its age.")
     return {"open": open_, "aim": aim, "walk": walk, "notes": notes, "rough": rough}
 
 
@@ -604,6 +611,14 @@ def rescore_all(con) -> None:
                          "WHERE parsed = 1 AND relevant = 1 AND status != 'gone' AND equipment IS NULL").fetchall():
         con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(detect(r)), r["id"]))
     con.commit()
+    # 1b. is the stated mileage / hours really the machine's total? ("clutches replaced 60 miles ago")
+    for r in con.execute("""SELECT id, category, title, description, miles, hours, year, is_new, usage_doubt FROM listings
+                            WHERE parsed = 1 AND relevant = 1 AND status != 'gone'
+                              AND (miles IS NOT NULL OR hours IS NOT NULL OR usage_doubt IS NOT NULL)""").fetchall():
+        d = usage.doubt(r)
+        if d != r["usage_doubt"]:
+            con.execute("UPDATE listings SET usage_doubt = ? WHERE id = ?", (d, r["id"]))
+    con.commit()
     # 2. what each feature is worth, from last run's pre-equipment typical prices
     effects = equipment_effects(con)
     comps = _comps(con)
@@ -617,6 +632,9 @@ def rescore_all(con) -> None:
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status IN ('active', 'pending')").fetchall()
     for r in rows:
+        if r["usage_doubt"]:      # doubtful mileage never moves the price
+            r = dict(r)
+            r["miles"] = r["hours"] = None
         exp, n, base, note, pre = expected_price(r, comps, effects)
         if r["is_new"] == 1:
             exp = base = note = pre = None

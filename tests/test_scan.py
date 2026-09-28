@@ -703,6 +703,18 @@ def test_doubtful_mileage_does_not_move_the_price():
     assert r["usage_doubt"] is None and "for use" in r["usage_note"] and r["expected"] > d["expected"], (r["expected"], d["expected"])
 
 
+def test_distance_prefers_the_map_pin():
+    from app import geo
+    assert craigslist.coords('<div id="map" data-latitude="45.035486" data-longitude="-93.781070" data-accuracy="20">') == (45.035486, -93.78107)
+    assert craigslist.coords('<div data-latitude="0" data-longitude="0">') == (None, None) and craigslist.coords("x") == (None, None)
+    home, cache = (45.04, -93.49), {"Anoka, MN": (45.1977, -93.3872), "JUNK DEALER, MN": (None, None)}
+    assert 10 < geo.distance({"lat": None, "lon": None, "location": "Anoka"}, home, cache) < 14
+    assert 12 < geo.distance({"lat": 45.035486, "lon": -93.78107, "location": "JUNK DEALER"}, home, cache) < 16
+    assert geo.distance({"lat": None, "lon": None, "location": "JUNK DEALER"}, home, cache) is None
+    con = reset([{"location": None, "lat": 45.035486, "lon": -93.78107}])
+    assert 12 < client().get("/api/listings").json()[0]["distance"] < 16
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

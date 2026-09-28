@@ -95,10 +95,11 @@ def apply_detail(con, lid, d: dict | None, old_price):
     con.execute(
         """UPDATE listings SET description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
              listed_at = COALESCE(?, listed_at), image = COALESCE(?, image), status = ?,
+             lat = COALESCE(?, lat), lon = COALESCE(?, lon),
              detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ?,
              seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END WHERE id = ?""",
         (d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
-         d.get("status", "active"), t, t, d.get("status", "active"), lid))
+         d.get("status", "active"), d.get("lat"), d.get("lon"), t, t, d.get("status", "active"), lid))
     set_price(con, lid, old_price, d.get("price"))
 
 
@@ -376,8 +377,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
     places = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
 
     def in_range(r):
-        c = places.get(geo.place_key(r["location"]))
-        return not c or c[0] is None or geo.miles(*home, *c) <= radius + 10
+        d = geo.distance(r, home, places)
+        return d is None or d <= radius + 10
 
     def passes_limits(r):
         """Filters shared by both alert types; each type has its own on/off switch."""

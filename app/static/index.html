@@ -555,7 +555,7 @@ function facts(d) {
     d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
     d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt ? d.miles.toLocaleString() + " mi" : null,
     d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
-    d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : null,
+    d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : d.distance != null ? `${d.distance} mi away` : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]
     .filter(Boolean).map(esc).join(" · ");
 }

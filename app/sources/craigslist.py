@@ -20,6 +20,17 @@ PRICE = re.compile(r'<div class="price">([^<]*)</div>')
 LOC = re.compile(r'<div class="location">\s*([^<]*?)\s*</div>', re.S)
 
 
+def coords(page: str) -> tuple[float | None, float | None]:
+    """Map pin on the posting page. The location text is free-form (dealer names, phone numbers, several
+    towns at once) and often missing, but nearly every posting has the pin."""
+    lat = re.search(r'data-latitude="(-?\d+(?:\.\d+)?)"', page)
+    lon = re.search(r'data-longitude="(-?\d+(?:\.\d+)?)"', page)
+    if not (lat and lon):
+        return None, None
+    la, lo = float(lat.group(1)), float(lon.group(1))
+    return (la, lo) if (abs(la) > 1 and abs(lo) > 1 and abs(la) <= 90 and abs(lo) <= 180) else (None, None)
+
+
 def _price(s):
     digits = re.sub(r"[^\d]", "", s or "")
     return int(digits) if digits else None
@@ -86,7 +97,9 @@ async def detail(http: httpx.AsyncClient, url: str) -> dict | None:
     crumbs = re.search(r'<ul class="breadcrumbs">(.*?)</ul>', h, re.S)
     crumbs = crumbs.group(1) if crumbs else ""
     seller = "dealer" if "by dealer" in crumbs else "private" if "by owner" in crumbs else None
+    lat, lon = coords(h)
     return {
+        "lat": lat, "lon": lon,
         "description": "\n".join(x for x in (text, attr_text) if x) or None,
         "seller_type": seller,
         "listed_at": listed_at,

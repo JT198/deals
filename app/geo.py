@@ -22,6 +22,20 @@ def place_key(location: str | None) -> str | None:
     return loc if "," in loc else f"{loc}, MN"   # Craigslist gives bare town names
 
 
+def distance(row, home: tuple[float, float], cache: dict) -> float | None:
+    """Miles from home: the listing's own map pin if it has one, else its town from the geocache."""
+    try:
+        lat, lon = row["lat"], row["lon"]
+    except (KeyError, IndexError):
+        lat = lon = None
+    if lat is None or lon is None:
+        c = cache.get(place_key(row["location"]))
+        if not c or c[0] is None:
+            return None
+        lat, lon = c
+    return miles(home[0], home[1], lat, lon)
+
+
 async def fill(con, limit: int = 25) -> None:
     places = {place_key(r["location"]) for r in con.execute(
         "SELECT DISTINCT location FROM listings WHERE location IS NOT NULL")}

@@ -67,16 +67,16 @@ def _geo(con):
         hlat, hlon = float(db.DEFAULT_SETTINGS["home_lat"]), float(db.DEFAULT_SETTINGS["home_lon"])
     cache = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
 
-    def dist(location):
-        c = cache.get(geo.place_key(location))
-        return round(geo.miles(hlat, hlon, *c)) if c and c[0] is not None else None
+    def dist(row):
+        d = geo.distance(row, (hlat, hlon), cache)
+        return None if d is None else round(d)
     return dist
 
 
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, usage_doubt, expected_sold, sold_comps, sold_basis,
+  reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, usage_doubt, lat, lon, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit,
   units, track_in, cc"""
 
@@ -94,7 +94,7 @@ def listings(include_gone: int = 0, include_irrelevant: int = 0):
     out = []
     for r in rows:
         d = db.row_dict(r)
-        d["distance"] = dist(d["location"])
+        d["distance"] = dist(d)
         d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
         out.append(d)
     return out

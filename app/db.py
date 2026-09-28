@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS price_history (
 CREATE INDEX IF NOT EXISTS ph_listing ON price_history(listing_id);
 
 -- one row per delivered Telegram alert; cross-post suppression checks the full history
+-- one row per day: how well the score predicted what sold (see score.scorecard)
+CREATE TABLE IF NOT EXISTS scorecard_log (day TEXT PRIMARY KEY, data TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS alert_log (
   listing_id TEXT NOT NULL, title_key TEXT NOT NULL, price INTEGER, kind TEXT NOT NULL, ts INTEGER NOT NULL
 );

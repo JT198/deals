@@ -322,6 +322,10 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         score.rescore_all(con)
         if not (quick or sold):
             db.prune(con)
+            try:
+                score.snapshot_scorecard(con)
+            except Exception as e:      # a report, never worth failing a scan over
+                errors.append(f"scorecard: {e}")
         try:
             await geo.fill(con)
         except Exception as e:

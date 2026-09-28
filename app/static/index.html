@@ -120,6 +120,15 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; }
 .note .shown { font-size: 13px; color: var(--text); background: var(--warn-bg); border-radius: 8px; padding: 6px 9px; cursor: text; white-space: pre-wrap; }
 .note .shown::before { content: "📝 "; }
+.filters label { max-width: 100%; min-width: 0; }
+.filters select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
+.sc-row { display: grid; grid-template-columns: 150px 1fr 250px; gap: 10px; align-items: center; margin: 7px 0; font-size: 13px; }
+.sc-track { background: var(--surface-2); border-radius: 4px; height: 14px; overflow: hidden; }
+.sc-bar { background: var(--series-1); height: 100%; border-radius: 0 4px 4px 0; min-width: 2px; }
+.sc-val { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sc-val b { color: var(--text); }
+.verdict { font-size: 15px; font-weight: 600; margin: 2px 0 10px; }
+@media (max-width: 600px) { .sc-row { grid-template-columns: 100px 1fr; } .sc-val { grid-column: 1 / -1; margin-top: -4px; } }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
 .sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
@@ -329,6 +338,8 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Search</b> looks through titles, the full ad text, the AI summary, add-ons and notes.</li>
       <li><b>Morning digest</b> at 7:00 on Telegram: the best new private listings per category from the last day,
         your watched listings with any price drops, and how the market is pricing.</li>
+      <li><b>Scorecard</b> (Market tab, bottom): whether high scores really sell faster than low ones, what the pricing has
+        learned from the listings, and a day-by-day history so you can see if it's improving.</li>
       <li><b>Copy message</b> (inside Offer guidance): a ready opener for the seller with your offer - edit, copy, paste into Messenger.</li>
       <li><b>Sell mine</b> tab: describe your machine and get a list price, what to expect, a quick-sale price, the closest
         listings, and a drafted ad (written by the local AI from only what you enter).</li>
@@ -667,13 +678,15 @@ async function renderMarket() {
   $("#m-fam").onchange = e => { MARKET_FAM = e.target.value; store.set("marketFam", MARKET_FAM); renderMarket(); };
   drawScatter($("#chart"), m);
   const famCat = (fams.find(f => f.family === MARKET_FAM) || {}).category;
-  const [tr, gone] = await Promise.all([
+  const [tr, gone, sc] = await Promise.all([
     api("/api/trends?category=" + famCat).catch(e => ({ error: e.message })),
-    api("/api/ended?family=" + encodeURIComponent(MARKET_FAM)).catch(e => ({ error: e.message }))]);
+    api("/api/ended?family=" + encodeURIComponent(MARKET_FAM)).catch(e => ({ error: e.message })),
+    api("/api/scorecard").catch(e => ({ error: e.message }))]);
   if (token !== renderMarket.token) return;    // a newer render started meanwhile
   $("#tab-market").insertAdjacentHTML("beforeend",
     (tr.error ? `<div class="panel"><p class="hint">Market pulse unavailable (${esc(tr.error)}).</p></div>` : pulsePanel(tr, famCat)) +
-    (gone.error ? `<div class="panel"><p class="hint">Recently sold unavailable (${esc(gone.error)}).</p></div>` : gonePanel(gone)));
+    (gone.error ? `<div class="panel"><p class="hint">Recently sold unavailable (${esc(gone.error)}).</p></div>` : gonePanel(gone)) +
+    (sc.error ? `<div class="panel"><p class="hint">Scorecard unavailable (${esc(sc.error)}).</p></div>` : scorecardPanel(sc)));
 }
 function pulsePanel(rows, cat) {
   const label = catOf(cat).label || "";
@@ -693,6 +706,34 @@ function pulsePanel(rows, cat) {
         <td>${r.new}</td><td>${r.vs_typical == null ? "—" : (r.vs_typical > 0 ? "+" : "") + r.vs_typical + "%"}</td>
         <td>${r.ended}</td><td>${r.sold_vs_typical == null ? "—" : (r.sold_vs_typical > 0 ? "+" : "") + r.sold_vs_typical + "%"}</td>
         <td>${r.days_listed ?? "—"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">No data yet.</p>'}</div>`;
+}
+function scorecardPanel(s) {
+  const max = Math.max(1, ...s.buckets.map(b => b.pct || 0));
+  const bars = s.buckets.map(b => `<div class="sc-row"><span>${esc(b.label)}</span>
+    <div class="sc-track" title="${b.pct ?? 0}% of ${b.n}"><div class="sc-bar" style="width:${b.pct ? (b.pct / max * 100).toFixed(1) : 0}%"></div></div>
+    <span class="sc-val">${b.n ? `<b>${b.pct}%</b> gone · ${b.ended} of ${b.n}${b.days != null ? ` · ${b.days} days listed` : ""}` : "no listings yet"}</span></div>`).join("");
+  const al = Object.entries(s.alerts).map(([k, v]) =>
+    `${v.sent} ${k === "deal" ? "deal" : "just-listed"} alert${v.sent === 1 ? "" : "s"}, ${v.ended} since sold / pending / removed`).join(" · ");
+  const hist = s.history.filter(h => h.buckets && h.buckets[0].pct != null);
+  return `<div class="panel"><h2>Scorecard: is the ranking working?</h2>
+    <p class="verdict">${esc(s.verdict)}</p>
+    <p class="hint">Share of each score band that has sold, gone pending or been removed - private, used listings that were up at
+      least ${s.min_exposure_days} days (${s.listings} listings). If the score means something, the top bands go faster.
+      Higher scores are also re-checked more often, which flatters them a little.</p>
+    ${bars}
+    ${al ? `<p class="hint" style="margin-top:10px">Telegram: ${esc(al)}.</p>` : ""}
+    <h2 style="margin-top:18px">What the pricing has learned</h2>
+    <p class="hint">${s.coverage_pct}% of used listings have a typical price. How much price drops with use, learned per model
+      (starts from a default and follows the data as listings accumulate):</p>
+    ${s.learned.length ? `<div class="tablewrap"><table><thead><tr><th>Model</th><th>Listings</th><th>Learned</th><th>Starting default</th></tr></thead><tbody>
+      ${s.learned.map(l => `<tr><td>${esc(l.family)}</td><td>${l.n}</td><td>${l.learned}% per ${l.unit.toLocaleString()} ${l.metric === "miles" ? "mi" : "hrs"}</td>
+        <td>${l.default}%</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">Not enough listings with miles/hours yet.</p>'}
+    <h2 style="margin-top:18px">Day by day</h2>
+    ${hist.length ? `<div class="tablewrap"><table><thead><tr><th>Day</th><th>75+ gone</th><th>Under 45 gone</th><th>Gap</th><th>Listings judged</th><th>Have a typical price</th></tr></thead><tbody>
+      ${hist.map(h => { const t = h.buckets[0], b = h.buckets[h.buckets.length - 1];
+        return `<tr><td>${esc(h.day)}</td><td>${t.pct}%</td><td>${b.pct ?? "—"}%</td><td>${b.pct ? (t.pct / b.pct).toFixed(1) + "x" : "—"}</td>
+          <td>${h.listings}</td><td>${h.coverage_pct}%</td></tr>`; }).join("")}</tbody></table></div>`
+      : '<p class="hint">The first daily snapshot is taken by the next full scan.</p>'}</div>`;
 }
 function gonePanel(rows) {
   return `<div class="panel"><h2>Recently sold or removed: ${esc(MARKET_FAM)}</h2>

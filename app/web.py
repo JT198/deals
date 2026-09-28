@@ -221,6 +221,17 @@ def trends(category: str):
     return out
 
 
+@app.get("/api/scorecard")
+def scorecard():
+    """How well the score has predicted what sells, what the pricing has learned, and the daily history."""
+    con = db.connect()
+    comps, _ = _market_inputs(con)
+    out = score.scorecard(con, comps)
+    out["history"] = [dict(json.loads(r["data"]), day=r["day"]) for r in con.execute(
+        "SELECT day, data FROM scorecard_log ORDER BY day DESC LIMIT 30")]
+    return out
+
+
 @app.get("/api/ended")
 def ended(family: str):
     """Recently sold or removed listings of one family - last asking price is the closest thing to a sold price."""

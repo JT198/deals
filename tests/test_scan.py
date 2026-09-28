@@ -36,7 +36,7 @@ notify.send_text = fake_send_text
 def reset(rows, **settings):
     db.init()
     con = db.connect()
-    con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log;")   # every test starts clean
+    con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log; DELETE FROM scorecard_log;")   # every test starts clean
     con.commit()
     db.init()
     con.execute("DELETE FROM listings")
@@ -641,6 +641,31 @@ def test_parse_pwc_and_sled_fields():
     pwc = asyncio.run(P.parse(H(json.dumps({"category": "pwc", "relevant": True, "family": "Yamaha VX",
                                              "units": 2, "track_in": 137})), row))
     assert pwc["units"] == 2 and pwc["track_in"] is None, pwc
+
+
+def test_scorecard_buckets_and_snapshot():
+    from app import score
+    t = db.now()
+    old = {"first_seen": t - 5 * 86400, "listed_at": t - 10 * 86400}
+    rows = []
+    for i in range(30):   # great: 15 of 30 gone; overpriced: 3 of 30 gone
+        rows.append(dict(old, id=f"facebook:g{i}", ext_id=f"g{i}", score=80, status="gone" if i < 15 else "active",
+                         ended_at=t if i < 15 else None))
+        rows.append(dict(old, id=f"facebook:o{i}", ext_id=f"o{i}", score=30, status="sold" if i < 3 else "active",
+                         ended_at=t if i < 3 else None))
+    rows.append(dict(old, id="facebook:dealer", ext_id="dealer", score=90, is_dealer=1, status="gone", ended_at=t))
+    rows.append({"id": "facebook:fresh", "ext_id": "fresh", "score": 90, "status": "gone", "ended_at": t})   # < 2 days up
+    rows.append(dict(old, id="facebook:backlog", ext_id="backlog", score=90, status="sold", seen_active=0, ended_at=t))
+    con = reset(rows)
+    s = score.scorecard(con)
+    top, bottom = s["buckets"][0], s["buckets"][-1]
+    assert (top["n"], top["ended"], top["pct"], top["days"]) == (30, 15, 50.0, 10), top
+    assert (bottom["n"], bottom["ended"], bottom["pct"]) == (30, 3, 10.0), bottom
+    assert s["verdict"].startswith("Working") and "5.0x" in s["verdict"], s["verdict"]
+    score.snapshot_scorecard(con); score.snapshot_scorecard(con)          # same day: one row
+    assert con.execute("SELECT COUNT(*) FROM scorecard_log").fetchone()[0] == 1
+    api = client().get("/api/scorecard").json()
+    assert api["history"][0]["buckets"][0]["pct"] == 50.0 and api["listings"] == 60, api["history"]
 
 
 if __name__ == "__main__":

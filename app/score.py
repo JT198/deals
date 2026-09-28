@@ -8,7 +8,7 @@ import math
 import statistics
 import time
 
-from .categories import cfg
+from .categories import FAMILY_CATEGORY, cfg
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
 
 COMP_WINDOW = 180 * 86400
@@ -524,6 +524,77 @@ def days_to_sell(con) -> dict[str, float]:
         if r["secs"] and r["secs"] > 0:
             out.setdefault(r["family"], []).append(r["secs"] / 86400)
     return {f: statistics.median(v) for f, v in out.items() if len(v) >= 5}
+
+
+BUCKETS = (("75+ great", 75, 101), ("60-74 good", 60, 75), ("45-59 fair", 45, 60), ("under 45 overpriced", 0, 45))
+ENDED = ("sold", "pending", "gone")
+
+
+def scorecard(con, comps=None, min_exposure_days: int = 2) -> dict:
+    """Is the ranking any good? Private, used listings we saw for sale, up at least min_exposure_days:
+    what share of each score bucket has sold / gone pending / been removed. A score that means something
+    shows higher buckets going faster. Ended listings keep the score they had when they ended."""
+    now = int(time.time())
+    rows = con.execute(
+        """SELECT score, status, ended_at, COALESCE(listed_at, first_seen) t0 FROM listings
+           WHERE relevant = 1 AND seen_active = 1 AND COALESCE(is_new, 0) = 0 AND COALESCE(is_dealer, 0) = 0
+             AND COALESCE(seller_type, '') != 'dealer' AND score IS NOT NULL AND COALESCE(user_gone, 0) = 0
+             AND first_seen < ? AND first_seen > ?""",
+        (now - min_exposure_days * 86400, now - 60 * 86400)).fetchall()
+    buckets = []
+    for label, lo, hi in BUCKETS:
+        v = [r for r in rows if lo <= r["score"] < hi]
+        gone = [r for r in v if r["status"] in ENDED]
+        days = [(r["ended_at"] - r["t0"]) / 86400 for r in gone if r["ended_at"] and r["ended_at"] > r["t0"]]
+        buckets.append({"label": label, "n": len(v), "ended": len(gone),
+                        "pct": round(100 * len(gone) / len(v), 1) if v else None,
+                        "days": round(statistics.median(days)) if days else None})
+    top, bottom = buckets[0], buckets[-1]
+    if top["n"] < 20 or bottom["n"] < 20 or top["pct"] is None or bottom["pct"] is None:
+        verdict = "Not enough listings yet to judge - this needs a few weeks of data."
+    elif top["pct"] >= 1.5 * bottom["pct"] and (buckets[1]["n"] < 10 or buckets[1]["pct"] >= bottom["pct"]):
+        verdict = (f"Working: listings scored 75+ are going {top['pct'] / max(bottom['pct'], 0.1):.1f}x as fast "
+                   "as ones scored under 45.")
+    elif top["pct"] > bottom["pct"]:
+        verdict = "Pointing the right way, but the gap between great and overpriced is small."
+    else:
+        verdict = "Not predictive right now: high scores are not selling faster than low ones."
+
+    alerts = {}
+    for r in con.execute("""SELECT a.kind, l.status, COUNT(DISTINCT a.listing_id) n FROM alert_log a
+                            JOIN listings l ON l.id = a.listing_id WHERE a.kind IN ('deal', 'fresh')
+                            GROUP BY 1, 2"""):
+        k = alerts.setdefault(r["kind"], {"sent": 0, "ended": 0})
+        k["sent"] += r["n"]
+        k["ended"] += r["n"] if r["status"] in ENDED else 0
+
+    live = "relevant = 1 AND parsed = 1 AND status IN ('active', 'pending') AND COALESCE(is_new, 0) = 0"
+    coverage = [dict(r) for r in con.execute(
+        f"""SELECT category, COUNT(*) n, SUM(expected IS NOT NULL) priced, ROUND(AVG(comps), 1) comps
+            FROM listings WHERE {live} GROUP BY 1 ORDER BY 2 DESC""")]
+    total = sum(c["n"] for c in coverage) or 1
+    learned = []
+    for fam, lst in (comps if comps is not None else _comps(con)).items():
+        cat = FAMILY_CATEGORY.get(fam)
+        for metric, (per, unit) in (cfg(cat)["usage"] if cat else {}).items():
+            n = sum(1 for x in lst if x.year and getattr(x, metric) is not None)
+            if n >= 10:
+                learned.append({"family": fam, "metric": metric, "n": n, "unit": unit,
+                                "learned": round(usage_slope(lst, metric, cat) * unit * 100, 1),
+                                "default": round(per * 100, 1)})
+    learned.sort(key=lambda x: -x["n"])
+    return {"buckets": buckets, "verdict": verdict, "alerts": alerts, "coverage": coverage,
+            "coverage_pct": round(100 * sum(c["priced"] or 0 for c in coverage) / total),
+            "learned": learned[:8], "min_exposure_days": min_exposure_days, "listings": len(rows)}
+
+
+def snapshot_scorecard(con) -> None:
+    """One row per day, so the dashboard can show whether the ranking is improving."""
+    s = scorecard(con)
+    day = time.strftime("%Y-%m-%d")
+    con.execute("INSERT OR REPLACE INTO scorecard_log(day, data) VALUES (?, ?)",
+                (day, json.dumps({"buckets": s["buckets"], "coverage_pct": s["coverage_pct"], "listings": s["listings"]})))
+    con.commit()
 
 
 def rescore_all(con) -> None:

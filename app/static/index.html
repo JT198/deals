@@ -55,7 +55,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
   padding: 6px 9px; font: inherit; min-width: 0; }
 .filters input[type=number] { width: 110px; }
 .filters label { display: flex; gap: 6px; align-items: center; color: var(--text-2); }
-.cats { display: flex; gap: 6px; margin: 12px 0 2px; overflow-x: auto; padding-bottom: 2px; }
+.cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 2px; }
 .cats button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 10px;
   padding: 7px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
 .cats button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
@@ -177,7 +177,9 @@ td.t { white-space: normal; min-width: 240px; }
 .err { color: var(--bad); font-size: 12px; white-space: normal; }
 @media (max-width: 600px) {
   .grid { grid-template-columns: 1fr; }
-  #f-fams { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  #f-fams, .cats, nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }   /* swipe, no visible bar */
+  #f-fams::-webkit-scrollbar, .cats::-webkit-scrollbar, nav::-webkit-scrollbar { display: none; }
+  #f-fams { padding-bottom: 4px; }
   .chip { white-space: nowrap; }
   .filters input[type=number] { width: 90px; }
 }

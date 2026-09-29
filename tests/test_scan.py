@@ -744,6 +744,13 @@ def test_trailer_new_price_ceiling_and_weight_class():
     n = con.execute("SELECT * FROM listings WHERE id = 'newmoney'").fetchone()
     assert n["score"] <= 50 and "price of a new one" in n["reasons"], (n["score"], n["reasons"])
     assert score.gvwr_class(7000) == 1 and score.gvwr_class(9990) == 2 and score.gvwr_class(14000) == 3
+    # a cheaper new trailer of the same size and class filed under another open-deck type still sets the ceiling
+    _trailer(con, "newutil1", 4795, is_new=1, is_dealer=1, family="Open utility (rails / mesh sides)", len_ft=18)
+    _trailer(con, "newutil2", 4995, is_new=1, is_dealer=1, family="Tilt / car hauler flatbed", len_ft=18)
+    con.commit()
+    score.rescore_all(con)
+    r = con.execute("SELECT * FROM listings WHERE id = 'mine'").fetchone()
+    assert r["new_price"] in (4795, 4995) and r["score"] <= 50 and "price of a new one" in r["reasons"], dict(r)
 
 
 if __name__ == "__main__":

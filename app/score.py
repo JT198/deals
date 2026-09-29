@@ -30,6 +30,22 @@ class Comp(tuple):
         property(lambda t, i=i: t[i]) for i in range(13))
 
 
+# Open flat trailers are one market: whether an ad says "utility", "equipment" or "car hauler" is fuzzy,
+# while size and weight class set the price. Same for the two enclosed types.
+TRAILER_GROUPS = (
+    ("Open utility (rails / mesh sides)", "Landscape (tandem, rear gate)", "Tilt / car hauler flatbed", "Equipment / deckover"),
+    ("Enclosed cargo", "Enclosed car hauler (8.5 wide)"),
+)
+
+
+def family_pool(by_fam: dict, fam: str) -> list:
+    """Comps for a family - for trailers, from every family in its group."""
+    for group in TRAILER_GROUPS:
+        if fam in group:
+            return [x for f in group for x in by_fam.get(f, [])]
+    return by_fam.get(fam, [])
+
+
 NEW_DISCOUNT = 0.85      # a used trailer is "typically" worth at most this share of what new ones list for
 
 
@@ -68,7 +84,7 @@ def new_price_for(listing, new_by_fam) -> tuple[int | None, int]:
     length = _v(listing, "len_ft")
     if _v(listing, "category") != "trailer" or not length:
         return None, 0
-    pool = [x for x in new_by_fam.get(_v(listing, "family"), []) if x.len_ft and abs(x.len_ft - length) <= 2]
+    pool = [x for x in family_pool(new_by_fam, _v(listing, "family")) if x.len_ft and abs(x.len_ft - length) <= 2]
     gc, wd = gvwr_class(_v(listing, "gvwr_lb")), _wide(_v(listing, "width_ft"))
     pool = [x for x in pool
             if (gc is None or (x.gvwr and gvwr_class(x.gvwr) == gc))
@@ -197,7 +213,7 @@ def _expected_one(listing, comps_by_fam, effects=None):
         return none
     cat = _v(listing, "category")
     c = cfg(cat)
-    others = [x for x in comps_by_fam.get(fam, []) if x.id != _v(listing, "id")]
+    others = [x for x in family_pool(comps_by_fam, fam) if x.id != _v(listing, "id")]
     deck = _v(listing, "deck_in")
     if deck:   # mowers: a 42" and a 60" of the same series are different machines
         same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]

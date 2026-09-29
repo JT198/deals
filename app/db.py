@@ -144,6 +144,7 @@ def init() -> None:
         "user_gone": "INTEGER NOT NULL DEFAULT 0",               # Jon pressed Gone: searches don't resurrect it
         "parse_attempts": "INTEGER NOT NULL DEFAULT 0",
         "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
+        "new_price": "INTEGER", "new_comps": "INTEGER",          # what new ones list for at dealers (trailers)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio
         # trailers

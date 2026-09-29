@@ -51,7 +51,9 @@ Return ONLY a JSON object with these keys:
 - track_in (snowmobiles only): track length in inches (e.g. "129", "137", "146", "154", "165"; "15x137" means 137), else null
 - cc: engine displacement in cc as an integer if stated or implied by the model name (e.g. "850" = 850, "600R" = 600, "1.8L" = 1800, "Spark 90" = 900), else null
 - deck_in: mower cutting deck width in inches as an integer (mowers only), else null
-- trailer_type (trailers only, else null): "enclosed", "open", "tilt", "dump", "deckover", "drive-on" or "other"
+- trailer_type (trailers only, else null): "enclosed", "open", "equipment", "tilt", "dump", "deckover", "drive-on" or "other".
+  "equipment" = flat deck between the fenders (about 82-83 in wide), car / equipment hauler. "deckover" ONLY when the deck
+  sits over the wheels (96-102 in wide, "wide body"). Trailers have no odometer: miles and hours are null for a trailer.
 - len_ft / width_ft (trailers only): deck or box length and width in feet as numbers. "7x16" or "16x7" means 7 wide, 16 long; "82 inch between fenders" is about 6.8 wide; an 8.5-wide car hauler is 8.5. Exclude the tongue and V-nose from length. null if not stated.
 - height_ft (enclosed trailers only): interior height in feet (e.g. "6'6 interior" = 6.5, "7 ft tall inside" = 7), else null
 - axles (trailers only): number of axles (single = 1, tandem = 2), else null
@@ -138,7 +140,7 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         return f if lo <= f <= hi else None
     trailer = cat == "trailer"
     ttype = d.get("trailer_type") if trailer and d.get("trailer_type") in (
-        "enclosed", "open", "tilt", "dump", "deckover", "drive-on", "other") else None
+        "enclosed", "open", "equipment", "tilt", "dump", "deckover", "drive-on", "other") else None
     axles = num(d.get("axles")) if trailer else None
     gvwr = num(d.get("gvwr_lb")) if trailer else None
     return {

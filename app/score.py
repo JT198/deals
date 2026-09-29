@@ -25,18 +25,69 @@ def _v(listing, key):
 
 
 class Comp(tuple):
-    """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc)"""
-    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc = (property(lambda t, i=i: t[i]) for i in range(11))
+    """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc, gvwr_lb, width_ft)"""
+    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width = (
+        property(lambda t, i=i: t[i]) for i in range(13))
 
 
-def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
-    """family -> used asking prices, or (sold=True) the last price of listings marked sold."""
+NEW_DISCOUNT = 0.85      # a used trailer is "typically" worth at most this share of what new ones list for
+
+
+def gvwr_class(g) -> int | None:
+    """Trailer weight class: 3.5K / 7K / 10K / 14-16K / heavier. A 10K and a 14K are different trailers."""
+    if not g:
+        return None
+    return 0 if g <= 3500 else 1 if g <= 7700 else 2 if g <= 10500 else 3 if g <= 16500 else 4
+
+
+def _wide(w) -> bool | None:
+    """Deckover / wide-body (deck over the wheels, 8 ft+) vs a deck between the fenders (~6.8 ft)."""
+    return None if not w else w >= 8
+
+
+def same_build(listing, pool, wider_ok: bool = False):
+    """Trailers of this one's weight class and body width. Comps that don't state a GVWR only count when
+    there aren't 4 that do. wider_ok: a wide-body costs more, so its price is still a valid ceiling."""
+    gc, wd = gvwr_class(_v(listing, "gvwr_lb")), _wide(_v(listing, "width_ft"))
+
+    def ok(x, strict):
+        if gc is not None and (gvwr_class(x.gvwr) != gc if x.gvwr else strict):
+            return False
+        if wd is None or x.width is None:
+            return True
+        return _wide(x.width) == wd or (wider_ok and _wide(x.width) and not wd)
+    strict = [x for x in pool if ok(x, True)]
+    return strict if len(strict) >= 4 else [x for x in pool if ok(x, False)]
+
+
+def new_price_for(listing, new_by_fam) -> tuple[int | None, int]:
+    """What you could buy a new one of this type, size and weight class for at a dealer: the low end
+    (25th percentile) of distinct new prices - dealers repost the same unit - and how many listings that is.
+    When this trailer states a GVWR, only new ones that state the same class count (an unlabeled new one may
+    be a heavier, pricier trailer). Trailers only: they're commodities."""
+    length = _v(listing, "len_ft")
+    if _v(listing, "category") != "trailer" or not length:
+        return None, 0
+    pool = [x for x in new_by_fam.get(_v(listing, "family"), []) if x.len_ft and abs(x.len_ft - length) <= 2]
+    gc, wd = gvwr_class(_v(listing, "gvwr_lb")), _wide(_v(listing, "width_ft"))
+    pool = [x for x in pool
+            if (gc is None or (x.gvwr and gvwr_class(x.gvwr) == gc))
+            and (wd is None or x.width is None or _wide(x.width) == wd or (_wide(x.width) and not wd))]
+    if len(pool) < 2:
+        return None, len(pool)
+    prices = sorted({x.price for x in pool})
+    return prices[int(0.25 * (len(prices) - 1))], len(pool)
+
+
+def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
+    """family -> used asking prices; sold=True: last price of listings marked sold; new=True: new dealer stock."""
     rows = con.execute(
         """SELECT id, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
                   deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
-                  CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc
+                  CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc,
+                  gvwr_lb, width_ft
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
-             AND COALESCE(is_new, 0) = 0 AND COALESCE(end_price, price) >= 300 AND """ +
+             AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
         ("status = 'sold' AND COALESCE(red_flags, '[]') = '[]' AND COALESCE(ended_at, last_seen) >= ?"
          if sold else "last_seen >= ?"),
@@ -45,7 +96,7 @@ def _comps(con, sold: bool = False) -> dict[str, list[Comp]]:
     for r in rows:
         by_fam.setdefault(r["family"], []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
-                  frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"])))
+                  frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"])))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -161,6 +212,7 @@ def _expected_one(listing, comps_by_fam, effects=None):
     length = _v(listing, "len_ft")
     if length:   # trailers: a 5x8 single-axle and a 7x18 tandem are different things
         axles = _v(listing, "axles")
+        others = same_build(listing, others)      # ...and so are a 10K and a 14K, or a deckover
         same_size = [x for x in others if x.len_ft and abs(x.len_ft - length) <= 2
                      and (not axles or not x.axles or x.axles == axles)]
         if len(same_size) >= 4:
@@ -302,7 +354,7 @@ def _usage_note(use, typical_use, metric, exp, base):
 
 
 def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
-          sold_typical: int | None = None) -> tuple[int, float | None, list[str]]:
+          sold_typical: int | None = None, new_price: int | None = None) -> tuple[int, float | None, list[str]]:
     """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
     reasons: list[str] = []
     price = listing["price"]
@@ -344,7 +396,8 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
 
     age = max(1, NOW_YEAR - (listing["year"] or NOW_YEAR) + 1)
     # when "typical" is already adjusted for this machine's miles/hours, use is priced in - no extra points
-    if not usage_adjusted and listing["year"] and (listing["miles"] is not None or listing["hours"] is not None):
+    if (not usage_adjusted and listing["category"] != "trailer" and listing["year"]
+            and (listing["miles"] is not None or listing["hours"] is not None)):
         mpy = (listing["miles"] or 0) / age
         hpy = (listing["hours"] or 0) / age
         c = cfg(listing["category"])
@@ -368,6 +421,10 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
     if flags:
         s = min(s - min(35, 15 * len(flags)), 70)   # never "Great" (or alert-worthy) with known problems
         reasons.append("red flags: " + ", ".join(flags))
+
+    if new_price and price and listing["is_new"] != 1 and price >= 0.9 * new_price:
+        s = min(s, 50)      # used, but priced like a new one: not a deal whatever the comps say
+        reasons.append(f"close to the price of a new one (~${new_price:,} at dealers)")
 
     if deal_pct is not None and deal_pct > 0.45:
         s = min(s, 78)
@@ -410,7 +467,8 @@ def _nice(x: float) -> int:
 
 
 def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
-          sell_days: float | None = None, sold_typical: int | None = None, sold_note: str | None = None) -> dict | None:
+          sell_days: float | None = None, sold_typical: int | None = None, sold_note: str | None = None,
+          new_price: int | None = None) -> dict | None:
     """Opening offer / target / walk-away, plus talking points.
 
     Without a typical price (few comps, or new dealer stock) it still gives "rough" numbers off the
@@ -491,6 +549,9 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
                      "wheel bearings, floor boards, lights, and that the brakes work - brakes need a brake controller in the truck.")
     else:
         notes.append("Bring cash, check the title/VIN, and ask for maintenance records.")
+    if new_price and listing["is_new"] != 1:
+        notes.insert(1, f"New ones like this list around ${new_price:,} at dealers near you - a used one should be at "
+                        "least 15% under that. Check dealer sale prices before you offer.")
     doubt = _v(listing, "usage_doubt")
     if doubt:
         notes.insert(1, f"Ask for the actual miles/hours before you offer: {doubt}. Priced here as if use is average.")
@@ -628,6 +689,7 @@ def rescore_all(con) -> None:
         tow = None
     pace = days_to_sell(con)
     sold_comps = _comps(con, sold=True)
+    new_comps = _comps(con, new=True)
     ratios = sold_ratios(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status IN ('active', 'pending')").fetchall()
@@ -636,6 +698,15 @@ def rescore_all(con) -> None:
             r = dict(r)
             r["miles"] = r["hours"] = None
         exp, n, base, note, pre = expected_price(r, comps, effects)
+        new_price, n_new = new_price_for(r, new_comps) if r["is_new"] != 1 else (None, 0)
+        if new_price:     # a used one can't be typically worth more than a discount off new
+            age = max(0, NOW_YEAR - (r["year"] or NOW_YEAR))
+            ceiling = int(new_price * NEW_DISCOUNT * (1 - cfg("trailer")["dep"]) ** max(0, age - 1))
+            if exp is None or exp > ceiling:
+                why = (f"capped at {int(NEW_DISCOUNT * 100)}% of what new ones list for (${new_price:,}, {n_new} dealer listings)"
+                       if exp else f"priced from new ones at dealers (${new_price:,}, {n_new} listings) less {100 - int(NEW_DISCOUNT * 100)}%")
+                exp, n = ceiling, max(n, n_new)
+                base, pre, note = base or ceiling, ceiling, why
         if r["is_new"] == 1:
             exp = base = note = pre = None
         # Sold listings (Facebook "Sold" filter). Their price is the last listed price, so they mostly tell us
@@ -656,14 +727,15 @@ def rescore_all(con) -> None:
                 sold_exp, sold_n, basis = int(exp * q), qn, "est"
                 sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "
                              f"({qn} sold), so expect about ${sold_exp:,}.")
-        s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp)
-        o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note)
+        s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp,
+                                new_price=new_price)
+        o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note, new_price)
         fit = utv_fit(r)
         con.execute(
             """UPDATE listings SET expected=?, expected_base=?, expected_pre=?, usage_note=?, comps=?, deal_pct=?, score=?,
                  reasons=?, offer_open=?, offer_aim=?, offer_walk=?, offer_notes=?, offer_rough=?, utv_fit=?,
-                 expected_sold=?, sold_comps=?, sold_basis=? WHERE id=?""",
+                 expected_sold=?, sold_comps=?, sold_basis=?, new_price=?, new_comps=? WHERE id=?""",
             (exp, base, pre, note, n, pct, s, json.dumps(reasons),
              o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None,
-             o and int(o["rough"]), fit, sold_exp, sold_n, basis, r["id"]))
+             o and int(o["rough"]), fit, sold_exp, sold_n, basis, new_price, n_new or None, r["id"]))
     con.commit()

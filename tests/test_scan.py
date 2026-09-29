@@ -715,6 +715,37 @@ def test_distance_prefers_the_map_pin():
     assert 12 < client().get("/api/listings").json()[0]["distance"] < 16
 
 
+def _trailer(con, lid, price, **k):
+    t = db.now()
+    row = dict(id=lid, source="facebook", ext_id=lid, url="u", title=lid, price=price, first_seen=t, last_seen=t,
+               status="active", parsed=1, relevant=1, category="trailer", family="Equipment / deckover", len_ft=20,
+               width_ft=6.83, axles=2, gvwr_lb=10000, is_new=0, red_flags="[]", reasons="[]", year=2026)
+    row.update(k)
+    con.execute(f"INSERT INTO listings({','.join(row)}) VALUES ({','.join('?' * len(row))})", list(row.values()))
+
+
+def test_trailer_new_price_ceiling_and_weight_class():
+    from app import score
+    con = reset([])
+    for i, p in enumerate((9500, 9800, 10200, 9900, 10500, 9700)):          # 14K wide-bodies: a different trailer
+        _trailer(con, f"big{i}", p, gvwr_lb=14000, width_ft=8.5, len_ft=20 + i % 2)
+    for i in range(4):                                                       # new 10K deckovers at a dealer
+        _trailer(con, f"new{i}", 7099, is_new=1, is_dealer=1, width_ft=8.5)
+    _trailer(con, "newheavy", 9995, is_new=1, is_dealer=1, width_ft=8.5, gvwr_lb=None)   # unlabeled: ignored for the ceiling
+    _trailer(con, "new10k", 8900, is_new=1, is_dealer=1, width_ft=8.5)                  # pricier 10K: low end still wins
+    _trailer(con, "mine", 5500, miles=500, listed_at=db.now() - 4 * 86400)
+    _trailer(con, "newmoney", 6800, listed_at=db.now() - 4 * 86400)
+    con.commit()
+    score.rescore_all(con)
+    r = con.execute("SELECT * FROM listings WHERE id = 'mine'").fetchone()
+    assert r["new_price"] == 7099 and r["expected"] == int(7099 * 0.85), dict(r)        # not the 14K per-foot price
+    assert r["score"] < 65 and "low use" not in r["reasons"], (r["score"], r["reasons"])  # no odometer bonus on a trailer
+    assert "New ones like this list around $7,099" in r["offer_notes"], r["offer_notes"]
+    n = con.execute("SELECT * FROM listings WHERE id = 'newmoney'").fetchone()
+    assert n["score"] <= 50 and "price of a new one" in n["reasons"], (n["score"], n["reasons"])
+    assert score.gvwr_class(7000) == 1 and score.gvwr_class(9990) == 2 and score.gvwr_class(14000) == 3
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

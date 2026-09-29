@@ -21,7 +21,8 @@ def trailer_size(r) -> str | None:
     if r["category"] != "trailer":
         return None
     w, l = r["width_ft"], r["len_ft"]
-    bits = [(f"{w:g}x{l:g}" if w and l else f"{l:g} ft" if l else "") + (f" {r['trailer_type']}" if r["trailer_type"] else ""),
+    kind = "equipment" if r["trailer_type"] == "deckover" and w and w < 8 else r["trailer_type"]
+    bits = [(f"{w:g}x{l:g}" if w and l else f"{l:g} ft" if l else "") + (f" {kind}" if kind else ""),
             {1: "single axle", 2: "tandem"}.get(r["axles"], f"{r['axles']} axles" if r["axles"] else ""),
             f"{r['gvwr_lb']:,} lb" if r["gvwr_lb"] else "", "brakes" if r["brakes"] == 1 else "",
             {"yes": "✅ fits a 4-seat UTV", "maybe": "may fit a UTV", "no": "too small for a UTV"}.get(r["utv_fit"], "")]
@@ -42,7 +43,7 @@ def listing_caption(r, header: str | None = None) -> str:
         f"{r['track_in']}\" track" if r["track_in"] else None,
         r["engine"],
         "miles unclear - ask" if r["usage_doubt"] else None,
-        f"{r['miles']:,} mi" if r["miles"] is not None and not r["usage_doubt"] else None,
+        f"{r['miles']:,} mi" if r["miles"] is not None and not r["usage_doubt"] and r["category"] != "trailer" else None,
         f"{r['hours']:,} hrs" if r["hours"] is not None and not r["usage_doubt"] else None,
         "dealer" if (r["is_dealer"] == 1 or r["seller_type"] == "dealer") else "private seller",
         r["source"],

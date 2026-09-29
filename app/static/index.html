@@ -240,7 +240,11 @@ td.t { white-space: normal; min-width: 240px; }
       <li>Every trailer gets a <b>fits a 4-seat UTV</b> check: open deck 14 ft+ (16 ideal), 7 ft wide class
         (~80 in between fenders; UTVs are 62-64 in), tandem axle or 5,000 lb+ GVWR, and ~7 ft inside if enclosed.
         "May fit" means one of those isn't stated or is borderline - ask the seller.</li>
-      <li>Trailers are compared by type and size (length within 2 ft, same axle count), or per foot when there
+      <li><b>New-price check (trailers):</b> the finder knows what new trailers of the same type, size and weight class
+        list for at dealers. A used one's typical price is capped at 85% of that, and a used trailer priced within 10% of
+        new is flagged <b>priced like a new one</b> and can't score above 50. It only sees dealers who post on Marketplace
+        or Craigslist, so check a dealer's own site for sale prices before offering.</li>
+      <li>Trailers are compared by type, weight class (7K / 10K / 14K+), body style (between the fenders vs deckover) and size (length within 2 ft, same axle count), or per foot when there
         aren't enough the same size. Most trailers on Marketplace are new dealer stock - set Condition to "used only" to hide them.</li>
       <li>Alerts: trailers that fit a UTV alert normally; anything else only when it's an exceptional deal (score 85+).
         Just-listed alerts are for UTV-size trailers only. Tick <b>Fits a 4-seat UTV</b> in the filters to see just those.</li>
@@ -468,10 +472,12 @@ function vsTypical(d) {
   if (!d.expected) return `<span class="typ">Typical: not enough comps yet (${d.comps || 0})</span>`;
   const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
   const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
+  const fresh = d.new_price ? `<span class="typ">New at dealers about <b>${money(d.new_price)}</b> · ${d.new_comps} listing${d.new_comps === 1 ? "" : "s"}${
+    d.price >= 0.9 * d.new_price ? ' · <span class="over">priced like a new one</span>' : ""}</span>` : "";
   const sold = d.expected_sold ? `<span class="typ">Typically sells around <b>${money(d.expected_sold)}</b> · ${d.sold_basis === "sold"
     ? `${d.sold_comps} sold` : `est. from ${d.sold_comps} sold in this category`}</span>`
     : d.sold_basis === "holding" ? `<span class="typ">✓ Selling at about asking (${d.sold_comps} sold)</span>` : "";
-  return `<span class="typ">Typical asking ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` + sold +
+  return `<span class="typ">Typical asking ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` + fresh + sold +
     (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
 }
 function sellerMessage(d) {
@@ -539,7 +545,8 @@ function offerBox(d) {
 function trailerSize(d) {
   if (d.category !== "trailer") return null;
   const dims = d.width_ft && d.len_ft ? `${d.width_ft}x${d.len_ft}` : d.len_ft ? `${d.len_ft} ft` : "";
-  return [dims + (d.trailer_type ? " " + d.trailer_type : ""), { 1: "single axle", 2: "tandem" }[d.axles] || (d.axles ? d.axles + " axles" : ""),
+  const kind = d.trailer_type === "deckover" && d.width_ft && d.width_ft < 8 ? "equipment" : d.trailer_type;   // 83" is between the fenders
+  return [dims + (kind ? " " + kind : ""), { 1: "single axle", 2: "tandem" }[d.axles] || (d.axles ? d.axles + " axles" : ""),
     d.gvwr_lb ? d.gvwr_lb.toLocaleString() + " lb" : "", d.brakes === 1 ? "brakes" : ""].filter(x => x.trim()).join(" · ") || null;
 }
 let TOW = 12700;
@@ -553,7 +560,7 @@ function fitTag(d) {
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
     d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
-    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt ? d.miles.toLocaleString() + " mi" : null,
+    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt && d.category !== "trailer" ? d.miles.toLocaleString() + " mi" : null,
     d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : d.distance != null ? `${d.distance} mi away` : null,
     d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen)]

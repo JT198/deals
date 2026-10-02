@@ -259,6 +259,10 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Full scan</b> every 20 minutes, 6am-11pm: all searches on Craigslist; on Facebook about 32 searches per scan,
         most-overdue first - 4-seat UTV, mower and trailer searches roughly every 40 minutes, ATVs, 2-seat UTVs and
         3-wheelers hourly, jet skis and snowmobiles every 90 minutes.</li>
+      <li><b>Facebook route</b> (Setup): the finder reaches Facebook from your home IP by default. If you add a VPN
+        provider's proxy, "Auto" switches Facebook traffic to it while the home IP is blocked and back when the block
+        lifts; Craigslist and everything else always use the home network. The header says when Facebook is paused
+        or going via the proxy.</li>
       <li><b>⚡ Fast lane</b> every 10 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 10-20 minutes after it's posted.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
@@ -820,6 +824,13 @@ async function renderSetup() {
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
       <option value="0" ${v.alert_private_only !== "1" ? "selected" : ""}>Private and dealers</option></select></label>
     <label>Truck towing capacity (lb)<input name="tow_capacity_lb" type="number" step="100" value="${esc(v.tow_capacity_lb)}"><span class="hint">2024 F-150 PowerBoost max is ~12,700; your exact number is on the door-jamb sticker</span></label>
+    <label>Facebook route<select name="fb_route"><option value="auto" ${v.fb_route === "auto" ? "selected" : ""}>Auto: home IP, proxy while home is blocked</option>
+      <option value="home" ${v.fb_route === "home" ? "selected" : ""}>Home IP only</option>
+      <option value="proxy" ${v.fb_route === "proxy" ? "selected" : ""}>VPN proxy only</option></select></label>
+    <label class="wide">Facebook proxy<input name="fb_proxy" value="${esc(v.fb_proxy)}" placeholder="http://user:password@proxy.example.com:port" autocomplete="off">
+      <span class="hint">A VPN provider's HTTP proxy (TorGuard works as-is). Used only for Facebook; the password is never shown again once saved.
+        <button class="btn" type="button" id="fbtest-home">Test home</button> <button class="btn" type="button" id="fbtest-proxy">Test proxy</button>
+        <span id="fbtest-msg"></span></span></label>
     <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
   </div>
   <h2 style="margin-top:16px">Alerts by category</h2>
@@ -843,6 +854,13 @@ async function renderSetup() {
   <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Type</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
     ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.source === "quick" ? "⚡ fast" : "full"}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;
+  for (const r of ["home", "proxy"]) $("#fbtest-" + r).onclick = async () => {
+    $("#fbtest-msg").textContent = `Testing Facebook via ${r === "home" ? "home IP" : "proxy"}… (30-60 s; save the proxy first)`;
+    try { const t = await api("/api/fbtest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ route: r }) });
+      $("#fbtest-msg").textContent = t.ok ? `✓ ${r}: search returned ${t.items} listings, listing page ${t.item_page} (${t.seconds}s)`
+        : `✗ ${r}: ${t.error || (t.items === 0 ? "search returned nothing - Facebook is blocking this route" : "failed")}${t.item_page ? "; listing page " + t.item_page : ""}`;
+    } catch (e) { $("#fbtest-msg").textContent = "Test failed: " + e.message; }
+  };
   $("#savebtn").onclick = async () => {
     const body = {};
     document.querySelectorAll("#setform [name]").forEach(i => {
@@ -973,7 +991,10 @@ async function status() {
   const last = st.runs.find(r => r.finished);
   const hour = DATA.filter(d => !d.hidden && listedAt(d) >= Date.now() / 1000 - 3600).length;
   const fresh = DATA.filter(d => !d.hidden && isNew(d)).length;
-  $("#statusline").innerHTML = `${st.counts.live ?? 0} live listings` +
+  const fb = st.facebook || {};
+  const fbNote = !fb.route ? ` · <span class="over">Facebook paused until ${fb.paused_until ? new Date(fb.paused_until * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "?"}</span>`
+    : fb.route === "proxy" ? " · Facebook via VPN proxy" : "";
+  $("#statusline").innerHTML = `${st.counts.live ?? 0} live listings` + fbNote +
     (last ? ` · last scan ${ago(last.finished)}` : " · no scans yet") +
     ` · <a class="pill ${QUICK === "1h" ? "on" : ""}" data-age="1h">${hour} listed in the last hour</a>` +
     (fresh ? ` · <a class="pill ${QUICK === "visit" ? "on" : ""}" data-age="visit">${fresh} new since your last visit</a>` : "") +

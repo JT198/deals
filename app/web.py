@@ -10,13 +10,15 @@ import re
 import time
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import db, geo, score
+from . import db, geo, scan, score
+from .sources.facebook import proxy_config
 from .categories import CATEGORIES, FAMILY_CATEGORY
 from .equipment import APPLIES
 from .parse import OLLAMA_MODEL, OLLAMA_URL
@@ -357,6 +359,7 @@ def categories():
 def get_settings():
     con = db.connect()
     st = db.settings(con)
+    st["fb_proxy"] = _mask_proxy(st.get("fb_proxy") or "")
     return {"settings": st, "alert_rules": db.alert_rules(st),
             "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
@@ -365,7 +368,7 @@ def get_settings():
 NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "tow_capacity_lb": (0, 40000, True),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
            "home_lat": (-90, 90, False), "home_lon": (-180, 180, False), "home_zip": (501, 99950, False)}
-EDITABLE = {"tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
+EDITABLE = {"fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
 
@@ -388,6 +391,17 @@ def put_settings(body: dict = Body(...)):
                 if not lo <= f <= hi:
                     raise HTTPException(400, f"{k} must be between {lo} and {hi}")
                 v = str(int(f)) if k not in ("home_lat", "home_lon") else sv
+        if k == "fb_route" and v not in ("home", "proxy", "auto"):
+            raise HTTPException(400, "fb_route must be home, proxy or auto")
+        if k == "fb_proxy":
+            v = str(v or "").strip()
+            if MASK in v:          # the masked value came back unchanged: keep what we have
+                continue
+            if v:
+                try:
+                    proxy_config(v)
+                except ValueError as e:
+                    raise HTTPException(400, str(e))
         if k == "active_hours" and not re.fullmatch(r"\d{1,2}-\d{1,2}", str(v).strip()):
             raise HTTPException(400, "active_hours looks like 6-23")
         if k == "alert_rules":
@@ -446,7 +460,39 @@ def status():
                          SUM(relevant = 1 AND status IN ('active','pending')) live,
                          SUM(parsed = 0) unparsed FROM listings""").fetchone()
     running = _scanning()
-    return {"runs": runs, "counts": dict(c), "scanning": running}
+    st = db.settings(con)
+    now = db.now()
+    route, until = scan.fb_pick_route(st, now)
+    fb = {"route": route, "paused_until": until or None, "proxy_configured": bool((st.get("fb_proxy") or "").strip()),
+          "mode": st.get("fb_route") or "auto",
+          "pauses": {r: int(st.get(f"fb_backoff_until:{r}") or 0) for r in ("home", "proxy")
+                     if int(st.get(f"fb_backoff_until:{r}") or 0) > now}}
+    return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb}
+
+
+MASK = "********"
+
+
+def _mask_proxy(url: str) -> str:
+    """Never send the proxy password to the browser; a saved value comes back as http://user:********@host:port."""
+    m = re.match(r"^(\w+://[^:@/]+:)([^@]*)(@.*)$", url)
+    return f"{m.group(1)}{MASK}{m.group(3)}" if m and m.group(2) else url
+
+
+@app.post("/api/fbtest")
+def fbtest(body: dict = Body(...)):
+    """Try Facebook through one route right now (a real search + one listing page; ~30-60 s)."""
+    route = body.get("route")
+    if route not in ("home", "proxy"):
+        raise HTTPException(400, "route must be home or proxy")
+    try:
+        r = subprocess.run([sys.executable, "-m", "app.fbcheck", "--route", route], capture_output=True, text=True,
+                           timeout=150, cwd=str(Path(__file__).resolve().parent.parent))
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except subprocess.TimeoutExpired:
+        return {"route": route, "ok": False, "error": "timed out after 150 s"}
+    except (ValueError, IndexError):
+        return {"route": route, "ok": False, "error": (r.stderr or "no output")[-300:]}
 
 
 _SCAN_STATE = {"t": 0.0, "v": False}

@@ -90,6 +90,8 @@ DEFAULT_SETTINGS = {
     "home_lon": "-93.4900",
     "radius_mi": "100",
     "fb_location": "plymouth-mn",  # FB marketplace city slug; radius is applied around it
+    "fb_proxy": "",                # http://user:pass@host:port - a VPN provider's proxy, used for Facebook only
+    "fb_route": "auto",            # home | proxy | auto (home first, proxy while home is blocked)
     "alert_threshold": "75",
     "alert_private_only": "1",
     "max_price": "",
@@ -162,6 +164,11 @@ def init() -> None:
             con.execute("INSERT INTO alert_log VALUES (?, ?, ?, 'seed', ?)", (r["id"], title_key(r["title"]), r["p"], r["first_seen"]))
     for k, v in DEFAULT_SETTINGS.items():
         con.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
+    for old in ("fb_backoff_until", "fb_backoff_level"):      # pre-route keys -> the home route
+        row = con.execute("SELECT value FROM settings WHERE key = ?", (old,)).fetchone()
+        if row:
+            con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (old + ":home", row[0]))
+            con.execute("DELETE FROM settings WHERE key = ?", (old,))
     seeded = int(con.execute("SELECT value FROM settings WHERE key='seed_version'").fetchone()[0])
     if seeded < SEED_VERSION or con.execute("SELECT COUNT(*) FROM searches").fetchone()[0] == 0:
         for cat, c in CATEGORIES.items():

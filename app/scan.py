@@ -156,20 +156,48 @@ async def acquire_fb_lock(wait_secs: int):
             await asyncio.sleep(5)
 
 
-def fb_backoff(con, st, walled: bool, fb_found: int) -> str | None:
-    """Facebook answered every search with nothing: it is blocking this IP. Stop hitting it for a while
-    (2 h, then 4, then 8 if it keeps happening); a good run afterwards resets the ladder."""
-    level = int(st.get("fb_backoff_level") or 0)
+ROUTE_LABEL = {"home": "home IP", "proxy": "VPN proxy"}
+
+
+def fb_routes(st) -> list[str]:
+    """Which ways to reach Facebook, in order of preference."""
+    mode = st.get("fb_route") or "auto"
+    proxy = bool((st.get("fb_proxy") or "").strip())
+    if mode == "proxy":
+        return ["proxy"] if proxy else ["home"]
+    if mode == "home" or not proxy:
+        return ["home"]
+    return ["home", "proxy"]
+
+
+def fb_pick_route(st, now: int) -> tuple[str | None, int]:
+    """First route that isn't paused, or (None, when the earliest pause ends)."""
+    soonest = 0
+    for r in fb_routes(st):
+        until = int(st.get(f"fb_backoff_until:{r}") or 0)
+        if until <= now:
+            return r, 0
+        soonest = until if not soonest else min(soonest, until)
+    return None, soonest
+
+
+def fb_backoff(con, st, walled: bool, fb_found: int, route: str = "home") -> str | None:
+    """Facebook answered every search with nothing: it is blocking this route's IP. Stop using that route
+    for a while (2 h, then 4, then 8 if it keeps happening); a good run on it resets the ladder."""
+    level = int(st.get(f"fb_backoff_level:{route}") or 0)
     if walled:
         level = min(level + 1, len(FB_BACKOFF_HOURS))
         hours = FB_BACKOFF_HOURS[level - 1]
         until = db.now() + hours * 3600
         con.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
-                        [("fb_backoff_until", str(until)), ("fb_backoff_level", str(level))])
+                        [(f"fb_backoff_until:{route}", str(until)), (f"fb_backoff_level:{route}", str(level))])
         con.commit()
-        return f"pausing Facebook for {hours} h (until {time.strftime('%H:%M', time.localtime(until))}); Craigslist continues"
+        others = [r for r in fb_routes(st) if r != route and int(st.get(f"fb_backoff_until:{r}") or 0) <= db.now()]
+        nxt = f"; switching to the {ROUTE_LABEL[others[0]]}" if others else "; Craigslist continues"
+        return (f"pausing Facebook via {ROUTE_LABEL[route]} for {hours} h "
+                f"(until {time.strftime('%H:%M', time.localtime(until))}){nxt}")
     if fb_found > 0 and level:
-        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_backoff_level', '0')")
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, '0')", (f"fb_backoff_level:{route}",))
         con.commit()
     return None
 
@@ -206,8 +234,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         "SELECT * FROM searches WHERE enabled = 1" + (" AND quick = 1" if quick else ""))]
     random.shuffle(searches)
     t0 = db.now()
-    fb_until = int(st.get("fb_backoff_until") or 0)
-    fb_paused = fb_until > t0
+    fb_route, fb_until = fb_pick_route(st, t0)
+    fb_paused = fb_route is None
     if sold:
         due = searches          # every search, Facebook only, Sold filter
     elif quick:
@@ -252,12 +280,14 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         fb_lock = await acquire_fb_lock(60 if quick else 900)
         if fb_paused:
             errors.append(f"facebook paused until {time.strftime('%H:%M', time.localtime(fb_until))} after it blocked us")
+        elif fb_route == "proxy":
+            print("facebook via the VPN proxy this run")
         elif fb_lock is None:
             errors.append("facebook busy with another scan lane - skipped this run")
         try:
             if fb_paused or fb_lock is None:
                 raise SkipFacebook
-            async with async_playwright() as pw, Facebook(pw) as fb:
+            async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None) as fb:
                 empty = 0
                 for srch in due:
                     q = srch["query"]
@@ -315,7 +345,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         finally:
             if fb_lock:
                 fb_lock.close()
-        msg = fb_backoff(con, st, walled=any("login wall" in e for e in errors), fb_found=fb_found)
+        msg = fb_backoff(con, st, walled=any("login wall" in e for e in errors), fb_found=fb_found, route=fb_route or "home")
         if msg:
             errors.append(msg)
 

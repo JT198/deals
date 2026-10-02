@@ -68,14 +68,30 @@ def search_url(location: str, query: str, radius_mi: int, sort: str = "newest", 
             f"&exact=false" + ("&availability=out%20of%20stock" if sold else ""))
 
 
+def proxy_config(url: str | None) -> dict | None:
+    """'http://user:pass@host:port' -> Playwright's proxy option. http/https proxies with a password work
+    natively; socks5 with a password does NOT (Chromium limitation) - put a local forwarder in front."""
+    if not url:
+        return None
+    from urllib.parse import urlsplit, unquote
+    u = urlsplit(url.strip())
+    if u.scheme not in ("http", "https", "socks5") or not u.hostname:
+        raise ValueError("proxy must look like http://user:pass@host:port")
+    cfg = {"server": f"{u.scheme}://{u.hostname}:{u.port or (1080 if u.scheme == 'socks5' else 8080)}"}
+    if u.username:
+        cfg["username"], cfg["password"] = unquote(u.username), unquote(u.password or "")
+    return cfg
+
+
 class Facebook:
-    def __init__(self, pw):
+    def __init__(self, pw, proxy: str | None = None):
         self.pw = pw
+        self.proxy = proxy_config(proxy)
         self.browser = None
         self.ctx = None
 
     async def __aenter__(self):
-        self.browser = await self.pw.chromium.launch(args=["--no-sandbox"])
+        self.browser = await self.pw.chromium.launch(args=["--no-sandbox"], proxy=self.proxy)
         self.ctx = await self.browser.new_context(
             user_agent=UA, viewport={"width": 1300, "height": 900}, locale="en-US",
             timezone_id="America/Chicago")

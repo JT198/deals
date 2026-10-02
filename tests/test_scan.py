@@ -758,13 +758,42 @@ def test_facebook_backoff_ladder():
     st = db.settings(con)
     msg = scan.fb_backoff(con, st, walled=True, fb_found=0)
     st = db.settings(con)
-    assert msg.startswith("pausing Facebook for 2 h") and st["fb_backoff_level"] == "1"
-    assert int(st["fb_backoff_until"]) - db.now() > 7000
+    assert msg.startswith("pausing Facebook via home IP for 2 h") and st["fb_backoff_level:home"] == "1"
+    assert int(st["fb_backoff_until:home"]) - db.now() > 7000
     scan.fb_backoff(con, st, walled=True, fb_found=0); st = db.settings(con)
-    assert st["fb_backoff_level"] == "2" and int(st["fb_backoff_until"]) - db.now() > 14000     # 4 h
+    assert st["fb_backoff_level:home"] == "2" and int(st["fb_backoff_until:home"]) - db.now() > 14000     # 4 h
     scan.fb_backoff(con, st, walled=False, fb_found=12); st = db.settings(con)
-    assert st["fb_backoff_level"] == "0"                                                         # good run resets
+    assert st["fb_backoff_level:home"] == "0"                                                             # good run resets
     assert scan.fb_backoff(con, st, walled=False, fb_found=0) is None
+
+
+def test_facebook_routes_and_proxy():
+    from app.sources.facebook import proxy_config
+    from app import web
+    assert proxy_config("http://jon:s3cret@proxy.torguard.org:6060") == {"server": "http://proxy.torguard.org:6060", "username": "jon", "password": "s3cret"}
+    assert proxy_config("") is None and proxy_config("socks5://h:1080") == {"server": "socks5://h:1080"}
+    try:
+        proxy_config("ftp://x"); assert False
+    except ValueError:
+        pass
+    assert web._mask_proxy("http://jon:s3cret@h:1") == "http://jon:********@h:1" and web._mask_proxy("http://h:1") == "http://h:1"
+    now = db.now()
+    assert scan.fb_routes({"fb_route": "auto", "fb_proxy": ""}) == ["home"]
+    assert scan.fb_routes({"fb_route": "auto", "fb_proxy": "http://u:p@h:1"}) == ["home", "proxy"]
+    assert scan.fb_routes({"fb_route": "proxy", "fb_proxy": ""}) == ["home"]              # nothing configured: fall back
+    st = {"fb_route": "auto", "fb_proxy": "http://u:p@h:1", "fb_backoff_until:home": str(now + 3600)}
+    assert scan.fb_pick_route(st, now) == ("proxy", 0)                                     # home blocked -> proxy
+    st["fb_backoff_until:proxy"] = str(now + 7200)
+    assert scan.fb_pick_route(st, now) == (None, now + 3600)                               # both blocked -> wait for soonest
+    con = reset([])
+    c = client()
+    assert c.put("/api/settings", json={"fb_proxy": "nonsense"}).status_code == 400
+    assert c.put("/api/settings", json={"fb_proxy": "http://jon:s3cret@h:1", "fb_route": "auto"}).status_code == 200
+    assert c.get("/api/settings").json()["settings"]["fb_proxy"] == "http://jon:********@h:1"
+    c.put("/api/settings", json={"fb_proxy": "http://jon:********@h:1"})                 # masked value echoed back: unchanged
+    assert db.settings(db.connect())["fb_proxy"] == "http://jon:s3cret@h:1"
+    msg = scan.fb_backoff(con, db.settings(db.connect()), walled=True, fb_found=0, route="home")
+    assert "via home IP" in msg and "switching to the VPN proxy" in msg, msg
 
 
 def test_facebook_lock_is_exclusive():

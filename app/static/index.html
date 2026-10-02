@@ -857,7 +857,7 @@ async function renderSetup() {
   for (const r of ["home", "proxy"]) $("#fbtest-" + r).onclick = async () => {
     $("#fbtest-msg").textContent = `Testing Facebook via ${r === "home" ? "home IP" : "proxy"}… (30-60 s; save the proxy first)`;
     try { const t = await api("/api/fbtest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ route: r }) });
-      $("#fbtest-msg").textContent = t.ok ? `✓ ${r}: search returned ${t.items} listings, listing page ${t.item_page} (${t.seconds}s)`
+      $("#fbtest-msg").textContent = t.ok ? `✓ ${r}: search returned ${t.items} listings, listing page ${t.item_page} (${t.seconds}s)${t.pause_lifted ? " - pause lifted, scanning resumes" : ""}`
         : `✗ ${r}: ${t.error || (t.items === 0 ? "search returned nothing - Facebook is blocking this route" : "failed")}${t.item_page ? "; listing page " + t.item_page : ""}`;
     } catch (e) { $("#fbtest-msg").textContent = "Test failed: " + e.message; }
   };

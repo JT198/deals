@@ -488,7 +488,13 @@ def fbtest(body: dict = Body(...)):
     try:
         r = subprocess.run([sys.executable, "-m", "app.fbcheck", "--route", route], capture_output=True, text=True,
                            timeout=150, cwd=str(Path(__file__).resolve().parent.parent))
-        return json.loads(r.stdout.strip().splitlines()[-1])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        if out.get("ok"):      # Facebook is answering on this route again: no reason to keep waiting
+            con = db.connect()
+            con.execute("DELETE FROM settings WHERE key = ?", (f"fb_backoff_until:{route}",))
+            con.commit()
+            out["pause_lifted"] = True
+        return out
     except subprocess.TimeoutExpired:
         return {"route": route, "ok": False, "error": "timed out after 150 s"}
     except (ValueError, IndexError):

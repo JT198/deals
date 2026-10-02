@@ -33,10 +33,11 @@ MAX_FRESH_PER_RUN = 8
 LOCK_DIR = os.path.join(os.path.dirname(db.DB_PATH), "locks")
 ALERT_LOCK = os.path.join(LOCK_DIR, "alert.lock")
 PROBLEM_ALERT_EVERY = 6 * 3600   # Telegram "scanner has a problem" at most this often
-FB_SEARCHES_PER_RUN = 32      # ~8-12 min of searching; keeps a run inside the 20-minute timer slot
+FB_SEARCHES_PER_RUN = 20      # ~5 min of searching; keep Facebook traffic modest (it blocks heavy IPs)
+FB_BACKOFF_HOURS = (2, 4, 8)  # pause all Facebook traffic this long after it returns nothing; escalates on repeats
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
-FB_RECHECKS_PER_RUN = 10
+FB_RECHECKS_PER_RUN = 6
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
 PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
@@ -104,8 +105,8 @@ def apply_detail(con, lid, d: dict | None, old_price):
 
 
 HOT_SCORE = 60                # listings worth showing get re-checked every HOT_RECHECK_SECS
-HOT_RECHECK_SECS = 3 * 3600
-HOT_RECHECKS_PER_RUN = 10
+HOT_RECHECK_SECS = 6 * 3600
+HOT_RECHECKS_PER_RUN = 6
 
 
 def recheck_candidates(con) -> list:
@@ -133,6 +134,44 @@ def recheck_candidates(con) -> list:
                 seen.add(r["id"])
                 out.append(r)
     return out
+
+
+class SkipFacebook(Exception):
+    """Facebook is paused or another lane has the browser - skip this run's Facebook work."""
+
+
+async def acquire_fb_lock(wait_secs: int):
+    """Only one scan lane talks to Facebook at a time. Returns the open lock file, or None after wait_secs."""
+    os.makedirs(LOCK_DIR, exist_ok=True)
+    f = open(os.path.join(LOCK_DIR, "facebook.lock"), "w")
+    deadline = time.time() + wait_secs
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except BlockingIOError:
+            if time.time() >= deadline:
+                f.close()
+                return None
+            await asyncio.sleep(5)
+
+
+def fb_backoff(con, st, walled: bool, fb_found: int) -> str | None:
+    """Facebook answered every search with nothing: it is blocking this IP. Stop hitting it for a while
+    (2 h, then 4, then 8 if it keeps happening); a good run afterwards resets the ladder."""
+    level = int(st.get("fb_backoff_level") or 0)
+    if walled:
+        level = min(level + 1, len(FB_BACKOFF_HOURS))
+        hours = FB_BACKOFF_HOURS[level - 1]
+        until = db.now() + hours * 3600
+        con.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                        [("fb_backoff_until", str(until)), ("fb_backoff_level", str(level))])
+        con.commit()
+        return f"pausing Facebook for {hours} h (until {time.strftime('%H:%M', time.localtime(until))}); Craigslist continues"
+    if fb_found > 0 and level:
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_backoff_level', '0')")
+        con.commit()
+    return None
 
 
 def record_miss(con, lid):
@@ -167,6 +206,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         "SELECT * FROM searches WHERE enabled = 1" + (" AND quick = 1" if quick else ""))]
     random.shuffle(searches)
     t0 = db.now()
+    fb_until = int(st.get("fb_backoff_until") or 0)
+    fb_paused = fb_until > t0
     if sold:
         due = searches          # every search, Facebook only, Sold filter
     elif quick:
@@ -206,8 +247,16 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 errors.append(f"cl '{q}': {e}")
             await asyncio.sleep(random.uniform(1.5, 3))
 
-        # --- Facebook search + item pages
+        # --- Facebook search + item pages (one browser at a time across the scan lanes)
+        fb_found = 0
+        fb_lock = await acquire_fb_lock(60 if quick else 900)
+        if fb_paused:
+            errors.append(f"facebook paused until {time.strftime('%H:%M', time.localtime(fb_until))} after it blocked us")
+        elif fb_lock is None:
+            errors.append("facebook busy with another scan lane - skipped this run")
         try:
+            if fb_paused or fb_lock is None:
+                raise SkipFacebook
             async with async_playwright() as pw, Facebook(pw) as fb:
                 empty = 0
                 for srch in due:
@@ -219,6 +268,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                         if sold:     # the Sold filter can include a stray available item - keep only sold ones
                             items = [i for i in items if i["status"] == "sold"]
                         found += len(items)
+                        fb_found += len(items)
                         empty += not items
                         new += sum(upsert(con, "facebook", i) for i in items)
                         if not sold:
@@ -250,7 +300,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                             con.commit()
                     except Exception as e:
                         errors.append(f"fb detail {r['ext_id']}: {e}")
-                    await asyncio.sleep(random.uniform(1, 3))
+                    await asyncio.sleep(random.uniform(3, 6))
                 if missed and ok == 0 and len(missed) >= 3:
                     # every page failed: FB is walling us, not a batch of removed listings
                     errors.append(f"facebook item pages unreadable ({len(missed)}/{len(todo)}) - login wall?")
@@ -258,8 +308,16 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                     for lid in missed:
                         record_miss(con, lid)
                     con.commit()
+        except SkipFacebook:
+            pass
         except Exception as e:
             errors.append(f"facebook: {e}")
+        finally:
+            if fb_lock:
+                fb_lock.close()
+        msg = fb_backoff(con, st, walled=any("login wall" in e for e in errors), fb_found=fb_found)
+        if msg:
+            errors.append(msg)
 
         # --- Craigslist posting pages (new ones, plus every starred one on full scans)
         cl_todo = con.execute(
@@ -340,10 +398,10 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     print(f"found={found} new={new} alerts={alerts} errors={len(errors)}")
     for e in errors[:10]:
         print("  !", e)
-    serious = [e for e in errors if "login wall" in e or "Ollama down" in e]
+    serious = [e for e in errors if "login wall" in e or "Ollama down" in e or e.startswith("pausing Facebook")]
     if serious and not quiet:
         async with httpx.AsyncClient(timeout=30) as http:
-            await problem_alert(con, http, mode, serious[0])
+            await problem_alert(con, http, mode, "; ".join(serious))
 
 
 async def problem_alert(con, http, mode: str, what: str) -> None:

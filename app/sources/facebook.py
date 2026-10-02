@@ -168,4 +168,4 @@ class Facebook:
 
 
 async def pause():
-    await asyncio.sleep(random.uniform(3, 8))
+    await asyncio.sleep(random.uniform(5, 12))

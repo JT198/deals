@@ -753,6 +753,30 @@ def test_trailer_new_price_ceiling_and_weight_class():
     assert r["new_price"] in (4795, 4995) and r["score"] <= 50 and "price of a new one" in r["reasons"], dict(r)
 
 
+def test_facebook_backoff_ladder():
+    con = reset([])
+    st = db.settings(con)
+    msg = scan.fb_backoff(con, st, walled=True, fb_found=0)
+    st = db.settings(con)
+    assert msg.startswith("pausing Facebook for 2 h") and st["fb_backoff_level"] == "1"
+    assert int(st["fb_backoff_until"]) - db.now() > 7000
+    scan.fb_backoff(con, st, walled=True, fb_found=0); st = db.settings(con)
+    assert st["fb_backoff_level"] == "2" and int(st["fb_backoff_until"]) - db.now() > 14000     # 4 h
+    scan.fb_backoff(con, st, walled=False, fb_found=12); st = db.settings(con)
+    assert st["fb_backoff_level"] == "0"                                                         # good run resets
+    assert scan.fb_backoff(con, st, walled=False, fb_found=0) is None
+
+
+def test_facebook_lock_is_exclusive():
+    async def go():
+        a = await scan.acquire_fb_lock(1)
+        b = await scan.acquire_fb_lock(1)      # held by a -> None after the wait
+        a.close()
+        c = await scan.acquire_fb_lock(1)
+        return a is not None, b, c is not None
+    assert asyncio.run(go()) == (True, None, True)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

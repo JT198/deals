@@ -17,7 +17,7 @@ CATEGORIES = {
         "label": "4-seat UTVs", "emoji": "🚙",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
-        "cl_cat": "sna", "every_min": 40,
+        "cl_cat": "sna", "every_min": 60,
         "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
@@ -40,7 +40,7 @@ CATEGORIES = {
         "label": "2-seat UTVs", "emoji": "🛻",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
-        "cl_cat": "sna", "every_min": 60,
+        "cl_cat": "sna", "every_min": 120,
         "families": [
             "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP/Pro R (2-seat)", "RZR 900/570/Trail (2-seat)",
             "Ranger XP 1000/1500 (2-seat)", "Ranger 570/500 (2-seat)", "General 1000 (2-seat)",
@@ -58,7 +58,7 @@ CATEGORIES = {
         "label": "ATVs", "emoji": "🏍️",
         "dep": 0.07, "window": 1, "fit": True, "low_hpy": 40, "high_hpy": 150,
         "usage": {"miles": (-0.03, 1000), "hours": (-0.03, 100)},
-        "cl_cat": "sna", "every_min": 60,
+        "cl_cat": "sna", "every_min": 120,
         "families": [
             "Polaris Sportsman", "Polaris Scrambler", "Can-Am Outlander", "Can-Am Renegade",
             "Honda Foreman/Rubicon", "Honda Rancher", "Honda sport (TRX 250X/400EX/450R)",
@@ -76,7 +76,7 @@ CATEGORIES = {
         "label": "3-wheelers", "emoji": "🛺",
         "dep": 0.0, "window": 3, "fit": False, "low_hpy": 20, "high_hpy": 100,
         "usage": {},
-        "cl_cat": "sna", "every_min": 60,
+        "cl_cat": "sna", "every_min": 120,
         "families": [
             "Honda ATC 250R", "Honda ATC 200 series (200X/200S/200E/Big Red)",
             "Honda ATC 110/125/90/70 (small)", "Honda ATC 185/250ES/other",
@@ -88,7 +88,7 @@ CATEGORIES = {
         "label": "Zero-turn mowers", "emoji": "🌱",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 25, "high_hpy": 100,
         "usage": {"hours": (-0.04, 100)},
-        "cl_cat": "grd", "every_min": 40,
+        "cl_cat": "grd", "every_min": 60,
         "quick": ["zero turn", "zero turn mower"],   # also run by the 5-minute fast lane
         "families": [
             "Cub Cadet RZT S (steering wheel)", "Cub Cadet ZT1/ZT2 (lap bar)", "Cub Cadet Ultima ZT",
@@ -110,7 +110,7 @@ CATEGORIES = {
         "label": "Trailers", "emoji": "🚚",
         "dep": 0.04, "window": 2, "fit": True, "low_hpy": 0, "high_hpy": 10**9,
         "usage": {},
-        "cl_cat": "tra", "every_min": 40, "fit_gate": 85,
+        "cl_cat": "tra", "every_min": 60, "fit_gate": 85,
         "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
         "families": [
             "Enclosed cargo", "Enclosed car hauler (8.5 wide)", "Open utility (rails / mesh sides)",
@@ -127,7 +127,7 @@ CATEGORIES = {
         "label": "Jet skis", "emoji": "🌊",
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 60,
         "usage": {"hours": (-0.06, 100)},
-        "cl_cat": "boo", "every_min": 90,
+        "cl_cat": "boo", "every_min": 180,
         "families": [
             "Sea-Doo Spark", "Sea-Doo GTI/GTS", "Sea-Doo GTX/Wake/Explorer/FishPro (touring)",
             "Sea-Doo RXP/RXT (performance)", "Yamaha EX", "Yamaha VX", "Yamaha FX", "Yamaha GP/SuperJet",
@@ -142,7 +142,7 @@ CATEGORIES = {
         "label": "Snowmobiles", "emoji": "❄️",
         "dep": 0.09, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 80, "low_mpy": 700, "high_mpy": 2500,
         "usage": {"miles": (-0.04, 1000)},
-        "cl_cat": "sna", "every_min": 90,
+        "cl_cat": "sna", "every_min": 180,
         "families": [
             "Ski-Doo MXZ/Renegade/Backcountry (trail/crossover)", "Ski-Doo Summit/Freeride (mountain)",
             "Ski-Doo Expedition/Skandic/Grand Touring (utility/touring)",

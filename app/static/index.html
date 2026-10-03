@@ -667,7 +667,8 @@ function renderDeals() {
 }
 
 // ---------- Map view: the same filtered listings, colored by score ----------
-let VIEW = store.get("view", "cards"), MAP = null, MAPLAYER = null;
+let VIEW = store.get("view", "cards"), MAP = null, MAPLAYER = null, SETTINGS_RADIUS = null;
+api("/api/settings").then(s => SETTINGS_RADIUS = s.settings.radius_mi).catch(() => {});
 $("#view-cards").onclick = () => { VIEW = "cards"; store.set("view", VIEW); render(); };
 $("#view-map").onclick = () => { VIEW = "map"; store.set("view", VIEW); render(); };
 const dotColor = s => s >= 75 ? "#1a9850" : s >= 60 ? "#e6a100" : "#8a8a8a";
@@ -700,7 +701,11 @@ function renderMap(rows) {
     group.addLayer(m);
   }
   group.addTo(MAP);
-  if (pts.length) MAP.fitBounds(group.getBounds().pad(0.1), { maxZoom: 11 }); else MAP.setView(home, 8);
+  // open on the search radius; the few far-away listings are there if you zoom out
+  const radius = +(SETTINGS_RADIUS || 100), near = pts.filter(d => d.distance == null || d.distance <= radius + 10);
+  const fit = L.featureGroup(near.length ? group.getLayers().filter(m => { const ll = m.getLatLng();
+    return near.some(d => Math.abs(d.lat - ll.lat) < 0.05 && Math.abs(d.lon - ll.lng) < 0.05); }) : group.getLayers());
+  if (fit.getLayers().length) MAP.fitBounds(fit.getBounds().pad(0.08), { maxZoom: 11 }); else MAP.setView(home, 8);
 }
 
 const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["offer_aim","Aim to pay"],

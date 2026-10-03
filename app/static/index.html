@@ -685,8 +685,18 @@ function renderMap(rows) {
     <div id="map"></div>`;
   if (!window.L) { $("#map").innerHTML = '<div class="empty">Map library still loading - try again in a second.</div>'; return; }
   MAP = L.map("map", { preferCanvas: true });
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 18 }).addTo(MAP);
+  // Street tiles: OpenStreetMap first (identifying this site as the referrer - it blocks anonymous browser requests),
+  // Esri's street map as the fallback the moment OSM refuses a tile. The choice is remembered.
+  const TILES = {
+    osm: { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", opts: { maxZoom: 18, referrerPolicy: "origin",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' } },
+    esri: { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", opts: { maxZoom: 18,
+      attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors" } },
+  };
+  let provider = store.get("tiles", "osm");
+  const addTiles = name => { const t = TILES[name]; const layer = L.tileLayer(t.url, t.opts).addTo(MAP);
+    layer.on("tileerror", () => { if (name === "osm") { store.set("tiles", "esri"); MAP.removeLayer(layer); addTiles("esri"); } }); };
+  addTiles(provider);
   if (matchMedia("(prefers-color-scheme: dark)").matches) $("#map").classList.add("darkmap");
   const home = HOME || [45.04, -93.49];
   L.marker(home, { icon: L.divIcon({ className: "", html: '<div style="width:14px;height:14px;background:#2a78d6;border:2px solid #fff;border-radius:3px"></div>', iconSize: [14, 14] }) })

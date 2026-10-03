@@ -468,6 +468,20 @@ async def _send_alerts(con, http, st, quiet) -> int:
         d = geo.distance(r, home, places)
         return d is None or d <= radius + 10
 
+    min_pct = float(st.get("alert_min_pct") or 0) / 100
+    min_usd = float(st.get("alert_min_usd") or 0)
+
+    def enough_savings(r):
+        """A deal alert must be worth acting on: the discount against typical asking (or what similar
+        ones sell for, when that's lower) clears both the % and the $ floors from Setup."""
+        if not (min_pct or min_usd):
+            return True
+        ref = min(x for x in (r["expected"], r["expected_sold"]) if x) if (r["expected"] or r["expected_sold"]) else None
+        if not ref or not r["price"]:
+            return False
+        saving = ref - r["price"]
+        return saving >= min_usd and saving / ref >= min_pct
+
     def passes_limits(r):
         """Filters shared by both alert types; each type has its own on/off switch."""
         rule = rules.get(r["category"]) or {}
@@ -515,7 +529,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
         f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
               AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10) {private}
             ORDER BY score DESC""", (threshold,)).fetchall()
-        if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and first_copy(r)]
+        if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and enough_savings(r) and first_copy(r)]
 
     # "Just listed": fresh private listings priced normally or better with no known problems,
     # so Jon can message the seller first

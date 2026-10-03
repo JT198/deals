@@ -102,6 +102,8 @@ DEFAULT_SETTINGS = {
     "tow_capacity_lb": "12700",    # Jon's 2024 F-150 PowerBoost (max rating; see door-jamb sticker)
     "fresh_window_min": "120",     # "just listed" = posted within this many minutes
     "fresh_min_score": "50",       # ...and not overpriced / not red-flagged
+    "alert_min_pct": "0",          # deal alerts also need at least this % under typical (or sold) price...
+    "alert_min_usd": "0",          # ...and at least this many dollars of savings (a flip needs margin)
     "seed_version": "1",
 }
 

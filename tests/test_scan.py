@@ -796,6 +796,33 @@ def test_facebook_routes_and_proxy():
     assert "via home IP" in msg and "switching to the VPN proxy" in msg, msg
 
 
+def test_deal_alerts_need_enough_savings():
+    old = {"listed_at": db.now() - 3 * 3600}       # past the just-listed window, so only the deal path can send
+    con = reset([dict(old, score=85, price=2800, expected=3400),                          # 18% / $600 under: not worth a flip
+                 dict(old, id="facebook:1", ext_id="1", title="big", score=85, price=12000, expected=16500),  # 27% / $4,500
+                 dict(old, id="facebook:2", ext_id="2", title="sold", score=85, price=12000, expected=16500,
+                      expected_sold=13000)],                                                # sells for 13k: only $1,000 real savings
+                alert_min_pct="20", alert_min_usd="1500")
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:1"], SENT
+    con = reset([dict(old, score=85, price=2800, expected=3400)])                           # floors off: the old behaviour
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
+
+
+def test_listings_carry_map_points():
+    con = reset([{"lat": 45.1, "lon": -93.4, "location": "Anoka, MN"},
+                 {"id": "facebook:1", "ext_id": "1", "location": "Anoka, MN"},
+                 {"id": "facebook:2", "ext_id": "2", "location": "Nowhere, MN"}])
+    con.execute("INSERT OR REPLACE INTO geocache VALUES ('Anoka, MN', 45.1977, -93.3872)"); con.commit()
+    resp = client().get("/api/listings")
+    rows = {d["id"]: d for d in resp.json()}
+    assert (rows["facebook:0"]["lat"], rows["facebook:0"]["approx"]) == (45.1, False)       # own pin
+    assert (rows["facebook:1"]["lat"], rows["facebook:1"]["approx"]) == (45.1977, True)     # town
+    assert rows["facebook:2"]["lat"] is None
+    assert resp.headers["X-Home"].startswith("45.")
+
+
 def test_facebook_lock_is_exclusive():
     async def go():
         a = await scan.acquire_fb_lock(1)

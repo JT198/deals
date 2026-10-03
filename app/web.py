@@ -72,6 +72,15 @@ def _geo(con):
     def dist(row):
         d = geo.distance(row, (hlat, hlon), cache)
         return None if d is None else round(d)
+
+    def point(row):
+        """(lat, lon, approximate) for the map: the listing's own pin, else its town."""
+        if row.get("lat") is not None and row.get("lon") is not None:
+            return row["lat"], row["lon"], False
+        c = cache.get(geo.place_key(row.get("location")))
+        return (c[0], c[1], True) if c and c[0] is not None else (None, None, None)
+    dist.point = point
+    dist.home = (hlat, hlon)
     return dist
 
 
@@ -94,12 +103,14 @@ def listings(include_gone: int = 0, include_irrelevant: int = 0):
         where.append("status IN ('active','pending')")
     rows = con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {' AND '.join(where)}").fetchall()
     out = []
+    home = dist.home
     for r in rows:
         d = db.row_dict(r)
         d["distance"] = dist(d)
+        d["lat"], d["lon"], d["approx"] = dist.point(d)
         d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
         out.append(d)
-    return out
+    return JSONResponse(out, headers={"X-Home": f"{home[0]},{home[1]}"})
 
 
 @app.get("/api/search")
@@ -366,9 +377,10 @@ def get_settings():
 
 # key -> (min, max, blank allowed)
 NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "tow_capacity_lb": (0, 40000, True),
+           "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
            "home_lat": (-90, 90, False), "home_lon": (-180, 180, False), "home_zip": (501, 99950, False)}
-EDITABLE = {"fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
+EDITABLE = {"alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
 

@@ -6,6 +6,8 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Deal Finder</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚙</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 <style>
 :root {
   color-scheme: light;
@@ -129,6 +131,15 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
 .sc-val b { color: var(--text); }
 .verdict { font-size: 15px; font-weight: 600; margin: 2px 0 10px; }
 @media (max-width: 600px) { .sc-row { grid-template-columns: 100px 1fr; } .sc-val { grid-column: 1 / -1; margin-top: -4px; } }
+#map { height: min(72vh, 760px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.leaflet-container { font: inherit; }
+.leaflet-popup-content { font-size: 13px; line-height: 1.4; margin: 10px 12px; }
+.leaflet-popup-content b { font-size: 14px; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
+.maplegend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--text-2); font-size: 13px; margin: 8px 0; }
+.maplegend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; border: 1.5px solid #fff; }
+.viewtoggle { margin-left: auto; }
+.viewtoggle .btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 14px; }
 .sub a.pill.on { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; border-bottom: 0; }
@@ -218,6 +229,7 @@ td.t { white-space: normal; min-width: 240px; }
       <label><input id="f-private" type="checkbox"> Private only</label>
       <label><input id="f-star" type="checkbox"> Starred</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
+      <span class="viewtoggle"><button class="btn" id="view-cards">Cards</button> <button class="btn" id="view-map">Map</button></span>
     </div>
     <div class="chips" id="f-fams" style="margin:-4px 0 14px"></div>
   </section>
@@ -322,7 +334,10 @@ td.t { white-space: normal; min-width: 240px; }
 
     <h3>Telegram alerts</h3>
     <ul>
-      <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup (75). Sent again if the score
+      <li><b>Map</b> (Cards / Map toggle on Best deals): the listings your filters select, colored by score. Craigslist
+        listings sit at their exact map pin; Facebook only gives the town, so those sit at the town center (spread a little).</li>
+      <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup, and - if you set the savings
+        floors - at least that % and that many dollars under typical (or under what similar ones sell for, when lower). Sent again if the score
         jumps 10+ points (e.g. a price cut).</li>
       <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
         and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
@@ -644,8 +659,46 @@ function renderDeals() {
     newest: (a, b) => listedAt(b) - listedAt(a),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
+  $("#view-cards").classList.toggle("on", VIEW === "cards"); $("#view-map").classList.toggle("on", VIEW === "map");
+  if (VIEW === "map") { renderMap(rows); return; }
   $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
     : `<div class="empty">No listings match these filters yet.</div>`);
+}
+
+// ---------- Map view: the same filtered listings, colored by score ----------
+let VIEW = store.get("view", "cards"), MAP = null, MAPLAYER = null;
+$("#view-cards").onclick = () => { VIEW = "cards"; store.set("view", VIEW); render(); };
+$("#view-map").onclick = () => { VIEW = "map"; store.set("view", VIEW); render(); };
+const dotColor = s => s >= 75 ? "#1a9850" : s >= 60 ? "#e6a100" : "#8a8a8a";
+function jitter(id, k) {   // approximate (town-level) pins: spread them a little so a town doesn't stack into one dot
+  let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return (((h >> (k * 8)) & 255) / 255 - 0.5) * 0.03;
+}
+function renderMap(rows) {
+  const pts = rows.filter(d => d.lat != null);
+  $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) +
+    `<div class="maplegend"><span><i style="background:#1a9850"></i>Great (75+)</span><span><i style="background:#e6a100"></i>Good (60-74)</span>
+      <span><i style="background:#8a8a8a"></i>Other</span><span><i style="background:#2a78d6;border-radius:2px"></i>Home</span>
+      <span class="hint">${pts.length} of ${rows.length} on the map · Facebook listings sit at their town, Craigslist at the exact pin</span></div>
+    <div id="map"></div>`;
+  if (!window.L) { $("#map").innerHTML = '<div class="empty">Map library still loading - try again in a second.</div>'; return; }
+  MAP = L.map("map", { preferCanvas: true });
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/" + (matchMedia("(prefers-color-scheme: dark)").matches ? "dark_all" : "light_all") + "/{z}/{x}/{y}{r}.png",
+    { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>', maxZoom: 18 }).addTo(MAP);
+  const home = HOME || [45.04, -93.49];
+  L.marker(home, { icon: L.divIcon({ className: "", html: '<div style="width:14px;height:14px;background:#2a78d6;border:2px solid #fff;border-radius:3px"></div>', iconSize: [14, 14] }) })
+    .addTo(MAP).bindPopup("<b>Home</b>");
+  const group = L.featureGroup();
+  for (const d of pts) {
+    const lat = d.lat + (d.approx ? jitter(d.id, 0) : 0), lon = d.lon + (d.approx ? jitter(d.id, 1) : 0);
+    const m = L.circleMarker([lat, lon], { radius: d.score >= 75 ? 8 : 6, color: "#fff", weight: 1, fillColor: dotColor(d.score ?? 0), fillOpacity: 0.9 });
+    m.bindPopup(`<b>${esc(d.title)}</b><br>${money(d.price)}${d.expected ? ` · typical ${money(d.expected)}` : ""} · score ${d.score ?? "–"}<br>
+      ${esc(d.location || "")}${d.distance != null ? ` (${d.distance} mi)` : ""}${d.approx ? " · town only" : ""}<br>
+      <a href="${esc(d.url)}" target="_blank" rel="noopener">Open listing</a>`);
+    group.addLayer(m);
+  }
+  group.addTo(MAP);
+  if (pts.length) MAP.fitBounds(group.getBounds().pad(0.1), { maxZoom: 11 }); else MAP.setView(home, 8);
 }
 
 const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["offer_aim","Aim to pay"],
@@ -819,6 +872,8 @@ async function renderSetup() {
     <label>Radius (miles)<input name="radius_mi" type="number" value="${esc(v.radius_mi)}"><span class="hint">Used by the next scan</span></label>
     <label>Facebook city<input name="fb_location" value="${esc(v.fb_location)}"><span class="hint">Marketplace URL slug, e.g. minneapolis</span></label>
     <label>Deal alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
+    <label>...and at least this % under typical<input name="alert_min_pct" type="number" value="${esc(v.alert_min_pct)}"><span class="hint">0 = no floor. Against typical asking, or what similar ones sell for if lower</span></label>
+    <label>...and at least this many $ under<input name="alert_min_usd" type="number" step="100" value="${esc(v.alert_min_usd)}"><span class="hint">The margin a flip needs</span></label>
     <label>Just-listed alert window (minutes)<input name="fresh_window_min" type="number" value="${esc(v.fresh_window_min)}"><span class="hint">Only listings posted this recently</span></label>
     <label>Just-listed minimum score<input name="fresh_min_score" type="number" value="${esc(v.fresh_min_score)}"><span class="hint">50 = priced normally or better, no red flags</span></label>
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>
@@ -1027,7 +1082,10 @@ async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
   if (!CATS.some(c => c.key === CAT) && CAT !== "all") { CAT = "all"; store.set("cat", CAT); }
   try { TOW = +(await api("/api/settings")).settings.tow_capacity_lb || 0; } catch {}
-  DATA = await api("/api/listings"); catBar(); famChips(); render(); status(); markSeen(); }
+  const resp = await fetch("/api/listings"); if (!resp.ok) throw new Error(resp.status);
+  HOME = (resp.headers.get("X-Home") || "").split(",").map(Number); if (HOME.length !== 2 || HOME.some(isNaN)) HOME = null;
+  DATA = await resp.json(); catBar(); famChips(); render(); status(); markSeen(); }
+let HOME = null;
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { if (TAB === "market" && LAST_MARKET && $("#chart")) drawScatter($("#chart"), LAST_MARKET); }, 200); });

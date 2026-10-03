@@ -66,7 +66,7 @@ def upsert(con, source: str, item: dict) -> bool:
     con.execute(
         """UPDATE listings SET last_seen = ?, status = ?, title = ?, detail_misses = 0,
              seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END,
-             strike_price = COALESCE(?, strike_price), image = COALESCE(image, ?),
+             strike_price = COALESCE(?, strike_price), image = COALESCE(?, image),
              listed_at = COALESCE(listed_at, ?), location = COALESCE(location, ?)
            WHERE id = ?""",
         (t, status, item["title"], status, item.get("strike_price"), item.get("image"),

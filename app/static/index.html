@@ -133,6 +133,7 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
 @media (max-width: 600px) { .sc-row { grid-template-columns: 100px 1fr; } .sc-val { grid-column: 1 / -1; margin-top: -4px; } }
 #map { height: min(72vh, 760px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
 .leaflet-container { font: inherit; }
+.darkmap .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6); }   /* night version of the street map */
 .leaflet-popup-content { font-size: 13px; line-height: 1.4; margin: 10px 12px; }
 .leaflet-popup-content b { font-size: 14px; }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
@@ -683,8 +684,9 @@ function renderMap(rows) {
     <div id="map"></div>`;
   if (!window.L) { $("#map").innerHTML = '<div class="empty">Map library still loading - try again in a second.</div>'; return; }
   MAP = L.map("map", { preferCanvas: true });
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/" + (matchMedia("(prefers-color-scheme: dark)").matches ? "dark_all" : "light_all") + "/{z}/{x}/{y}{r}.png",
-    { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>', maxZoom: 18 }).addTo(MAP);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 18 }).addTo(MAP);
+  if (matchMedia("(prefers-color-scheme: dark)").matches) $("#map").classList.add("darkmap");
   const home = HOME || [45.04, -93.49];
   L.marker(home, { icon: L.divIcon({ className: "", html: '<div style="width:14px;height:14px;background:#2a78d6;border:2px solid #fff;border-radius:3px"></div>', iconSize: [14, 14] }) })
     .addTo(MAP).bindPopup("<b>Home</b>");

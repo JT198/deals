@@ -139,6 +139,12 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
 .maplegend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--text-2); font-size: 13px; margin: 8px 0; }
 .maplegend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; border: 1.5px solid #fff; }
+.maplegend { align-items: center; }
+.maplegend .chip { padding: 4px 10px; font-size: 13px; border-radius: 999px; }
+.maplegend .chip.off { opacity: .45; text-decoration: line-through; }
+.maplegend .chip b { font-weight: 600; margin-left: 3px; }
+.medot { width: 16px; height: 16px; background: #2a78d6; border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 0 0 rgba(42,120,214,.6); animation: mepulse 2s infinite; }
+@keyframes mepulse { 70% { box-shadow: 0 0 0 12px rgba(42,120,214,0); } 100% { box-shadow: 0 0 0 0 rgba(42,120,214,0); } }
 .viewtoggle { margin-left: auto; }
 .viewtoggle .btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .quickbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
@@ -336,7 +342,10 @@ td.t { white-space: normal; min-width: 240px; }
     <h3>Telegram alerts</h3>
     <ul>
       <li><b>Map</b> (Cards / Map toggle on Best deals): the listings your filters select, colored by score. Craigslist
-        listings sit at their exact map pin; Facebook only gives the town, so those sit at the town center (spread a little).</li>
+        listings sit at their exact map pin; Facebook only gives the town, so those sit at the town center (spread a little).
+        Tap <b>Great / Good / Other</b> above the map to hide or show that group (remembered on this device).
+        <b>📍 My location</b> puts a pulsing blue dot where you are (your browser asks permission once) and adds
+        "N mi from you" to each pin's popup; tap it again to stop. Only works on https://deals.alerolabs.ai, not the LAN address.</li>
       <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup, and - if you set the savings
         floors - at least that % and that many dollars under typical (or under what similar ones sell for, when lower). Sent again if the score
         jumps 10+ points (e.g. a price cut).</li>
@@ -667,7 +676,7 @@ function renderDeals() {
 }
 
 // ---------- Map view: the same filtered listings, colored by score ----------
-let VIEW = store.get("view", "cards"), MAP = null, MAPLAYER = null, SETTINGS_RADIUS = null;
+let VIEW = store.get("view", "cards"), MAP = null, SETTINGS_RADIUS = null;
 api("/api/settings").then(s => SETTINGS_RADIUS = s.settings.radius_mi).catch(() => {});
 $("#view-cards").onclick = () => { VIEW = "cards"; store.set("view", VIEW); render(); };
 $("#view-map").onclick = () => { VIEW = "map"; store.set("view", VIEW); render(); };
@@ -676,13 +685,62 @@ function jitter(id, k) {   // approximate (town-level) pins: spread them a littl
   let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return (((h >> (k * 8)) & 255) / 255 - 0.5) * 0.03;
 }
+const BANDS = [["great", "Great (75+)", "#1a9850"], ["good", "Good (60-74)", "#e6a100"], ["other", "Other", "#8a8a8a"]];
+const bandOf = s => s >= 75 ? "great" : s >= 60 ? "good" : "other";
+let MAPSHOW = store.get("mapbands", { great: true, good: true, other: true }), MAPVIEW = null;
+// "Where am I": browser GPS, kept across the 2-minute refresh. Needs https (works on deals.alerolabs.ai, not the LAN IP).
+let ME = null, MEWATCH = null, MEFOLLOW = false, MELAYER = null;
+const milesBetween = (a, b) => { const r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLon = (b[1] - a[1]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLon / 2) ** 2;
+  return 3958.8 * 2 * Math.asin(Math.sqrt(h)); };
+function drawMe() {
+  if (!MAP || !ME) return;
+  if (MELAYER) MELAYER.remove();
+  MELAYER = L.layerGroup([
+    L.circle(ME.ll, { radius: Math.min(ME.acc, 5000), color: "#2a78d6", weight: 1, fillOpacity: 0.08, interactive: false }),
+    L.marker(ME.ll, { icon: L.divIcon({ className: "", html: '<div class="medot"></div>', iconSize: [16, 16] }), zIndexOffset: 1000 })
+      .bindPopup(`<b>You are here</b><br>±${ME.acc < 1609 ? Math.round(ME.acc * 3.281) + " ft" : (ME.acc / 1609).toFixed(1) + " mi"}`),
+  ]).addTo(MAP);
+  if (MEFOLLOW) { MEFOLLOW = false; MAP.setView(ME.ll, Math.max(MAP.getZoom(), 10)); }
+}
+function locateMe() {
+  const btn = $("#map-me");
+  if (MEWATCH != null) {   // second tap = stop
+    navigator.geolocation.clearWatch(MEWATCH); MEWATCH = null; ME = null; if (MELAYER) MELAYER.remove(); MELAYER = null;
+    render(); return;
+  }
+  if (!navigator.geolocation || !window.isSecureContext) {
+    alert("Location needs the secure site - open https://deals.alerolabs.ai (the LAN address can't use GPS)."); return;
+  }
+  btn.textContent = "📍 Finding you…"; MEFOLLOW = true;
+  MEWATCH = navigator.geolocation.watchPosition(p => {
+    const first = !ME;
+    ME = { ll: [p.coords.latitude, p.coords.longitude], acc: p.coords.accuracy };
+    if (first) render(); else drawMe();   // first fix re-renders so popups get "mi from you"
+  }, err => {
+    navigator.geolocation.clearWatch(MEWATCH); MEWATCH = null; MEFOLLOW = false; render();
+    alert(err.code === 1 ? "Location is blocked for this site - allow it in your browser's site settings, then try again."
+      : "Couldn't get your location (" + err.message + ").");
+  }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 });
+}
 function renderMap(rows) {
   const pts = rows.filter(d => d.lat != null);
+  const n = { great: 0, good: 0, other: 0 }; pts.forEach(d => n[bandOf(d.score ?? 0)]++);
+  if (MAP) {   // keep the view across refreshes; a refresh landing mid-zoom would otherwise throw from Leaflet's zoom-end timer
+    MAPVIEW = { c: MAP.getCenter(), z: MAP._animatingZoom ? MAP._animateToZoom : MAP.getZoom() };
+    MAP._animatingZoom = false; MAP.remove(); MAP = null; MELAYER = null; }
   $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) +
-    `<div class="maplegend"><span><i style="background:#1a9850"></i>Great (75+)</span><span><i style="background:#e6a100"></i>Good (60-74)</span>
-      <span><i style="background:#8a8a8a"></i>Other</span><span><i style="background:#2a78d6;border-radius:2px"></i>Home</span>
-      <span class="hint">${pts.length} of ${rows.length} on the map · Facebook listings sit at their town, Craigslist at the exact pin</span></div>
+    `<div class="maplegend">${BANDS.map(([k, label, c]) => `<button class="btn chip${MAPSHOW[k] ? "" : " off"}" data-band="${k}"
+        title="Show / hide ${label}"><i style="background:${c}"></i>${label}<b>${n[k]}</b></button>`).join("")}
+      <button class="btn chip${MEWATCH != null ? " on primary" : ""}" id="map-me" title="Show where you are right now">📍 ${MEWATCH != null ? (ME ? "Following you" : "Finding you…") : "My location"}</button>
+      <span><i style="background:#2a78d6;border-radius:2px"></i>Home</span>
+      <span class="hint">${pts.filter(d => MAPSHOW[bandOf(d.score ?? 0)]).length} of ${rows.length} on the map · Facebook listings sit at their town, Craigslist at the exact pin</span></div>
     <div id="map"></div>`;
+  $("#tab-deals .maplegend").onclick = e => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.id === "map-me") return locateMe();
+    MAPSHOW = { ...MAPSHOW, [b.dataset.band]: !MAPSHOW[b.dataset.band] }; store.set("mapbands", MAPSHOW); render();
+  };
   if (!window.L) { $("#map").innerHTML = '<div class="empty">Map library still loading - try again in a second.</div>'; return; }
   MAP = L.map("map", { preferCanvas: true });
   // Street tiles: OpenStreetMap first (identifying this site as the referrer - it blocks anonymous browser requests),
@@ -701,18 +759,25 @@ function renderMap(rows) {
   const home = HOME || [45.04, -93.49];
   L.marker(home, { icon: L.divIcon({ className: "", html: '<div style="width:14px;height:14px;background:#2a78d6;border:2px solid #fff;border-radius:3px"></div>', iconSize: [14, 14] }) })
     .addTo(MAP).bindPopup("<b>Home</b>");
-  const group = L.featureGroup();
+  const group = L.featureGroup(), shown = [];
   for (const d of pts) {
+    if (!MAPSHOW[bandOf(d.score ?? 0)]) continue;
     const lat = d.lat + (d.approx ? jitter(d.id, 0) : 0), lon = d.lon + (d.approx ? jitter(d.id, 1) : 0);
     const m = L.circleMarker([lat, lon], { radius: d.score >= 75 ? 8 : 6, color: "#fff", weight: 1, fillColor: dotColor(d.score ?? 0), fillOpacity: 0.9 });
+    const fromMe = ME ? Math.round(milesBetween(ME.ll, [d.lat, d.lon])) : null;
     m.bindPopup(`<b>${esc(d.title)}</b><br>${money(d.price)}${d.expected ? ` · typical ${money(d.expected)}` : ""} · score ${d.score ?? "–"}<br>
-      ${esc(d.location || "")}${d.distance != null ? ` (${d.distance} mi)` : ""}${d.approx ? " · town only" : ""}<br>
+      ${esc(d.location || "")}${d.distance != null ? ` (${d.distance} mi from home)` : ""}${d.approx ? " · town only" : ""}<br>
+      ${fromMe != null ? `<b>${d.approx ? "~" : ""}${fromMe} mi from you</b> (straight line)<br>` : ""}
       <a href="${esc(d.url)}" target="_blank" rel="noopener">Open listing</a>`);
-    group.addLayer(m);
+    group.addLayer(m); shown.push(d);
   }
   group.addTo(MAP);
+  if (MAPVIEW) MAP.setView(MAPVIEW.c, MAPVIEW.z); else fitRadius(group, shown, home);
+  drawMe();
+}
+function fitRadius(group, shown, home) {
   // open on the search radius; the few far-away listings are there if you zoom out
-  const radius = +(SETTINGS_RADIUS || 100), near = pts.filter(d => d.distance == null || d.distance <= radius + 10);
+  const radius = +(SETTINGS_RADIUS || 100), near = shown.filter(d => d.distance == null || d.distance <= radius + 10);
   const fit = L.featureGroup(near.length ? group.getLayers().filter(m => { const ll = m.getLatLng();
     return near.some(d => Math.abs(d.lat - ll.lat) < 0.05 && Math.abs(d.lon - ll.lng) < 0.05); }) : group.getLayers());
   if (fit.getLayers().length) MAP.fitBounds(fit.getBounds().pad(0.08), { maxZoom: 11 }); else MAP.setView(home, 8);

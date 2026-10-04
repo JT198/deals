@@ -134,6 +134,11 @@ def _fit(comps):
 # ---- usage (miles / hours) --------------------------------------------------------------------
 USAGE_SHRINK = 15          # listings' worth of weight on the category prior
 USAGE_CLAMP = (0.6, 1.4)   # a single comp is never moved more than -40% / +40% for usage
+# With only a handful of same-year comps, their median is pulled toward the family's price-by-year trend:
+# weight on the near comps = n / (n + TREND_K). Stops a few cheap or loaded comps from pricing a 2022 below
+# a 2020 of the same model (Jon, 2026-10-04: X3 MAX 2022 typical $19.4k vs 2020 $20.7k).
+TREND_K = 10
+TREND_CAP = 0.12   # never moves the typical more than 12% either way
 
 
 def _usage_metric(listing, category):
@@ -246,6 +251,7 @@ def _expected_one(listing, comps_by_fam, effects=None):
                 return exp, len(pool), exp, f"priced per foot from {len(pool)} {fam.lower()} trailers of other sizes", exp
             return None, len(same_size), None, None, None
 
+    trend_note = None
     metric = _usage_metric(listing, cat)
     use = _v(listing, metric) if metric else None
     slope = usage_slope(others, metric, cat) if metric else 0.0
@@ -302,6 +308,21 @@ def _expected_one(listing, comps_by_fam, effects=None):
             typical_use = [u for _, u, _ in aligned if u is not None]
             typical_use = statistics.median(typical_use) if typical_use else None
             pool, n = near, len(near)
+            yrs = [x.year for x in dated]
+            # not for trailers (size, not age, sets the price), vintage families, or machines past ~12 years
+            # (old ones bottom out instead of following the exponential trend)
+            # ("Other ..." families mix unrelated models, so they have no real trend either)
+            if c["fit"] and cat != "trailer" and not fam.lower().startswith(("other", "vintage")) \
+                    and year >= NOW_YEAR - 12 and len(dated) > len(near) \
+                    and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1:
+                a, b = _fit(dated)
+                w = n / (n + TREND_K)
+                blended = w * base + (1 - w) * math.exp(a + b * year)
+                k = min(1 + TREND_CAP, max(1 - TREND_CAP, blended / base))
+                blended = base * k
+                if abs(k - 1) >= 0.02:
+                    trend_note = f"{n} same-age comps, leaned toward the {fam} price-by-year trend"
+                base, pre, exp = int(blended), int(pre * k), int(exp * k)
         else:
             yrs = [x.year for x in dated]
             if not (c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1):
@@ -315,7 +336,7 @@ def _expected_one(listing, comps_by_fam, effects=None):
         others = pool
 
     notes = [x for x in (_usage_note(use, typical_use, metric, pre, base),
-                         _equip_note(feats, shares(others), exp, pre)) if x]
+                         _equip_note(feats, shares(others), exp, pre), trend_note) if x]
     return exp, n, base, "; ".join(notes) or None, pre
 
 

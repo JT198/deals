@@ -833,6 +833,27 @@ def test_facebook_lock_is_exclusive():
     assert asyncio.run(go()) == (True, None, True)
 
 
+def test_thin_same_year_comps_follow_the_year_trend():
+    """Jon 2026-10-04: a 2022 Maverick X3 MAX got a lower typical than a 2020 because its 7 near comps were
+    mostly cheap 2023s, while the 2020 (only 3 near comps) was priced off the family's year trend."""
+    from app import score
+    comps = [(2020, 25000), (2021, 17000), (2021, 22499), (2022, 25500), (2023, 18700), (2023, 18995),
+             (2023, 21000), (2023, 24900), (2024, 25000), (2024, 31000), (2025, 29000), (2025, 33000), (2019, 16500)]
+    con = reset([{"id": f"facebook:m{i}", "ext_id": f"m{i}", "family": "Maverick X3 MAX", "year": y, "price": p}
+                 for i, (y, p) in enumerate(comps)])
+    c = score._comps(con)
+    row = {"id": "x", "family": "Maverick X3 MAX", "category": "utv4", "deck_in": None, "miles": None, "hours": None,
+           "equipment": "[]"}
+    t2020 = score.expected_price(dict(row, year=2020), c)
+    t2022 = score.expected_price(dict(row, year=2022), c)
+    assert t2022[0] >= t2020[0], (t2020, t2022)
+    assert "price-by-year trend" in (t2022[3] or ""), t2022
+    # vintage / trailer / "Other" families never lean on a trend
+    con.execute("UPDATE listings SET family = 'Other 4-seat UTV'"); con.commit()
+    other = score.expected_price(dict(row, family="Other 4-seat UTV", year=2022), score._comps(con))
+    assert "trend" not in (other[3] or ""), other
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

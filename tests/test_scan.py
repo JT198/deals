@@ -854,6 +854,36 @@ def test_thin_same_year_comps_follow_the_year_trend():
     assert "trend" not in (other[3] or ""), other
 
 
+def test_trim_levels():
+    from app.equipment import trim_level
+    t = lambda fam, title, desc="", trim=None: trim_level({"family": fam, "title": title, "description": desc, "trim": trim})
+    assert t("Maverick X3 MAX", "2021 Can-Am Maverick X3 MAX X RS Turbo RR") == "top_trim"
+    assert t("Maverick X3 MAX", "2022 Maverick X3 Max", "DS for sale, 2100 miles") == "base_trim"
+    assert t("Maverick X3 (2-seat)", "2023 Maverick X3 DS Turbo RR") is None          # RR: the middle
+    assert t("Maverick X3 MAX", "2022 Maverick X3 Max", "x" * 400 + " upgraded to x ds wheels") is None   # too deep
+    assert t("RZR Pro XP 4", "Polaris RZR Pro XP 4", "Valley Power and Sport, Rochester") is None
+    assert t("RZR Pro XP 4", "2024 Polaris RZR Pro XP 4 Sport") == "base_trim"
+    assert t("RZR Pro XP 4", "2024 Polaris pro xp 4", trim="Sport") == "base_trim"
+    assert t("Commander MAX", "2022 Commander MAX XT-P 1000R") == "top_trim"
+    assert t("Commander MAX", "2024 Commander MAX XT 1000R") == "base_trim"
+    assert t("Ranger Crew 1000", "Ranger Crew NorthStar Ultimate") is None            # cab editions = equipment
+
+
+def test_trim_moves_typical():
+    from app import score
+    con = reset([])
+    _family(con)
+    con.execute("UPDATE listings SET equipment = '[]'"); con.commit()
+    comps = score._comps(con)
+    eff = {"utv4": {"cab": 0.08, "heat": 0.05, "ac": 0.03, "plow": 600, "trailer": 1500, "base_trim": -0.08, "top_trim": 0.06}}
+    row = {"id": "x", "family": "RZR XP 4", "year": 2022, "category": "utv4", "deck_in": None, "miles": None, "hours": None}
+    mid = score.expected_price(dict(row, equipment="[]"), comps, eff)
+    low = score.expected_price(dict(row, equipment='["base_trim"]'), comps, eff)
+    top = score.expected_price(dict(row, equipment='["top_trim"]'), comps, eff)
+    assert low[0] < mid[0] < top[0], (low, mid, top)
+    assert "lower trim" in low[3] and "top trim" in top[3], (low[3], top[3])
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

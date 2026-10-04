@@ -10,7 +10,9 @@ import time
 
 from .categories import FAMILY_CATEGORY, cfg
 from . import usage
-from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, detect
+from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, detect
+
+EQUIP_VERSION = 2   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -343,11 +345,17 @@ def _expected_one(listing, comps_by_fam, effects=None):
 def _equip_note(feats, share, exp, pre):
     if abs(exp - pre) < max(100, 0.015 * pre):
         return None
+    trims = [LABEL[f] for f in TRIM_FEATS if f in feats and f in share]
+    kind = "equipment / trim" if trims else "equipment"
     if exp > pre:
-        what = [LABEL[f] for f in share if f in feats and share[f] < 0.9] or [LABEL[f] for f in feats]
-        return f"+${exp - pre:,} for equipment: has {', '.join(what)}"
-    what = [LABEL[f] for f in share if f not in feats and share[f] >= 0.3]
-    return f"−${pre - exp:,} for equipment: no {' / '.join(what) or 'extras'} (common on similar ones)"
+        what = [LABEL[f] for f in share if f in feats and f != "base_trim" and share[f] < 0.9] \
+            or [LABEL[f] for f in feats if f != "base_trim"]
+        return f"+${exp - pre:,} for {kind}: has {', '.join(what)}"
+    parts = [t for t in trims if t == LABEL["base_trim"]]
+    missing = [LABEL[f] for f in share if f not in feats and f not in TRIM_FEATS and share[f] >= 0.3]
+    if missing or not parts:
+        parts.append(f"no {' / '.join(missing) or 'extras'} (common on similar ones)")
+    return f"−${pre - exp:,} for {kind}: {'; '.join(parts)}"
 
 
 def equipment_effects(con) -> dict:
@@ -367,14 +375,16 @@ def equipment_effects(con) -> dict:
         group = "utv" if cat in ("utv4", "utv2") else cat
         pts = ratios.get(group, [])
         eff = {}
-        for f in feats:
+        for f in feats + (TRIM_FEATS if group == "utv" else ()):
             if f in MULT_PRIOR:
                 prior = MULT_PRIOR[f]
                 has = [q for e, q in pts if f in e]
                 hasnt = [q for e, q in pts if f not in e]
                 n = len(has) if len(has) >= 5 and len(hasnt) >= 5 else 0
                 data = statistics.median(has) / statistics.median(hasnt) - 1 if n else prior
-                eff[f] = min(2.5 * prior, max(0.0, (n * data + USAGE_SHRINK * prior) / (n + USAGE_SHRINK)))
+                val = (n * data + USAGE_SHRINK * prior) / (n + USAGE_SHRINK)
+                # same sign as the prior, at most 2.5x it (a base trim never adds value, a cab never subtracts)
+                eff[f] = min(2.5 * prior, max(0.0, val)) if prior > 0 else max(2.5 * prior, min(0.0, val))
             else:
                 eff[f] = DOLLAR_BY_CAT.get(cat, {}).get(f, DOLLAR_PRIOR[f])
         out[cat] = eff
@@ -704,9 +714,14 @@ def snapshot_scorecard(con) -> None:
 
 def rescore_all(con) -> None:
     mark_ended(con)
-    # 1. equipment from the ad text (cheap, deterministic - recomputed every run)
-    for r in con.execute("SELECT id, category, title, description, extras, summary FROM listings "
-                         "WHERE parsed = 1 AND relevant = 1 AND status != 'gone' AND equipment IS NULL").fetchall():
+    # 1. equipment from the ad text (cheap, deterministic); everything again once when detection changes
+    ver = con.execute("SELECT value FROM settings WHERE key = 'equip_version'").fetchone()
+    if not ver or int(ver[0]) < EQUIP_VERSION:
+        con.execute("UPDATE listings SET equipment = NULL")
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('equip_version', ?)", (str(EQUIP_VERSION),))
+    # (ended listings too: they stay comps for 180 days)
+    for r in con.execute("SELECT id, category, family, trim, title, description, extras, summary FROM listings "
+                         "WHERE parsed = 1 AND relevant = 1 AND equipment IS NULL").fetchall():
         con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(detect(r)), r["id"]))
     con.commit()
     # 1b. is the stated mileage / hours really the machine's total? ("clutches replaced 60 miles ago")

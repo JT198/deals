@@ -8,7 +8,8 @@ import json
 import re
 
 # multiplicative features: learned from the data, shrunk toward the prior
-MULT_PRIOR = {"cab": 0.08, "heat": 0.05, "ac": 0.03}
+# (base_trim / top_trim: the trim level within a model family - see TRIMS)
+MULT_PRIOR = {"cab": 0.08, "heat": 0.05, "ac": 0.03, "base_trim": -0.08, "top_trim": 0.06}
 # fixed-dollar features: roughly what the add-on sells for on its own
 DOLLAR_PRIOR = {"plow": 600, "trailer": 1500}
 # ...where a category's add-on is worth something else (a jet ski trailer is cheaper than a UTV trailer)
@@ -22,7 +23,44 @@ APPLIES = {
     "sled": ("trailer",),
 }
 
-LABEL = {"cab": "cab", "heat": "heat", "ac": "A/C", "plow": "plow", "trailer": "trailer included"}
+TRIM_FEATS = ("base_trim", "top_trim")
+LABEL = {"cab": "cab", "heat": "heat", "ac": "A/C", "plow": "plow", "trailer": "trailer included",
+         "base_trim": "lower trim", "top_trim": "top trim"}
+
+# Trim level within a family, for families where trim moves the price on its own (cab / heat / A-C editions
+# like NorthStar or Defender Limited are already priced as equipment). First match wins, so top trims go first.
+# Read from the title, the parsed trim and the start of the description only: "upgraded to RR" deep in an ad
+# isn't the trim. Measured 2026-10-04 (asking, year-adjusted): X3 DS ~13% under the family, Pro XP Sport ~12%
+# under / Ultimate ~4% over, Commander XT ~12% under / X mr + XT-P ~12% over, RZR XP Turbo ~5-9% over.
+_X3 = (("top_trim", r"\bx\s?-?(rs|ds|rc|mr)\b"),
+       (None, r"\brs\b|\brr\b|turbo\s*r\b"),           # RS / Turbo R / Turbo RR: the middle
+       ("base_trim", r"\bds\b"))
+TRIMS = {
+    "Maverick X3 MAX": _X3,
+    "Maverick X3 (2-seat)": _X3,
+    # "sport" only right after the model: dealer names ("... Power and Sport") are common
+    "RZR Pro XP 4": (("top_trim", r"\bultimate\b"), (None, r"\bpremium\b"),
+                     ("base_trim", r"(xp\s?-?4?|pro)\s+sport\b|^sport$")),
+    "RZR XP 4": (("top_trim", r"\bturbo\b"),),
+    "RZR XP 1000/Turbo (2-seat)": (("top_trim", r"\bturbo\b"),),
+    "Commander MAX": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"), ("base_trim", r"\bxt\b|\bdps\b")),
+    "Commander (2-seat)": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"), ("base_trim", r"\bxt\b|\bdps\b")),
+}
+
+
+def trim_level(row) -> str | None:
+    """'base_trim' / 'top_trim' / None (middle or not stated)."""
+    keys = row.keys() if hasattr(row, "keys") else row
+    rules = TRIMS.get(row["family"] if "family" in keys else None)
+    if not rules:
+        return None
+    text = " ".join(str(row[k] or "") for k in ("title", "trim") if k in keys)
+    text = (text + " " + str((row["description"] if "description" in keys else "") or "")[:300]).lower()
+    parsed = str((row["trim"] if "trim" in keys else "") or "").strip().lower()
+    for level, rx in rules:
+        if re.search(rx, text) or (parsed and re.search(rx, parsed)):
+            return level
+    return None
 
 PATTERNS = {
     # Polaris "NorthStar" / Can-Am "CAB" editions come with a factory cab (+ heat, and A/C on most)
@@ -66,4 +104,7 @@ def detect(row) -> list[str]:
         found.append(f)
     if "heat" in found and "cab" not in found:     # heat without a cab is heated grips/seats, not cab heat
         found.remove("heat")
+    level = trim_level(row)
+    if level:
+        found.append(level)
     return found

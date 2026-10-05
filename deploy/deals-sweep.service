@@ -1,0 +1,16 @@
+[Unit]
+Description=Deal finder deep sweep (Facebook searches by price band, to reach older listings)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/deals
+EnvironmentFile=/opt/deals/.env
+ExecStart=/opt/deals/venv/bin/python -m app.sweep
+TimeoutStartSec=25min
+MemoryMax=1400M
+OOMPolicy=kill
+PrivateTmp=yes
+Nice=10
+StandardOutput=append:/var/log/deals-scan.log
+StandardError=append:/var/log/deals-scan.log

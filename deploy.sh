@@ -22,4 +22,5 @@ ssh "$PVE" "pct exec $CT -- bash -c '
     systemctl restart deals-web; exit 1
   fi
   systemctl restart deals-scan.timer deals-quick.timer deals-sold.timer deals-backup.timer deals-digest.timer 2>/dev/null || true
+  systemctl enable -q --now deals-sweep.timer
   echo deployed OK'"

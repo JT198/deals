@@ -884,6 +884,125 @@ def test_trim_moves_typical():
     assert "lower trim" in low[3] and "top trim" in top[3], (low[3], top[3])
 
 
+def test_price_band_search_url_and_splits():
+    from app import sweep
+    from app.sources.facebook import search_url
+    u = search_url("plymouth-mn", "jet ski", 100, price=(2000, 3499))
+    assert "&minPrice=2000&maxPrice=3499" in u and "minPrice" not in search_url("plymouth-mn", "jet ski", 100)
+    bands = sweep.default_bands("pwc")
+    assert bands[0] == (500, 1999) and bands[-1][1] == 29999
+    assert all(bands[i][1] + 1 == bands[i + 1][0] for i in range(len(bands) - 1))          # no gaps, no overlap
+    assert sweep.split(2000, 3499) == ((2000, 2750), (2751, 3499))
+    assert sweep.split(2000, 2400) is None                                                 # too narrow to split
+
+
+def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
+    from app import sweep
+    con = reset([], active_hours="0-24")
+    con.execute("DELETE FROM sweep_queue")
+    con.execute("UPDATE searches SET enabled = 0 WHERE query != 'jet ski'")
+    con.commit()
+    now = db.now()
+    calls = []
+
+    def item(i, price, age_h):
+        return {"ext_id": str(i), "url": "u", "title": f"ski {i}", "price": price, "location": "Hudson, WI",
+                "listed_at": now - age_h * 3600, "status": "active"}
+
+    class FakeFB:
+        wall = False
+
+        def __init__(self, pw, proxy=None):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def search(self, q, loc, radius, sort="newest", scrolls=None, sold=False, price=None):
+            calls.append((q, price))
+            if FakeFB.wall or price is None:
+                return [] if FakeFB.wall else [item(999, 1, 1)]
+            if price == (500, 1999):                       # a full page: the band must be split
+                return [item(100 + i, 900, 24 * 40) for i in range(24)]
+            if price == (2000, 3499):
+                return [item(1, 3000, 24 * 40), item(2, 2500, 2)]   # one 40 days old, one posted 2 h ago
+            return []
+
+    class FakePW:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+    async def no_pause():
+        pass
+
+    sweep.Facebook, sweep.async_playwright, sweep.pause = FakeFB, lambda: FakePW(), no_pause
+    asyncio.run(sweep.run())
+    st = sweep.status(con)
+    assert st["round"] == 1 and st["searches"] == 8 - 1 + 2 and st["todo"] == st["searches"] - 3, st   # 4 run: 1 split into 2
+    assert calls[:2] == [("jet ski", (500, 1999)), ("jet ski", (2000, 3499))], calls
+    rows = {r["ext_id"]: r["backlog"] for r in con.execute("SELECT ext_id, backlog FROM listings")}
+    assert rows["1"] == 1 and rows["2"] == 0 and rows["100"] == 1, rows      # old = backlog; 2 h old = a normal find
+    halves = [(r["lo"], r["hi"]) for r in con.execute("SELECT lo, hi FROM sweep_queue WHERE lo < 2000 AND state = 'todo'")]
+    assert halves == [(500, 1250), (1251, 1999)], halves
+
+    # an old find scoring like a great deal is recorded, not sent; a later score jump alerts as usual
+    con.execute("""UPDATE listings SET parsed = 1, relevant = 1, category = 'pwc', score = 90, is_dealer = 0,
+                     red_flags = '[]', reasons = '[]' WHERE ext_id IN ('1', '2')""")
+    con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:2"], SENT
+    assert con.execute("SELECT alerted_score FROM listings WHERE ext_id = '1'").fetchone()[0] == 90
+    con.execute("UPDATE listings SET score = 100 WHERE ext_id = '1'")
+    con.commit()
+    SENT.clear()
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:1"], SENT
+
+    # Facebook answering with nothing: the bands go back on the list and Facebook is paused
+    before = sweep.status(con)["todo"]
+    FakeFB.wall = True
+    asyncio.run(sweep.run())
+    assert sweep.status(con)["todo"] == before
+    assert int(db.settings(con)["fb_backoff_until:home"]) > db.now()
+    FakeFB.wall = False
+
+    # next round starts from the bands the last one ended with, not the defaults
+    con.execute("DELETE FROM settings WHERE key LIKE 'fb_backoff%'")
+    con.execute("UPDATE sweep_queue SET state = 'done' WHERE state = 'todo'")
+    con.commit()
+    calls.clear()
+    asyncio.run(sweep.run())
+    st = sweep.status(con)
+    assert st["round"] == 2 and st["searches"] == 9, st
+    assert calls[:2] == [("jet ski", (500, 1250)), ("jet ski", (1251, 1999))], calls
+    assert con.execute("SELECT backlog FROM listings WHERE ext_id = '100'").fetchone()[0] == 1   # flag is kept
+    assert con.execute("SELECT COUNT(*) FROM sweep_queue WHERE round = 1").fetchone()[0] == 0
+    con.execute("UPDATE searches SET enabled = 1")
+    con.commit()
+
+
+def test_description_arriving_late_gets_the_ad_read_again():
+    con = reset([{"parsed": 1, "description": None, "detail_fetched": 0},
+                 {"id": "facebook:1", "ext_id": "1", "parsed": 1, "description": "already read", "detail_fetched": 1},
+                 {"id": "facebook:2", "ext_id": "2", "parsed": 1, "relevant": 0, "detail_fetched": 0},
+                 {"id": "facebook:3", "ext_id": "3", "parsed": 0, "relevant": None, "detail_fetched": 0, "backlog": 1}])
+    scan.apply_detail(con, "facebook:0", {"description": "2021 RZR XP 4, 900 miles", "status": "active"}, 10000)
+    scan.apply_detail(con, "facebook:1", {"description": "edited text", "status": "active"}, 10000)
+    con.commit()
+    got = {r["id"]: r["parsed"] for r in con.execute("SELECT id, parsed FROM listings")}
+    assert got["facebook:0"] == 0 and got["facebook:1"] == 1, got
+    # item pages still to read: not the ad the model already dropped; fresh finds before backlog
+    con.execute("UPDATE listings SET detail_fetched = 0, parsed = 1 WHERE id = 'facebook:0'")
+    con.commit()
+    assert [r["id"] for r in scan.pending_details(con, 10)] == ["facebook:0", "facebook:3"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

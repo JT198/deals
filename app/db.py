@@ -72,6 +72,16 @@ CREATE INDEX IF NOT EXISTS alert_log_key ON alert_log(title_key, price);
 
 CREATE TABLE IF NOT EXISTS geocache (place TEXT PRIMARY KEY, lat REAL, lon REAL);
 
+-- the deep sweep's work list: one row per (search, asking-price band) per round (see sweep.py)
+CREATE TABLE IF NOT EXISTS sweep_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  round INTEGER NOT NULL, query TEXT NOT NULL, category TEXT NOT NULL,
+  lo INTEGER NOT NULL, hi INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'todo',      -- todo | done | split (came back full; replaced by two halves)
+  found INTEGER, new INTEGER, ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS sweep_state ON sweep_queue(round, state);
+
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started INTEGER, finished INTEGER, source TEXT, found INTEGER, new INTEGER,
@@ -107,7 +117,7 @@ DEFAULT_SETTINGS = {
     "seed_version": "1",
 }
 
-SEED_VERSION = 5   # bump when categories.py gains default searches
+SEED_VERSION = 6   # bump when categories.py gains default searches
 
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -148,6 +158,7 @@ def init() -> None:
         "user_gone": "INTEGER NOT NULL DEFAULT 0",               # Jon pressed Gone: searches don't resurrect it
         "parse_attempts": "INTEGER NOT NULL DEFAULT 0",
         "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
+        "backlog": "INTEGER NOT NULL DEFAULT 0",                 # old listing dug up by the first deep sweep: no alert
         "new_price": "INTEGER", "new_comps": "INTEGER",          # what new ones list for at dealers (trailers)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio

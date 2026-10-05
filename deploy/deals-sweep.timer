@@ -1,0 +1,10 @@
+[Unit]
+Description=Deal finder deep sweep every 10 minutes (between fast-lane runs)
+
+[Timer]
+OnCalendar=*:5/10
+RandomizedDelaySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

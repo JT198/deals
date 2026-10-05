@@ -17,7 +17,7 @@ import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import db, geo, scan, score
+from . import db, geo, scan, score, sweep
 from .sources.facebook import proxy_config
 from .categories import CATEGORIES, FAMILY_CATEGORY
 from .equipment import APPLIES
@@ -479,7 +479,7 @@ def status():
           "mode": st.get("fb_route") or "auto",
           "pauses": {r: int(st.get(f"fb_backoff_until:{r}") or 0) for r in ("home", "proxy")
                      if int(st.get(f"fb_backoff_until:{r}") or 0) > now}}
-    return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb}
+    return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb, "sweep": sweep.status(con)}
 
 
 MASK = "********"

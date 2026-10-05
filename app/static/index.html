@@ -284,6 +284,12 @@ td.t { white-space: normal; min-width: 240px; }
         or going via the proxy.</li>
       <li><b>⚡ Fast lane</b> every 10 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 10-20 minutes after it's posted.</li>
+      <li><b>🔎 Deep sweep</b> every 10 minutes, a few searches at a time: Facebook only shows a search's first couple
+        dozen listings, so the scans above mostly see what was posted recently. The sweep re-runs every search one
+        price range at a time (splitting a range that comes back full) to reach older listings and anything the
+        other scans missed. Its first pass ran day and night to dig up everything posted before the finder
+        started - those older listings don't send alerts, they just show up here. After that a full pass takes
+        about three days. Setup shows how far along it is.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
         deck size, add-ons, whether it's a dealer, and any problems (red flags). Parts, "wanted" ads and the wrong kind
         of machine are dropped.</li>
@@ -997,6 +1003,7 @@ async function renderSetup() {
     <p class="filters" style="margin-top:14px"><input id="newq" placeholder="add a search, e.g. mule pro fxt">
       <select id="newcat">${CATS.map(c => `<option value="${c.key}" ${c.key === CAT ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
       <button class="btn" id="addq">Add</button></p></div>
+  ${st.sweep && st.sweep.round ? `<div class="panel"><h2>Deep sweep</h2><p class="hint">Pass ${st.sweep.round}: ${st.sweep.searches - st.sweep.todo} of ${st.sweep.searches} price-range searches done, ${st.sweep.new.toLocaleString()} listings found this pass that the regular scans had not seen.${st.sweep.backlog_found ? ` First pass dug up ${st.sweep.backlog_found.toLocaleString()} older listings (${st.sweep.backlog_machines.toLocaleString()} machines or trailers we track${st.sweep.backlog_pending ? `, ${st.sweep.backlog_pending.toLocaleString()} still being read` : ""}).` : ""}</p></div>` : ""}
   <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Type</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
     ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.source === "quick" ? "⚡ fast" : "full"}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;

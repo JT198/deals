@@ -44,20 +44,23 @@ PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
 STALE_AFTER = 5 * 86400
 
 
-def upsert(con, source: str, item: dict) -> bool:
+def upsert(con, source: str, item: dict, backlog: bool = False) -> bool:
+    """backlog=True (the first deep sweep): a listing already more than a day old when we first see it
+    is old news - it is stored and scored like any other, but its first deal alert is recorded, not sent."""
     lid = f"{source}:{item['ext_id']}"
     t = db.now()
     status = item.get("status", "active")
+    old_news = int(backlog and bool(item.get("listed_at")) and item["listed_at"] < t - 86400)
     row = con.execute("SELECT price, status, user_gone FROM listings WHERE id = ?", (lid,)).fetchone()
     if row is None:
         # OR IGNORE: the quick lane and a full scan can both see a new listing in the same minute
         cur = con.execute(
             """INSERT OR IGNORE INTO listings(id, source, ext_id, url, title, price, first_price, strike_price,
-                 location, image, listed_at, first_seen, last_seen, status, seen_active)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 location, image, listed_at, first_seen, last_seen, status, seen_active, backlog)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (lid, source, item["ext_id"], item["url"], item["title"], item["price"], item["price"],
              item.get("strike_price"), item.get("location"), item.get("image"),
-             item.get("listed_at"), t, t, status, int(status == "active")))
+             item.get("listed_at"), t, t, status, int(status == "active"), old_news))
         if cur.rowcount and item["price"]:
             con.execute("INSERT INTO price_history VALUES (?,?,?)", (lid, t, item["price"]))
         return bool(cur.rowcount)
@@ -93,13 +96,16 @@ def apply_detail(con, lid, d: dict | None, old_price):
     if d.get("status") == "gone":
         con.execute("UPDATE listings SET status='gone', detail_fetched=1, last_checked=? WHERE id=?", (t, lid))
         return
+    # a listing that waited over an hour for its page was parsed from the title alone:
+    # read it again now that the description is in
     con.execute(
-        """UPDATE listings SET description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
+        """UPDATE listings SET parsed = CASE WHEN description IS NULL AND ? IS NOT NULL THEN 0 ELSE parsed END,
+             description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
              listed_at = COALESCE(?, listed_at), image = COALESCE(?, image), status = ?,
              lat = COALESCE(?, lat), lon = COALESCE(?, lon),
              detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ?,
              seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END WHERE id = ?""",
-        (d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
+        (d.get("description"), d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
          d.get("status", "active"), d.get("lat"), d.get("lon"), t, t, d.get("status", "active"), lid))
     set_price(con, lid, old_price, d.get("price"))
 
@@ -200,6 +206,73 @@ def fb_backoff(con, st, walled: bool, fb_found: int, route: str = "home") -> str
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, '0')", (f"fb_backoff_level:{route}",))
         con.commit()
     return None
+
+
+def pending_details(con, limit: int, where: str = "status='active'") -> list:
+    """Facebook listings whose item page we haven't read yet: fresh finds first, then what the deep sweep
+    dug up. Ads the model already dropped from their title alone (parts, cars, furniture) are skipped."""
+    return con.execute(
+        """SELECT id, ext_id, price FROM listings
+           WHERE source='facebook' AND detail_fetched=0 AND (parsed = 0 OR COALESCE(relevant, 1) != 0) AND """ + where + """
+           ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
+
+
+async def fb_details(con, fb, todo, errors: list) -> None:
+    """Open each listing's page and store what it says. Pages that won't load are counted as misses,
+    unless every one fails - that is Facebook walling us, not a batch of removed listings."""
+    ok, missed = 0, []
+    for r in todo:
+        try:
+            d = await fb.detail(r["ext_id"])
+            if d is None:
+                missed.append(r["id"])
+            else:
+                ok += 1
+                apply_detail(con, r["id"], d, r["price"])
+                con.commit()
+        except Exception as e:
+            errors.append(f"fb detail {r['ext_id']}: {e}")
+        await asyncio.sleep(random.uniform(3, 6))
+    if missed and ok == 0 and len(missed) >= 3:
+        errors.append(f"facebook item pages unreadable ({len(missed)}/{len(todo)}) - login wall?")
+    else:
+        for lid in missed:
+            record_miss(con, lid)
+        con.commit()
+
+
+async def parse_pending(con, http, limit: int, errors: list, concurrency: int = PARSE_CONCURRENCY,
+                        only: str = "") -> None:
+    """LLM parse, once the description is in or after an hour without one. Fresh finds go first."""
+    rows = con.execute(
+        """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
+             AND (detail_fetched = 1 OR first_seen < ?)""" + only + """
+           ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (db.now() - 3600, limit)).fetchall()
+    gate = asyncio.Semaphore(concurrency)
+    failures = {"streak": 0}
+
+    async def parse_one(r):
+        async with gate:
+            if failures["streak"] >= 3:      # Ollama is down or wedged: stop hammering it, still score + alert
+                return
+            try:
+                p = await parse.parse(http, dict(r))
+                if p is not None:
+                    cols = ", ".join(f"{k} = ?" for k in p)
+                    con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
+                else:
+                    # the model gave unusable output; it's deterministic, so give up after a few tries
+                    con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
+                    con.execute("""UPDATE listings SET parsed = 1, relevant = 0, summary = 'could not read this ad'
+                                   WHERE id = ? AND parse_attempts >= 3""", (r["id"],))
+                con.commit()
+                failures["streak"] = 0
+            except Exception as e:
+                failures["streak"] += 1
+                errors.append(f"parse {r['id']}: {e}")
+    await asyncio.gather(*(parse_one(r) for r in rows))
+    if failures["streak"] >= 3:
+        errors.append("LLM parsing failed repeatedly - Ollama down? (skipped the rest this run)")
 
 
 def record_miss(con, lid):
@@ -310,34 +383,12 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 if due and empty == len(due):  # (skipped when --no-search)
                     errors.append("facebook returned nothing for every search (login wall?)")
 
-                todo = con.execute(
-                    """SELECT id, ext_id, price FROM listings
-                       WHERE source='facebook' AND detail_fetched=0 AND """ + fb_status + ("" if sold else only_new) + """
-                       ORDER BY first_seen DESC LIMIT ?""",
-                    ((SOLD_DETAILS_PER_RUN if sold else FB_DETAILS_PER_RUN) * boost,)).fetchall()
+                todo = pending_details(con, (SOLD_DETAILS_PER_RUN if sold else FB_DETAILS_PER_RUN) * boost,
+                                       fb_status + ("" if sold else only_new))
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
                     todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
-                ok, missed = 0, []
-                for r in todo:
-                    try:
-                        d = await fb.detail(r["ext_id"])
-                        if d is None:
-                            missed.append(r["id"])
-                        else:
-                            ok += 1
-                            apply_detail(con, r["id"], d, r["price"])
-                            con.commit()
-                    except Exception as e:
-                        errors.append(f"fb detail {r['ext_id']}: {e}")
-                    await asyncio.sleep(random.uniform(3, 6))
-                if missed and ok == 0 and len(missed) >= 3:
-                    # every page failed: FB is walling us, not a batch of removed listings
-                    errors.append(f"facebook item pages unreadable ({len(missed)}/{len(todo)}) - login wall?")
-                else:
-                    for lid in missed:
-                        record_miss(con, lid)
-                    con.commit()
+                await fb_details(con, fb, todo, errors)
         except SkipFacebook:
             pass
         except Exception as e:
@@ -371,35 +422,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
             await asyncio.sleep(random.uniform(1, 2.5))
 
         # --- LLM parse (once the description is in, or after an hour without one)
-        rows = con.execute(
-            """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
-                 AND (detail_fetched = 1 OR first_seen < ?)""" + (only_new if quick else "") + """
-               ORDER BY first_seen DESC LIMIT ?""", (db.now() - 3600, PARSES_PER_RUN * boost)).fetchall()
-        gate = asyncio.Semaphore(1 if (quick or sold) else PARSE_CONCURRENCY)
-        failures = {"streak": 0}
-
-        async def parse_one(r):
-            async with gate:
-                if failures["streak"] >= 3:      # Ollama is down or wedged: stop hammering it, still score + alert
-                    return
-                try:
-                    p = await parse.parse(http, dict(r))
-                    if p is not None:
-                        cols = ", ".join(f"{k} = ?" for k in p)
-                        con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
-                    else:
-                        # the model gave unusable output; it's deterministic, so give up after a few tries
-                        con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
-                        con.execute("""UPDATE listings SET parsed = 1, relevant = 0, summary = 'could not read this ad'
-                                       WHERE id = ? AND parse_attempts >= 3""", (r["id"],))
-                    con.commit()
-                    failures["streak"] = 0
-                except Exception as e:
-                    failures["streak"] += 1
-                    errors.append(f"parse {r['id']}: {e}")
-        await asyncio.gather(*(parse_one(r) for r in rows))
-        if failures["streak"] >= 3:
-            errors.append("LLM parsing failed repeatedly - Ollama down? (skipped the rest this run)")
+        await parse_pending(con, http, PARSES_PER_RUN * boost, errors,
+                            concurrency=1 if (quick or sold) else PARSE_CONCURRENCY, only=only_new if quick else "")
 
         # listings we haven't seen or confirmed in a while are probably gone
         fb_blocked = any("login wall" in e for e in errors)
@@ -530,6 +554,13 @@ async def _send_alerts(con, http, st, quiet) -> int:
               AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10) {private}
             ORDER BY score DESC""", (threshold,)).fetchall()
         if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and enough_savings(r) and first_copy(r)]
+
+    # Old listings the first deep sweep dug up: Jon gets a summary of those, not a Telegram flood.
+    # Recorded as alerted at this score, so a later price cut that lifts the score still alerts.
+    old_news = [r["id"] for r in deals if r["backlog"] and r["alerted_score"] is None]
+    if old_news:
+        mark(deal_mark, old_news, "backlog")
+        deals = [r for r in deals if r["id"] not in set(old_news)]
 
     # "Just listed": fresh private listings priced normally or better with no known problems,
     # so Jon can message the seller first

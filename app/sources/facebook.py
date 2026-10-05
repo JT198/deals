@@ -60,12 +60,16 @@ def _seller(v):
     return "dealer" if "dealer" in v else "private" if "private" in v else None
 
 
-def search_url(location: str, query: str, radius_mi: int, sort: str = "newest", sold: bool = False) -> str:
-    """Marketplace search URL. sold=True uses the Availability: Sold filter (works logged out)."""
+def search_url(location: str, query: str, radius_mi: int, sort: str = "newest", sold: bool = False,
+               price: tuple[int, int] | None = None) -> str:
+    """Marketplace search URL. sold=True uses the Availability: Sold filter (works logged out).
+    price=(low, high) limits it to that asking-price band - a search only ever shows its first
+    15-24 listings, and each band shows a different set (see sweep.py)."""
     km = max(1, round(radius_mi * 1.609))
     order = "&sortBy=creation_time_descend" if sort == "newest" else ""
+    band = f"&minPrice={int(price[0])}&maxPrice={int(price[1])}" if price else ""
     return (f"https://www.facebook.com/marketplace/{location}/search/?query={quote(query)}&radius={km}{order}"
-            f"&exact=false" + ("&availability=out%20of%20stock" if sold else ""))
+            f"&exact=false{band}" + ("&availability=out%20of%20stock" if sold else ""))
 
 
 def proxy_config(url: str | None) -> dict | None:
@@ -101,7 +105,8 @@ class Facebook:
         await self.browser.close()
 
     async def search(self, query: str, location: str, radius_mi: int, sort: str = "newest",
-                     scrolls: int | None = None, sold: bool = False) -> list[dict]:
+                     scrolls: int | None = None, sold: bool = False,
+                     price: tuple[int, int] | None = None) -> list[dict]:
         page = await self.ctx.new_page()
         found: list[dict] = []
 
@@ -119,7 +124,7 @@ class Facebook:
                     pass
 
         page.on("response", on_response)
-        url = search_url(location, query, radius_mi, sort, sold)
+        url = search_url(location, query, radius_mi, sort, sold, price)
         try:
             await page.goto(url, timeout=45000, wait_until="domcontentloaded")
             await page.wait_for_timeout(4000 + random.randint(0, 2000))

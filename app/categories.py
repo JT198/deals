@@ -10,6 +10,7 @@ usage      prior for how price falls with use: {"miles": (log-change, per N mile
            Each family blends this with what its own listings show (more data -> more weight).
 every_min  how often each search in this category runs on Facebook
 quick      searches the 5-minute fast lane also runs (newest first), to be first to message a seller
+bands      asking-price edges the deep sweep starts from (sweep.py); a band that comes back full is split further
 """
 
 CATEGORIES = {
@@ -19,6 +20,7 @@ CATEGORIES = {
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 60,
         "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
+        "bands": [1500, 5000, 8000, 11000, 14000, 17000, 20000, 24000, 29000, 36000, 70000],
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
             "Ranger Crew 1000", "Ranger Crew 570", "General 4",
@@ -41,6 +43,7 @@ CATEGORIES = {
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 120,
+        "bands": [1000, 3500, 5500, 7500, 9500, 12000, 15000, 18000, 22000, 28000, 60000],
         "families": [
             "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP/Pro R (2-seat)", "RZR 900/570/Trail (2-seat)",
             "Ranger XP 1000/1500 (2-seat)", "Ranger 570/500 (2-seat)", "General 1000 (2-seat)",
@@ -52,6 +55,7 @@ CATEGORIES = {
         "searches": [
             "rzr xp 1000", "polaris ranger xp 1000", "polaris general 1000", "can am defender hd10",
             "can am maverick x3", "honda pioneer 1000", "kawasaki mule", "side by side utv",
+            "can am maverick", "polaris ranger",
         ],
     },
     "atv": {
@@ -59,6 +63,7 @@ CATEGORIES = {
         "dep": 0.07, "window": 1, "fit": True, "low_hpy": 40, "high_hpy": 150,
         "usage": {"miles": (-0.03, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 120,
+        "bands": [400, 1200, 2000, 3000, 4000, 5000, 6500, 8500, 11000, 20000],
         "families": [
             "Polaris Sportsman", "Polaris Scrambler", "Can-Am Outlander", "Can-Am Renegade",
             "Honda Foreman/Rubicon", "Honda Rancher", "Honda sport (TRX 250X/400EX/450R)",
@@ -69,6 +74,7 @@ CATEGORIES = {
         "searches": [
             "polaris sportsman", "can am outlander", "honda foreman", "honda rancher",
             "yamaha grizzly", "kawasaki brute force", "four wheeler 4x4", "atv 4x4",
+            "suzuki atv", "polaris atv",
         ],
     },
     "trike": {
@@ -77,6 +83,7 @@ CATEGORIES = {
         "dep": 0.0, "window": 3, "fit": False, "low_hpy": 20, "high_hpy": 100,
         "usage": {},
         "cl_cat": "sna", "every_min": 120,
+        "bands": [300, 1000, 2000, 3500, 6000, 15000],
         "families": [
             "Honda ATC 250R", "Honda ATC 200 series (200X/200S/200E/Big Red)",
             "Honda ATC 110/125/90/70 (small)", "Honda ATC 185/250ES/other",
@@ -90,6 +97,7 @@ CATEGORIES = {
         "usage": {"hours": (-0.04, 100)},
         "cl_cat": "grd", "every_min": 60,
         "quick": ["zero turn", "zero turn mower"],   # also run by the 5-minute fast lane
+        "bands": [300, 1000, 1800, 2600, 3500, 4500, 6000, 8000, 12000, 25000],
         "families": [
             "Cub Cadet RZT S (steering wheel)", "Cub Cadet ZT1/ZT2 (lap bar)", "Cub Cadet Ultima ZT",
             "Cub Cadet Pro Z (commercial)", "John Deere Z300 series", "John Deere Z500 series",
@@ -112,6 +120,7 @@ CATEGORIES = {
         "usage": {},
         "cl_cat": "tra", "every_min": 60, "fit_gate": 85,
         "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
+        "bands": [500, 1500, 2500, 3500, 4500, 6000, 8000, 11000, 16000, 40000],
         "families": [
             "Enclosed cargo", "Enclosed car hauler (8.5 wide)", "Open utility (rails / mesh sides)",
             "Landscape (tandem, rear gate)", "Tilt / car hauler flatbed", "Equipment / deckover",
@@ -128,6 +137,7 @@ CATEGORIES = {
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 60,
         "usage": {"hours": (-0.06, 100)},
         "cl_cat": "boo", "every_min": 180,
+        "bands": [500, 2000, 3500, 5000, 7000, 9000, 12000, 16000, 30000],
         "families": [
             "Sea-Doo Spark", "Sea-Doo GTI/GTS", "Sea-Doo GTX/Wake/Explorer/FishPro (touring)",
             "Sea-Doo RXP/RXT (performance)", "Yamaha EX", "Yamaha VX", "Yamaha FX", "Yamaha GP/SuperJet",
@@ -143,6 +153,7 @@ CATEGORIES = {
         "dep": 0.09, "window": 1, "fit": True, "low_hpy": 20, "high_hpy": 80, "low_mpy": 700, "high_mpy": 2500,
         "usage": {"miles": (-0.04, 1000)},
         "cl_cat": "sna", "every_min": 180,
+        "bands": [300, 1200, 2200, 3500, 5000, 7000, 9500, 13000, 25000],
         "families": [
             "Ski-Doo MXZ/Renegade/Backcountry (trail/crossover)", "Ski-Doo Summit/Freeride (mountain)",
             "Ski-Doo Expedition/Skandic/Grand Touring (utility/touring)",

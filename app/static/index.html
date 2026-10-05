@@ -284,12 +284,13 @@ td.t { white-space: normal; min-width: 240px; }
         or going via the proxy.</li>
       <li><b>⚡ Fast lane</b> every 10 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 10-20 minutes after it's posted.</li>
-      <li><b>🔎 Deep sweep</b> every 10 minutes, a few searches at a time: Facebook only shows a search's first couple
-        dozen listings, so the scans above mostly see what was posted recently. The sweep re-runs every search one
-        price range at a time (splitting a range that comes back full) to reach older listings and anything the
-        other scans missed. Its first pass ran day and night to dig up everything posted before the finder
-        started - those older listings don't send alerts, they just show up here. After that a full pass takes
-        about three days. Setup shows how far along it is.</li>
+      <li><b>🔎 Deep sweep</b> every 10 minutes, day and night, a few searches at a time: Facebook only shows a
+        search's first couple dozen listings, so the scans above mostly see what was posted recently. The sweep
+        re-runs every search one price range at a time (splitting a range while it keeps turning up listings we
+        didn't have) to reach older listings and anything the other scans missed. Its first pass digs up
+        everything posted before the finder started - those older listings don't send alerts, they just show up
+        here, and you get one Telegram summary when it's done. A full pass takes a few days; Setup shows how far
+        along it is.</li>
       <li>For each new ad it opens the listing, then a local AI model reads it and pulls out the year, model, miles/hours,
         deck size, add-ons, whether it's a dealer, and any problems (red flags). Parts, "wanted" ads and the wrong kind
         of machine are dropped.</li>

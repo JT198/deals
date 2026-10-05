@@ -42,6 +42,16 @@ CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
 PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
 STALE_AFTER = 5 * 86400
+MAX_STALE = 14 * 86400
+
+
+def stale_after(st) -> int:
+    """Seconds without a sighting before a listing is assumed gone. Older listings are only ever seen
+    by the deep sweep, so it has to be longer than one full sweep round (the last one, or the one
+    still running if that is already longer)."""
+    started = int(st.get("sweep_round_started") or 0)
+    longest = max(int(st.get("sweep_round_secs") or 0), db.now() - started if started else 0)
+    return min(MAX_STALE, max(STALE_AFTER, int(1.5 * longest)))
 
 
 def upsert(con, source: str, item: dict, backlog: bool = False) -> bool:
@@ -429,7 +439,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         fb_blocked = any("login wall" in e for e in errors)
         if not (quick or sold) and not fb_blocked and found > 0:
             con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
-                        (db.now() - STALE_AFTER,))
+                        (db.now() - stale_after(db.settings(con)),))
             con.commit()
 
         score.rescore_all(con)

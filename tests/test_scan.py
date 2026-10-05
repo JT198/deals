@@ -893,7 +893,7 @@ def test_price_band_search_url_and_splits():
     assert bands[0] == (500, 1999) and bands[-1][1] == 29999
     assert all(bands[i][1] + 1 == bands[i + 1][0] for i in range(len(bands) - 1))          # no gaps, no overlap
     assert sweep.split(2000, 3499) == ((2000, 2750), (2751, 3499))
-    assert sweep.split(2000, 2400) is None                                                 # too narrow to split
+    assert sweep.split(2000, 2150) is None                                                 # too narrow to split
 
 
 def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
@@ -925,8 +925,8 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
             calls.append((q, price))
             if FakeFB.wall or price is None:
                 return [] if FakeFB.wall else [item(999, 1, 1)]
-            if price == (500, 1999):                       # a full page: the band must be split
-                return [item(100 + i, 900, 24 * 40) for i in range(24)]
+            if price in ((500, 1999), (500, 1250)):        # a full page of listings 40 days old
+                return [item(100 + i, 900, 24 * 40) for i in range(15)]
             if price == (2000, 3499):
                 return [item(1, 3000, 24 * 40), item(2, 2500, 2)]   # one 40 days old, one posted 2 h ago
             return []
@@ -944,7 +944,8 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     sweep.Facebook, sweep.async_playwright, sweep.pause = FakeFB, lambda: FakePW(), no_pause
     asyncio.run(sweep.run())
     st = sweep.status(con)
-    assert st["round"] == 1 and st["searches"] == 8 - 1 + 2 and st["todo"] == st["searches"] - 3, st   # 4 run: 1 split into 2
+    ran = sweep.DAY_SEARCHES                                                   # one of them was full and split in two
+    assert st["round"] == 1 and st["searches"] == 8 - 1 + 2 and st["todo"] == st["searches"] - (ran - 1), st
     assert calls[:2] == [("jet ski", (500, 1999)), ("jet ski", (2000, 3499))], calls
     rows = {r["ext_id"]: r["backlog"] for r in con.execute("SELECT ext_id, backlog FROM listings")}
     assert rows["1"] == 1 and rows["2"] == 0 and rows["100"] == 1, rows      # old = backlog; 2 h old = a normal find
@@ -981,6 +982,12 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     st = sweep.status(con)
     assert st["round"] == 2 and st["searches"] == 9, st
     assert calls[:2] == [("jet ski", (500, 1250)), ("jet ski", (1251, 1999))], calls
+    # a full page of listings we already have is not worth splitting again
+    assert con.execute("SELECT state FROM sweep_queue WHERE lo = 500").fetchone()[0] == "done"
+    # "not seen lately" waits for a full sweep round: 5 days normally, longer after a slow round
+    assert scan.stale_after({}) == 5 * 86400
+    assert scan.stale_after({"sweep_round_secs": str(6 * 86400)}) == 9 * 86400
+    assert scan.stale_after({"sweep_round_started": str(db.now() - 30 * 86400)}) == 14 * 86400
     assert con.execute("SELECT backlog FROM listings WHERE ext_id = '100'").fetchone()[0] == 1   # flag is kept
     assert con.execute("SELECT COUNT(*) FROM sweep_queue WHERE round = 1").fetchone()[0] == 0
     con.execute("UPDATE searches SET enabled = 1")

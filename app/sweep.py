@@ -3,13 +3,14 @@
 A logged-out Marketplace search shows only its first 15-24 listings, and scrolling loads no more. The
 regular scans read newest first, so they only ever see what was posted recently: anything older than the
 scanner (or than a category) stays invisible. Limiting a search to an asking-price band returns a
-different 15-24, so this lane walks every search through price bands, splitting any band that comes back
-full until each one is small enough to be seen whole.
+different page, so this lane walks every search through price bands in "best match" order (newest-first
+within a band is mostly cars and furniture), splitting a band in two whenever it comes back full and is
+still turning up listings we didn't have.
 
-Round 1 digs up the backlog. It runs day and night (at night it also opens item pages and parses, since
-nothing else is using Facebook or the model), and the old listings it finds don't alert - see scan.upsert.
-Later rounds repeat the bands the previous round ended with, a few searches at a time during active
-hours: that keeps older listings' "last seen" fresh and catches whatever the newest-first scans missed.
+It runs day and night; at night it also opens item pages and parses, since nothing else is using Facebook
+or the model then. Round 1 digs up the backlog, and the old listings it finds don't alert - see
+scan.upsert. Later rounds repeat the bands the previous round ended with: that keeps older listings'
+"last seen" fresh (scan.stale_after waits for a full round) and catches what the newest-first scans missed.
 
   python -m app.sweep            # one slice of the work list
   python -m app.sweep --status   # where it is
@@ -29,10 +30,11 @@ from . import db, notify, scan
 from .categories import CATEGORIES
 from .sources.facebook import Facebook, pause
 
-PAGE_FULL = 22           # a search page holds 24; this many back means the band is probably cut off
-MIN_WIDTH = 300          # don't split a band narrower than 2x this ($)
-DAY_SEARCHES = 4         # per run (every 10 min) while the other lanes are busy - under a minute of Facebook
-NIGHT_SEARCHES = 10      # round 1 only, outside active hours
+PAGE_FULL = 13           # a best-match page holds 14-19; this many back means the band is probably cut off
+SPLIT_MIN_NEW = 3        # ...and it is only worth splitting while a full page still shows this many unseen listings
+MIN_WIDTH = 100          # don't split a band narrower than 2x this ($)
+DAY_SEARCHES = 6         # per run (every 10 min) while the other lanes are busy - about 90 s of Facebook
+NIGHT_SEARCHES = 12      # outside active hours, when no other lane is running
 NIGHT_DETAILS = 25
 NIGHT_PARSES = 90
 LOCK_WAIT = 300         # seconds to wait for the other lanes to finish with Facebook
@@ -47,7 +49,8 @@ def default_bands(category: str) -> list[tuple[int, int]]:
 
 
 def split(lo: int, hi: int) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """Two halves of a full band, or None when it is already too narrow to be worth splitting."""
+    """Two halves of a full band, or None when it is already too narrow to be worth splitting
+    (asking prices bunch up on round numbers, so there is a floor to what splitting can separate)."""
     if hi - lo < 2 * MIN_WIDTH:
         return None
     mid = round((lo + hi) / 2 / 50) * 50
@@ -111,12 +114,15 @@ async def maybe_summary(con, http) -> None:
         con.commit()
 
 
-async def run(force: bool = False) -> None:
+async def run() -> None:
     db.init()
     con = db.connect()
     st = db.settings(con)
     rnd = int(st.get("sweep_round") or 0)
     if not con.execute("SELECT 1 FROM sweep_queue WHERE round = ? AND state = 'todo' LIMIT 1", (rnd,)).fetchone():
+        if rnd:     # how long a full round takes tells the scanner how long "not seen lately" has to be
+            con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('sweep_round_secs', ?)",
+                        (str(db.now() - int(st.get("sweep_round_started") or db.now())),))
         rnd += 1
         print(f"sweep: starting round {rnd} with {start_round(con, rnd)} band searches")
     first = rnd == 1
@@ -124,9 +130,6 @@ async def run(force: bool = False) -> None:
     async with httpx.AsyncClient(timeout=30) as http:
         if not first:
             await maybe_summary(con, http)
-        if night and not (first or force):
-            print("sweep: outside active hours, skipping")
-            return
         route, until = scan.fb_pick_route(st, db.now())
         if route is None:
             print("sweep: facebook is paused, skipping")
@@ -147,14 +150,14 @@ async def run(force: bool = False) -> None:
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if route == "proxy" else None) as fb:
                 for j in jobs:
                     try:
-                        items = await fb.search(j["query"], loc, radius, sort="newest", scrolls=0,
+                        items = await fb.search(j["query"], loc, radius, sort="best_match", scrolls=0,
                                                 price=(j["lo"], j["hi"]))
                     except Exception as e:      # left on the list; it is first in line next run
                         errors.append(f"fb '{j['query']}' ${j['lo']}-{j['hi']}: {e}")
                         await pause()
                         continue
                     n_new = sum(scan.upsert(con, "facebook", i, backlog=first) for i in items)
-                    halves = split(j["lo"], j["hi"]) if len(items) >= PAGE_FULL else None
+                    halves = split(j["lo"], j["hi"]) if len(items) >= PAGE_FULL and n_new >= SPLIT_MIN_NEW else None
                     if halves:
                         splits += 1
                         con.executemany("INSERT INTO sweep_queue(round, query, category, lo, hi) VALUES (?,?,?,?,?)",
@@ -209,7 +212,7 @@ def main():
         print("another sweep is running")
         return
     try:
-        asyncio.run(run(force="--force" in sys.argv))
+        asyncio.run(run())
     except Exception:
         traceback.print_exc()
         sys.exit(1)

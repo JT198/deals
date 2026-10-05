@@ -78,7 +78,7 @@ def start_round(con, rnd: int) -> int:
 def status(con) -> dict:
     st = db.settings(con)
     rnd = int(st.get("sweep_round") or 0)
-    q = con.execute("""SELECT COALESCE(SUM(state != 'split'), 0) total, COALESCE(SUM(state = 'todo'), 0) todo,
+    q = con.execute("""SELECT COUNT(*) total, COALESCE(SUM(state = 'todo'), 0) todo,
                          COALESCE(SUM(new), 0) new FROM sweep_queue WHERE round = ?""", (rnd,)).fetchone()
     # pending = still waiting for its item page or for the model to read it
     b = con.execute("""SELECT COUNT(*) found, COALESCE(SUM(relevant = 1), 0) machines,

@@ -945,7 +945,7 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     asyncio.run(sweep.run())
     st = sweep.status(con)
     ran = sweep.DAY_SEARCHES                                                   # one of them was full and split in two
-    assert st["round"] == 1 and st["searches"] == 8 - 1 + 2 and st["todo"] == st["searches"] - (ran - 1), st
+    assert st["round"] == 1 and st["searches"] == 8 + 2 and st["todo"] == st["searches"] - ran, st
     assert calls[:2] == [("jet ski", (500, 1999)), ("jet ski", (2000, 3499))], calls
     rows = {r["ext_id"]: r["backlog"] for r in con.execute("SELECT ext_id, backlog FROM listings")}
     assert rows["1"] == 1 and rows["2"] == 0 and rows["100"] == 1, rows      # old = backlog; 2 h old = a normal find

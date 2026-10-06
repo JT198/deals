@@ -1046,6 +1046,14 @@ const SELL_DEFAULT = { category: "mower", family: "Cub Cadet RZT S (steering whe
   deck_in: "42", len_ft: "", axles: "", equipment: [], condition: "fair",
   notes: "Kohler Courage 22 HP. Steering-wheel zero-turn. Runs and mows; some wear from use (cosmetic dings)." };
 let SELL = Object.assign({}, SELL_DEFAULT, store.get("sell", {}));
+// the form keeps every field across category switches (so your mower's deck size survives a detour),
+// but only the ones that belong to the current category go to the server
+function sellPayload() {
+  const p = { ...SELL }, cat = p.category;
+  if (cat !== "trailer") { p.len_ft = ""; p.axles = ""; } else { p.miles = ""; p.hours = ""; }
+  if (cat !== "mower") p.deck_in = "";
+  return JSON.stringify(p);
+}
 function renderSell() {
   const cat = CATS.find(c => c.key === SELL.category) || CATS[0];
   if (!cat.families.includes(SELL.family)) SELL.family = cat.families[0];
@@ -1077,7 +1085,7 @@ function renderSell() {
   form.onchange = e => { read(); if (e.target.name === "category") renderSell(); };
   $("#appraise").onclick = async () => {
     read(); $("#sellmsg").textContent = "Pricing…";
-    try { showAppraisal(await api("/api/appraise", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(SELL) }));
+    try { showAppraisal(await api("/api/appraise", { method: "POST", headers: { "content-type": "application/json" }, body: sellPayload() }));
       $("#sellmsg").textContent = ""; }
     catch (e) { $("#sellmsg").textContent = "Couldn't price it: " + e.message; }
   };
@@ -1102,7 +1110,7 @@ function showAppraisal(a) {
   $("#draftbtn").onclick = async () => {
     $("#draftmsg").textContent = "Writing… (about 10 seconds)";
     try {
-      const d = await api("/api/appraise/draft", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(SELL) });
+      const d = await api("/api/appraise/draft", { method: "POST", headers: { "content-type": "application/json" }, body: sellPayload() });
       $("#draftbox").innerHTML = `<textarea class="draft" id="drafttext">${esc(d.text)}</textarea>
         <p><button class="btn primary" data-copy="drafttext">Copy listing</button> <span class="hint">edit before posting - add photos!</span></p>`;
       $("#draftmsg").textContent = "";

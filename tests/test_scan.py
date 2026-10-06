@@ -418,8 +418,8 @@ def test_sold_typical_is_bounded_and_skips_red_flags():
     for i in range(6):   # "sold" junk: half price, several with red flags
         con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
                          status, parsed, relevant, category, family, year, is_new, red_flags, reasons)
-                       VALUES (?, 'facebook', ?, 'u', 'j', 7000, 7000, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, ?, '[]')""",
-                    (f"facebook:j{i}", f"j{i}", t, t, t, '["doesn\'t run"]' if i < 3 else "[]"))
+                       VALUES (?, 'facebook', ?, 'u', ?, 7000, 7000, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, ?, '[]')""",
+                    (f"facebook:j{i}", f"j{i}", f"sold one {i}", t, t, t, '["doesn\'t run"]' if i < 3 else "[]"))
     con.commit()
     assert len(score._comps(con, sold=True)["RZR XP 4"]) == 3            # red-flagged sold ones left out
     con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
@@ -590,7 +590,7 @@ def test_digest_builds():
 def _insert(con, rows):
     t = db.now()
     for i, r in enumerate(rows):
-        base = dict(id=f"facebook:k{i}", source="facebook", ext_id=f"k{i}", url="u", title="c", first_seen=t, last_seen=t,
+        base = dict(id=f"facebook:k{i}", source="facebook", ext_id=f"k{i}", url="u", title=f"c{i}", first_seen=t, last_seen=t,
                     status="active", parsed=1, relevant=1, is_new=0, red_flags="[]", reasons="[]")
         base.update(r)
         con.execute(f"INSERT INTO listings({','.join(base)}) VALUES ({','.join('?' * len(base))})", list(base.values()))
@@ -1008,6 +1008,152 @@ def test_description_arriving_late_gets_the_ad_read_again():
     con.execute("UPDATE listings SET detail_fetched = 0, parsed = 1 WHERE id = 'facebook:0'")
     con.commit()
     assert [r["id"] for r in scan.pending_details(con, 10)] == ["facebook:0", "facebook:3"]
+
+
+def test_review_fixes_2026_10_05():
+    """Codex review of the deep-sweep commits: eight findings, one regression each."""
+    from unittest.mock import AsyncMock, patch
+    from app import score, sweep, web
+    from app.equipment import detect
+
+    # 1. alert markers record the row as it was sent, even if another lane changed it meanwhile
+    con = reset([{"score": 75, "price": 10000, "listed_at": db.now() - 3 * 3600}])
+
+    async def mutate_during_send(http, row, header=None):
+        other = db.connect()
+        other.execute("UPDATE listings SET price = 7000, score = 90 WHERE id = ?", (row["id"],))
+        other.commit(); other.close()
+        return True
+    with patch.object(notify, "send_listing", mutate_during_send):
+        asyncio.run(alerts(con))
+    m = con.execute("SELECT alerted_score, alerted_price FROM listings").fetchone()
+    assert (m["alerted_score"], m["alerted_price"]) == (75, 10000), dict(m)
+    assert con.execute("SELECT price FROM alert_log").fetchone()[0] == 10000
+    asyncio.run(alerts(con))                       # the price cut / score jump still alerts
+    assert SENT == ["facebook:0"], SENT
+
+    # 2. a paused Facebook never makes Facebook listings stale; Craigslist results don't speak for Facebook
+    con = reset([{"last_seen": db.now() - 6 * 86400, "detail_fetched": 1},
+                 {"id": "craigslist:1", "ext_id": "1", "source": "craigslist", "last_seen": db.now() - 6 * 86400,
+                  "detail_fetched": 1}],
+                active_hours="0-24", **{"fb_backoff_until:home": str(db.now() + 7200)})
+    item = {"ext_id": "newcl", "url": "https://x.test/i", "title": "cl", "price": 12000, "status": "active"}
+
+    class Lock:
+        def close(self):
+            pass
+    with patch.object(scan, "acquire_fb_lock", AsyncMock(return_value=Lock())), \
+         patch.object(scan.craigslist, "search", AsyncMock(return_value=[item])), \
+         patch.object(scan.craigslist, "detail", AsyncMock(return_value={"status": "active"})), \
+         patch.object(scan, "parse_pending", AsyncMock()), patch.object(scan.geo, "fill", AsyncMock()), \
+         patch.object(scan, "send_alerts", AsyncMock(return_value=0)), patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.run(force=True))
+    got = {r["id"]: r["status"] for r in con.execute("SELECT id, status FROM listings")}
+    assert got["facebook:0"] == "active" and got["craigslist:1"] == "gone", got
+
+    # 3. a decimal in a category price limit is stored whole and doesn't crash the alert stage
+    con = reset([{"listed_at": db.now() - 3 * 3600, "price": 15000}])
+    r = client().put("/api/settings", json={"alert_rules": {"utv4": {"enabled": True, "max_price": "12000.0", "min_year": ""}}})
+    assert r.status_code == 200 and db.alert_rules(db.settings(con))["utv4"]["max_price"] == "12000"
+    asyncio.run(alerts(con))
+    assert SENT == []                              # $15,000 is over the $12,000 limit
+    assert client().put("/api/settings", json={"alert_rules": {"utv4": {"max_price": "lots"}}}).status_code == 400
+
+    # 4. equipment is detected again after a late description changes the ad
+    con = reset([{"title": "2022 RZR XP 4", "description": None, "equipment": None, "detail_fetched": 0}])
+    _family(con)
+    score.rescore_all(con)
+    before = con.execute("SELECT expected FROM listings WHERE id = 'facebook:0'").fetchone()[0]
+    scan.apply_detail(con, "facebook:0", {"description": "Full cab with heat and AC, comes with trailer", "status": "active"}, 10000)
+    con.commit()
+    assert con.execute("SELECT parsed FROM listings WHERE id = 'facebook:0'").fetchone()[0] == 0
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": json.dumps({"category": "utv4", "relevant": True, "family": "RZR XP 4", "year": 2022})}
+
+    class HTTP:
+        async def post(self, url, json, **kw):
+            return Resp()
+    asyncio.run(scan.parse_pending(con, HTTP(), 10, []))
+    score.rescore_all(con)
+    row = con.execute("SELECT equipment, expected FROM listings WHERE id = 'facebook:0'").fetchone()
+    assert "cab" in json.loads(row["equipment"]) and row["expected"] > before, dict(row)
+
+    # 5. malformed model output uses up the retry budget instead of looking like an outage
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "title": f"ad{i}", "parsed": 0, "detail_fetched": 1,
+                  "first_seen": db.now() - i} for i in range(4)])
+
+    class Bad:
+        def __init__(self, bad):
+            self.bad = bad
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": json.dumps({"category": "utv4", "relevant": True, "family": [] if self.bad else "RZR XP 4"})}
+
+    class HTTP2:
+        async def post(self, url, json, **kw):
+            return Bad("Title: ad3\n" not in json["prompt"])
+    errors = []
+    asyncio.run(scan.parse_pending(con, HTTP2(), 4, errors, concurrency=1))
+    assert not any("Ollama down" in e for e in errors), errors
+    assert con.execute("SELECT SUM(parsed) FROM listings").fetchone()[0] == 4      # healthy ad3 and the 3 bad ones (family dropped)
+    assert con.execute("SELECT family FROM listings WHERE id = 'facebook:3'").fetchone()[0] == "RZR XP 4"
+    assert con.execute("SELECT family FROM listings WHERE id = 'facebook:0'").fetchone()[0] is None
+
+    # 6. eight copies of one listing are one comp
+    con = reset([{"title": "2022 RZR XP 4 bargain", "price": 13000, "first_price": 13000}])
+    _insert(con, [dict(category="utv4", family="RZR XP 4", year=2022, title="2022 RZR XP 4 Loaded", price=20000) for _ in range(8)])
+    score.rescore_all(con)
+    row = con.execute("SELECT comps FROM listings WHERE id = 'facebook:0'").fetchone()
+    assert (row["comps"] or 0) <= 1, dict(row)
+
+    # 7. disabling a search parks its sweep jobs; deleting it drops them
+    con = reset([], active_hours="0-24")
+    con.execute("DELETE FROM sweep_queue")
+    con.execute("UPDATE searches SET enabled = (query IN ('ranger crew', 'jet ski', 'rzr xp 4'))")
+    con.commit()
+    sweep.start_round(con, 1)
+    con.execute("UPDATE searches SET enabled = 0 WHERE query = 'ranger crew'")
+    con.execute("DELETE FROM searches WHERE query = 'jet ski'")
+    con.commit()
+    calls = []
+
+    class FakePW:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+    class FakeFB(FakePW):
+        def __init__(self, *a, **kw):
+            pass
+
+        async def search(self, q, *a, **kw):      # one result each, so the empty-run canary doesn't fire
+            calls.append(q)
+            return [{"ext_id": "s1", "url": "u", "title": "sweep find", "price": 9000, "status": "active"}]
+    with patch.object(sweep, "async_playwright", return_value=FakePW()), patch.object(sweep, "Facebook", FakeFB), \
+         patch.object(sweep, "pause", AsyncMock()), patch.object(scan, "acquire_fb_lock", AsyncMock(return_value=Lock())):
+        asyncio.run(sweep.run())
+    assert calls and all(q == "rzr xp 4" for q in calls), calls
+    assert con.execute("SELECT COUNT(*) FROM sweep_queue WHERE query = 'jet ski'").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM sweep_queue WHERE query = 'ranger crew' AND state = 'todo'").fetchone()[0] > 0
+    con.execute("UPDATE searches SET enabled = 1"); con.commit()
+
+    # 8. trailer fields left over from a category switch don't send a UTV through trailer pricing
+    con = reset([]); _family(con)
+    web._MARKET_CACHE.clear()
+    body = {"category": "utv4", "family": "RZR XP 4", "year": 2022, "condition": "good", "miles": 1000}
+    normal = client().post("/api/appraise", json=body).json()
+    stale = client().post("/api/appraise", json=body | {"len_ft": 16, "axles": 2}).json()
+    assert not normal["rough"] and stale["typical"] == normal["typical"] and not stale["rough"], (normal, stale)
 
 
 if __name__ == "__main__":

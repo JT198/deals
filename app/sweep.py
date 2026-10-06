@@ -41,6 +41,8 @@ LOCK_WAIT = 300         # seconds to wait for the other lanes to finish with Fac
 CANARY = "ranger crew"   # a plain search that always has results: empty means Facebook is walling us
 ORDER = ["utv4", "utv2", "atv", "pwc", "mower", "trailer", "sled", "trike"]   # what Jon is shopping for first
 PRIORITY = "CASE category " + " ".join(f"WHEN '{c}' THEN {i}" for i, c in enumerate(ORDER)) + " ELSE 99 END"
+# a job is only live while its search is still enabled in Setup (disabled ones wait; deleted ones are dropped)
+LIVE = "EXISTS (SELECT 1 FROM searches s WHERE s.query = sweep_queue.query AND s.enabled = 1)"
 
 
 def default_bands(category: str) -> list[tuple[int, int]]:
@@ -119,7 +121,10 @@ async def run() -> None:
     con = db.connect()
     st = db.settings(con)
     rnd = int(st.get("sweep_round") or 0)
-    if not con.execute("SELECT 1 FROM sweep_queue WHERE round = ? AND state = 'todo' LIMIT 1", (rnd,)).fetchone():
+    con.execute("DELETE FROM sweep_queue WHERE query NOT IN (SELECT query FROM searches)")
+    con.commit()
+    if not con.execute(f"SELECT 1 FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE} LIMIT 1",
+                       (rnd,)).fetchone():
         if rnd:     # how long a full round takes tells the scanner how long "not seen lately" has to be
             con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('sweep_round_secs', ?)",
                         (str(db.now() - int(st.get("sweep_round_started") or db.now())),))
@@ -138,7 +143,7 @@ async def run() -> None:
         if lock is None:
             print("sweep: facebook busy with another scan lane, skipping")
             return
-        jobs = con.execute(f"""SELECT * FROM sweep_queue WHERE round = ? AND state = 'todo'
+        jobs = con.execute(f"""SELECT * FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}
                                ORDER BY {PRIORITY}, id LIMIT ?""",
                            (rnd, NIGHT_SEARCHES if night else DAY_SEARCHES)).fetchall()
         loc, radius = st.get("fb_location", "plymouth-mn"), int(st.get("radius_mi") or 100)
@@ -190,7 +195,7 @@ async def run() -> None:
             errors.append(msg)
         if night and not walled:
             await scan.parse_pending(con, http, NIGHT_PARSES, errors)
-        left = con.execute("SELECT COUNT(*) FROM sweep_queue WHERE round = ? AND state = 'todo'", (rnd,)).fetchone()[0]
+        left = con.execute(f"SELECT COUNT(*) FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}", (rnd,)).fetchone()[0]
         print(f"sweep r{rnd}: searches={len(jobs)} found={found} new={new} splits={splits} left={left} errors={len(errors)}")
         for e in errors[:10]:
             print("  !", e)

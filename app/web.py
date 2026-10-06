@@ -277,6 +277,14 @@ def _appraisal(body: dict) -> dict:
           "deck_in": int(num("deck_in")) if num("deck_in") else None, "len_ft": num("len_ft"),
           "axles": int(num("axles")) if num("axles") else None,
           "equipment": json.dumps([f for f in (body.get("equipment") or []) if isinstance(f, str)])}
+    # a form that switched category can still carry the other category's fields: they would send a UTV
+    # through trailer pricing or a trailer through mileage adjustments
+    if cat != "trailer":
+        me["len_ft"] = me["axles"] = None
+    else:
+        me["miles"] = me["hours"] = None
+    if cat != "mower":
+        me["deck_in"] = None
     comps, effects = _market_inputs(con)
     exp, n, base, note, pre = score.expected_price(me, comps, effects)
     cond = CONDITION.get(body.get("condition") or "good", 1.0)
@@ -419,13 +427,17 @@ def put_settings(body: dict = Body(...)):
         if k == "alert_rules":
             if not isinstance(v, dict) or not all(isinstance(r, dict) for r in v.values()):
                 raise HTTPException(400, "alert_rules must be an object of objects")
-            for r in v.values():
-                for f in ("max_price", "min_year"):
-                    if str(r.get(f) or "").strip() and not str(r.get(f)).strip().lstrip("-").replace(".", "", 1).isdigit():
-                        raise HTTPException(400, f"{f} must be a number")
+            def whole(r, f):
+                """'' or a whole number as text - what the scanner's int() expects ('12000.0' -> '12000')."""
+                raw = str(r.get(f) or "").strip()
+                if not raw:
+                    return ""
+                try:
+                    return str(int(float(raw)))
+                except ValueError:
+                    raise HTTPException(400, f"{f} must be a number")
             v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
-                                "max_price": str(r.get("max_price") or ""),
-                                "min_year": str(r.get("min_year") or "")}
+                                "max_price": whole(r, "max_price"), "min_year": whole(r, "min_year")}
                             for c, r in v.items() if c in CATEGORIES})
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, str(v).strip()))
     con.commit()

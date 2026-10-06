@@ -122,8 +122,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         return None if v is None else 1 if v is True or str(v).lower() == "true" else 0
 
     fam = d.get("family")
-    fam = fam if fam in FAMILY_CATEGORY else None
-    cat = d.get("category") if d.get("category") in CATEGORIES else None
+    fam = fam if isinstance(fam, str) and fam in FAMILY_CATEGORY else None
+    cat = d.get("category")
+    cat = cat if isinstance(cat, str) and cat in CATEGORIES else None
     if fam and cat != FAMILY_CATEGORY[fam]:
         cat = FAMILY_CATEGORY[fam]    # the family is the more specific answer
     year = num(d.get("year"))
@@ -139,7 +140,7 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
             return None
         return f if lo <= f <= hi else None
     trailer = cat == "trailer"
-    ttype = d.get("trailer_type") if trailer and d.get("trailer_type") in (
+    ttype = d.get("trailer_type") if trailer and isinstance(d.get("trailer_type"), str) and d.get("trailer_type") in (
         "enclosed", "open", "equipment", "tilt", "dump", "deckover", "drive-on", "other") else None
     axles = num(d.get("axles")) if trailer else None
     gvwr = num(d.get("gvwr_lb")) if trailer else None

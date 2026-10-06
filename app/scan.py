@@ -267,19 +267,24 @@ async def parse_pending(con, http, limit: int, errors: list, concurrency: int = 
                 return
             try:
                 p = await parse.parse(http, dict(r))
-                if p is not None:
-                    cols = ", ".join(f"{k} = ?" for k in p)
-                    con.execute(f"UPDATE listings SET {cols}, parsed = 1 WHERE id = ?", (*p.values(), r["id"]))
-                else:
-                    # the model gave unusable output; it's deterministic, so give up after a few tries
-                    con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
-                    con.execute("""UPDATE listings SET parsed = 1, relevant = 0, summary = 'could not read this ad'
-                                   WHERE id = ? AND parse_attempts >= 3""", (r["id"],))
-                con.commit()
-                failures["streak"] = 0
-            except Exception as e:
+            except httpx.HTTPError as e:     # can't reach the model at all
                 failures["streak"] += 1
                 errors.append(f"parse {r['id']}: {e}")
+                return
+            except Exception as e:           # the model answered, but with something we can't use
+                errors.append(f"parse {r['id']}: {type(e).__name__}: {e}")
+                p = None
+            failures["streak"] = 0
+            if p is not None:
+                # equipment is re-detected by the next rescore: the text it came from may have changed
+                cols = ", ".join(f"{k} = ?" for k in p)
+                con.execute(f"UPDATE listings SET {cols}, parsed = 1, equipment = NULL WHERE id = ?", (*p.values(), r["id"]))
+            else:
+                # unusable output; the model is deterministic, so give up after a few tries
+                con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
+                con.execute("""UPDATE listings SET parsed = 1, relevant = 0, summary = 'could not read this ad'
+                               WHERE id = ? AND parse_attempts >= 3""", (r["id"],))
+            con.commit()
     await asyncio.gather(*(parse_one(r) for r in rows))
     if failures["streak"] >= 3:
         errors.append("LLM parsing failed repeatedly - Ollama down? (skipped the rest this run)")
@@ -342,7 +347,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     run_id = con.execute("INSERT INTO runs(started, source) VALUES (?, ?)", (db.now(), mode)).lastrowid
     con.commit()
     errors: list[str] = []
-    found = new = alerts = 0
+    found = new = alerts = cl_found = 0
 
     async with craigslist.client() as http:
         # --- Craigslist search (Craigslist has no sold listings - skipped by the sold pull)
@@ -352,6 +357,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 items = await craigslist.search(http, q, st.get("home_zip", "55446"), radius,
                                                 cfg(srch["category"])["cl_cat"])
                 found += len(items)
+                cl_found += len(items)
                 new += sum(upsert(con, "craigslist", i) for i in items)
                 con.commit()
             except Exception as e:  # keep going; one bad query shouldn't kill the run
@@ -435,11 +441,15 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         await parse_pending(con, http, PARSES_PER_RUN * boost, errors,
                             concurrency=1 if (quick or sold) else PARSE_CONCURRENCY, only=only_new if quick else "")
 
-        # listings we haven't seen or confirmed in a while are probably gone
+        # listings we haven't seen or confirmed in a while are probably gone - judged per source, and only
+        # when that source actually answered this run (a paused, skipped or walled Facebook proves nothing)
         fb_blocked = any("login wall" in e for e in errors)
-        if not (quick or sold) and not fb_blocked and found > 0:
-            con.execute("UPDATE listings SET status='gone' WHERE status IN ('active','pending') AND last_seen < ?",
-                        (db.now() - stale_after(db.settings(con)),))
+        if not (quick or sold):
+            cutoff = db.now() - stale_after(db.settings(con))
+            for source, answered in (("craigslist", cl_found > 0), ("facebook", fb_found > 0 and not fb_blocked)):
+                if answered:
+                    con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
+                                   AND source = ? AND last_seen < ?""", (source, cutoff))
             con.commit()
 
         score.rescore_all(con)
@@ -520,8 +530,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
         """Filters shared by both alert types; each type has its own on/off switch."""
         rule = rules.get(r["category"]) or {}
         return (in_range(r)
-                and not (rule.get("max_price") and (r["price"] or 0) > int(rule["max_price"]))
-                and not (rule.get("min_year") and (r["year"] or 0) < int(rule["min_year"])))
+                and not (rule.get("max_price") and (r["price"] or 0) > int(float(rule["max_price"])))
+                and not (rule.get("min_year") and (r["year"] or 0) < int(float(rule["min_year"]))))
 
     def fits_need(r, kind):
         """Trailers that can't carry a 4-seat UTV only alert when the deal is exceptional."""
@@ -532,17 +542,18 @@ async def _send_alerts(con, http, st, quiet) -> int:
     def switched_on(r, kind):
         return bool((rules.get(r["category"]) or {}).get(kind))
 
-    def mark(sql, ids, kind=None):
-        con.executemany(sql, [(i,) for i in ids])
+    def mark(sql, rows, kind=None):
+        """Record the alert from the rows as they were selected and sent - another lane may have changed
+        the listing's price or score in the meantime, and a marker from the newer row would swallow the
+        price-drop alert that change deserves."""
+        con.executemany(sql, [(r["score"], r["price"], r["id"]) for r in rows])
         if kind:   # delivered (or silently accepted by a backfill): remember title + price for cross-posts
-            for i in ids:
-                r = con.execute("SELECT title, price FROM listings WHERE id = ?", (i,)).fetchone()
-                con.execute("INSERT INTO alert_log(listing_id, title_key, price, kind, ts) VALUES (?, ?, ?, ?, ?)",
-                            (i, db.title_key(r["title"]), r["price"], kind, db.now()))
+            con.executemany("INSERT INTO alert_log(listing_id, title_key, price, kind, ts) VALUES (?, ?, ?, ?, ?)",
+                            [(r["id"], db.title_key(r["title"]), r["price"], kind, db.now()) for r in rows])
         con.commit()
 
-    deal_mark = "UPDATE listings SET alerted_score = score, fresh_alerted = 1, alerted_price = price WHERE id = ?"
-    fresh_mark = "UPDATE listings SET fresh_alerted = 1, alerted_price = price WHERE id = ?"
+    deal_mark = "UPDATE listings SET alerted_score = ?, fresh_alerted = 1, alerted_price = ? WHERE id = ?"
+    fresh_mark = "UPDATE listings SET fresh_alerted = 1, alerted_price = ?2 WHERE id = ?3"
 
     # Cross-posts / reposts: a DIFFERENT listing with the same title has alerted at this price at any
     # point in the last 30 days (full history in alert_log), or was picked earlier in this run.
@@ -567,10 +578,11 @@ async def _send_alerts(con, http, st, quiet) -> int:
 
     # Old listings the first deep sweep dug up: Jon gets a summary of those, not a Telegram flood.
     # Recorded as alerted at this score, so a later price cut that lifts the score still alerts.
-    old_news = [r["id"] for r in deals if r["backlog"] and r["alerted_score"] is None]
+    old_news = [r for r in deals if r["backlog"] and r["alerted_score"] is None]
     if old_news:
         mark(deal_mark, old_news, "backlog")
-        deals = [r for r in deals if r["id"] not in set(old_news)]
+        skip = {r["id"] for r in old_news}
+        deals = [r for r in deals if r["id"] not in skip]
 
     # "Just listed": fresh private listings priced normally or better with no known problems,
     # so Jon can message the seller first
@@ -587,8 +599,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
         and first_copy(r)]
 
     if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
-        mark(deal_mark, deal_ids, "backfill")
-        mark(fresh_mark, [r["id"] for r in fresh], "backfill")
+        mark(deal_mark, deals, "backfill")
+        mark(fresh_mark, fresh, "backfill")
         await _watch_alerts(con, http, quiet=True)
         return 0
 
@@ -597,16 +609,16 @@ async def _send_alerts(con, http, st, quiet) -> int:
     for r in deals[:MAX_ALERTS_PER_RUN]:
         if await notify.send_listing(http, r):
             sent += 1
-            mark(deal_mark, [r["id"]], "deal")
+            mark(deal_mark, [r], "deal")
     rest = deals[MAX_ALERTS_PER_RUN:]
     if rest and await notify.send_text(http, f"…and {len(rest)} more above {threshold} "
                                              f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.'):
-        mark(deal_mark, [r["id"] for r in rest], "deal-summary")
+        mark(deal_mark, rest, "deal-summary")
     for r in fresh[:MAX_FRESH_PER_RUN]:   # any beyond the cap go out next run (still fresh)
         mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
         if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
             sent += 1
-            mark(fresh_mark, [r["id"]], "fresh")
+            mark(fresh_mark, [r], "fresh")
     sent += await _watch_alerts(con, http, quiet)
     return sent
 

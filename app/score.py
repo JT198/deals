@@ -9,7 +9,7 @@ import statistics
 import time
 
 from .categories import FAMILY_CATEGORY, cfg
-from . import usage
+from . import db, usage
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, detect
 
 EQUIP_VERSION = 2   # bump when equipment.detect learns something new: every listing is re-detected once
@@ -97,10 +97,22 @@ def new_price_for(listing, new_by_fam) -> tuple[int | None, int]:
     return prices[int(0.25 * (len(prices) - 1))], len(pool)
 
 
+def dedupe_cross_posts(rows):
+    """One machine posted several times (both sites, reposts, a dealer's duplicates) is one data point:
+    keep the first row per normalized title + price."""
+    seen, out = set(), []
+    for r in rows:
+        key = (db.title_key(r["title"]), r["price"])
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
 def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
     """family -> used asking prices; sold=True: last price of listings marked sold; new=True: new dealer stock."""
     rows = con.execute(
-        """SELECT id, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
+        """SELECT id, title, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
                   deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
                   CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc,
                   gvwr_lb, width_ft
@@ -111,7 +123,7 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
          if sold else "last_seen >= ?"),
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
-    for r in rows:
+    for r in dedupe_cross_posts(rows):
         by_fam.setdefault(r["family"], []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
                   frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"])))
@@ -363,11 +375,11 @@ def equipment_effects(con) -> dict:
     with the feature ask above their pre-equipment typical price vs listings without; shrunk toward the prior.
     Plow / trailer use their dollar priors."""
     rows = con.execute(
-        """SELECT category, equipment, price, expected_pre FROM listings
+        """SELECT title, category, equipment, price, expected_pre FROM listings
            WHERE relevant = 1 AND parsed = 1 AND COALESCE(is_new, 0) = 0 AND price >= 300
              AND expected_pre IS NOT NULL AND category IN ('utv4', 'utv2', 'atv')""").fetchall()
     ratios: dict[str, list] = {}
-    for r in rows:
+    for r in dedupe_cross_posts(rows):
         group = "utv" if r["category"] in ("utv4", "utv2") else r["category"]
         ratios.setdefault(group, []).append((set(json.loads(r["equipment"] or "[]")), r["price"] / r["expected_pre"]))
     out = {}

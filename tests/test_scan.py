@@ -1107,6 +1107,14 @@ def test_review_fixes_2026_10_05():
     assert con.execute("SELECT family FROM listings WHERE id = 'facebook:3'").fetchone()[0] == "RZR XP 4"
     assert con.execute("SELECT family FROM listings WHERE id = 'facebook:0'").fetchone()[0] is None
 
+    # 6b. a cross-post never prices itself through its twin: both copies value the same
+    con = reset([{"title": "2022 RZR XP 4 twin", "price": 20000, "first_price": 20000},
+                 {"id": "facebook:1", "ext_id": "1", "title": "2022 RZR XP 4 twin", "price": 20000, "first_price": 20000}])
+    _insert(con, [dict(category="utv4", family="RZR XP 4", year=2022, price=p) for p in (15000, 15500, 16000)])
+    score.rescore_all(con)
+    twins = [dict(r) for r in con.execute("SELECT expected, comps, score FROM listings WHERE title LIKE '%twin' ORDER BY id")]
+    assert twins[0] == twins[1] and twins[0]["comps"] == 3, twins
+
     # 6. eight copies of one listing are one comp
     con = reset([{"title": "2022 RZR XP 4 bargain", "price": 13000, "first_price": 13000}])
     _insert(con, [dict(category="utv4", family="RZR XP 4", year=2022, title="2022 RZR XP 4 Loaded", price=20000) for _ in range(8)])

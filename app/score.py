@@ -27,9 +27,18 @@ def _v(listing, key):
 
 
 class Comp(tuple):
-    """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc, gvwr_lb, width_ft)"""
-    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width = (
-        property(lambda t, i=i: t[i]) for i in range(13))
+    """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc, gvwr_lb, width_ft,
+    key) - key is the cross-post group (normalized title, price), so a machine never prices itself through a copy."""
+    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width, key = (
+        property(lambda t, i=i: t[i]) for i in range(14))
+
+
+def comp_key(listing) -> tuple | None:
+    """Cross-post group of a listing, matching the key _comps uses: same normalized title, same price per machine."""
+    title, price = _v(listing, "title"), _v(listing, "end_price") or _v(listing, "price")
+    if not title or not price:
+        return None
+    return db.title_key(title), int(price * 1.0 / max(1, _v(listing, "units") or 1))
 
 
 # Open flat trailers are one market: whether an ad says "utility", "equipment" or "car hauler" is fuzzy,
@@ -126,7 +135,8 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
     for r in dedupe_cross_posts(rows):
         by_fam.setdefault(r["family"], []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
-                  frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"])))
+                  frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"],
+                  (db.title_key(r["title"]), int(r["price"])))))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -232,7 +242,9 @@ def _expected_one(listing, comps_by_fam, effects=None):
         return none
     cat = _v(listing, "category")
     c = cfg(cat)
-    others = [x for x in family_pool(comps_by_fam, fam) if x.id != _v(listing, "id")]
+    # not the listing itself, and not another posting of the same machine (its cross-post group)
+    mine, me = comp_key(listing), _v(listing, "id")
+    others = [x for x in family_pool(comps_by_fam, fam) if x.id != me and (mine is None or x.key != mine)]
     deck = _v(listing, "deck_in")
     if deck:   # mowers: a 42" and a 60" of the same series are different machines
         same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]

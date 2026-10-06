@@ -1164,6 +1164,53 @@ def test_review_fixes_2026_10_05():
     assert not normal["rough"] and stale["typical"] == normal["typical"] and not stale["rough"], (normal, stale)
 
 
+def test_route_rechecked_after_lock_wait_and_inf_limits():
+    """Opus review 2026-10-05: a pause set while a lane waits for the Facebook lock must stand; inf/nan limits are a 400."""
+    from unittest.mock import AsyncMock, patch
+    from app import sweep
+    con = reset([], active_hours="0-24")
+    con.execute("DELETE FROM sweep_queue")
+    con.execute("UPDATE searches SET enabled = (query = 'jet ski')")
+    con.commit()
+    calls = []
+
+    class Lock:
+        closed = False
+
+        def close(self):
+            Lock.closed = True
+
+    async def lock_after_block(wait):       # the full scan got blocked while the sweep waited
+        c2 = db.connect()
+        c2.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_backoff_until:home', ?)", (str(db.now() + 7200),))
+        c2.commit(); c2.close()
+        return Lock()
+
+    class FakeFB:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def search(self, q, *a, **kw):
+            calls.append(q)
+            return []
+    with patch.object(scan, "acquire_fb_lock", lock_after_block), patch.object(sweep, "Facebook", FakeFB), \
+         patch.object(sweep, "pause", AsyncMock()):
+        asyncio.run(sweep.run())
+    assert calls == [] and Lock.closed, calls
+    assert int(db.settings(con)["fb_backoff_until:home"]) - db.now() > 7000      # the scan's pause is untouched
+    con.execute("UPDATE searches SET enabled = 1"); con.commit()
+
+    for bad in ("inf", "nan", "1e999"):
+        r = client().put("/api/settings", json={"alert_rules": {"utv4": {"max_price": bad}}})
+        assert r.status_code == 400, (bad, r.status_code)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

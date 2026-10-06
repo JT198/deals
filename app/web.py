@@ -434,7 +434,7 @@ def put_settings(body: dict = Body(...)):
                     return ""
                 try:
                     return str(int(float(raw)))
-                except ValueError:
+                except (ValueError, OverflowError):      # "abc", "nan", "inf"
                     raise HTTPException(400, f"{f} must be a number")
             v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
                                 "max_price": whole(r, "max_price"), "min_year": whole(r, "min_year")}

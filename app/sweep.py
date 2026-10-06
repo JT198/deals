@@ -143,6 +143,13 @@ async def run() -> None:
         if lock is None:
             print("sweep: facebook busy with another scan lane, skipping")
             return
+        # up to 9 minutes may have passed: if the scan we waited on got blocked, its pause must stand
+        st = db.settings(con)
+        route, until = scan.fb_pick_route(st, db.now())
+        if route is None:
+            lock.close()
+            print("sweep: facebook was paused while waiting, skipping")
+            return
         jobs = con.execute(f"""SELECT * FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}
                                ORDER BY {PRIORITY}, id LIMIT ?""",
                            (rnd, NIGHT_SEARCHES if night else DAY_SEARCHES)).fetchall()

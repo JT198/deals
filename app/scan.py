@@ -38,6 +38,7 @@ FB_BACKOFF_HOURS = (2, 4, 8)  # pause all Facebook traffic this long after it re
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
 FB_RECHECKS_PER_RUN = 6
+QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
 PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
@@ -366,7 +367,11 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
 
         # --- Facebook search + item pages (one browser at a time across the scan lanes)
         fb_found = 0
-        fb_lock = await acquire_fb_lock(60 if quick else 900)
+        fb_lock = await acquire_fb_lock(QUICK_LOCK_WAIT if quick else 900)
+        if fb_lock:     # the wait can be long: another lane may have been blocked and paused a route meanwhile
+            st = db.settings(con)
+            fb_route, fb_until = fb_pick_route(st, db.now())
+            fb_paused = fb_route is None
         if fb_paused:
             errors.append(f"facebook paused until {time.strftime('%H:%M', time.localtime(fb_until))} after it blocked us")
         elif fb_route == "proxy":

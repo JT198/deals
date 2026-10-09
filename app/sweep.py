@@ -168,6 +168,7 @@ async def run() -> None:
         try:
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if route == "proxy" else None) as fb:
                 for j in jobs:
+                    await scan.step_aside(lock)
                     try:
                         items = await fb.search(j["query"], loc, radius, sort="best_match", scrolls=0,
                                                 price=(j["lo"], j["hi"]))
@@ -202,7 +203,7 @@ async def run() -> None:
                         con.commit()
                         errors.append("facebook returned nothing for every search (login wall?)")
                 if night and not walled:
-                    await scan.fb_details(con, fb, scan.pending_details(con, NIGHT_DETAILS), errors)
+                    await scan.fb_details(con, fb, scan.pending_details(con, NIGHT_DETAILS), errors, lock=lock)
         except Exception as e:
             errors.append(f"facebook: {e}")
         finally:

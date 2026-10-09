@@ -180,6 +180,28 @@ async def acquire_fb_lock(wait_secs: int, yield_to_quick: bool = False, quick: b
                 pass
 
 
+def quick_waiting() -> bool:
+    marker = os.path.join(LOCK_DIR, QUICK_WAITING)
+    try:
+        return time.time() - os.path.getmtime(marker) < 600
+    except FileNotFoundError:
+        return False
+
+
+async def step_aside(lock) -> None:
+    """Called by the long lanes (full scan, sweep, sold pull) between Facebook pages: if the fast lane
+    is waiting, hand it the Facebook lock for its one-minute run, then take it back. Without this the
+    full scan (17-23 minutes of every 20) made the fast lane skip about a third of its runs.
+    The browser stays open; only one lane talks to Facebook at a time either way."""
+    if lock is None or not quick_waiting():
+        return
+    fcntl.flock(lock, fcntl.LOCK_UN)
+    deadline = time.time() + 120
+    while quick_waiting() and time.time() < deadline:   # the marker goes once the fast lane has the lock
+        await asyncio.sleep(1)
+    await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
+
+
 async def _wait_for(f, marker, deadline, yield_to_quick):
     while True:
         try:
@@ -249,11 +271,12 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
-async def fb_details(con, fb, todo, errors: list) -> None:
+async def fb_details(con, fb, todo, errors: list, lock=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless every one fails - that is Facebook walling us, not a batch of removed listings."""
     ok, missed = 0, []
     for r in todo:
+        await step_aside(lock)
         try:
             d = await fb.detail(r["ext_id"])
             if d is None:
@@ -405,6 +428,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None) as fb:
                 empty = 0
                 for srch in due:
+                    if not quick:
+                        await step_aside(fb_lock)
                     q = srch["query"]
                     try:
                         items = await fb.search(q, st.get("fb_location", "plymouth-mn"), radius,
@@ -430,7 +455,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
                     todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
-                await fb_details(con, fb, todo, errors)
+                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock)
         except SkipFacebook:
             pass
         except Exception as e:

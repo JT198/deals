@@ -4,6 +4,8 @@ Requests arriving through the Cloudflare tunnel (CF-Gateway, 10.10.10.5) must
 carry a Cloudflare Access identity from ALLOWED_EMAILS; LAN requests are trusted.
 """
 import asyncio
+import gzip
+import hashlib
 import ipaddress
 import json
 import re
@@ -15,7 +17,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import db, geo, scan, score, sweep
 from .sources.facebook import proxy_config
@@ -51,7 +53,8 @@ async def gate(request: Request, call_next):
     if request.method != "GET" and request.headers.get("sec-fetch-site") == "cross-site":
         return JSONResponse({"error": "cross-site request"}, status_code=403)
     resp = await call_next(request)
-    resp.headers["Cache-Control"] = "no-store"
+    # private data: never kept by Cloudflare; /api/listings may be kept by the browser and revalidated (ETag)
+    resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers["X-Robots-Tag"] = "noindex, nofollow"
     return resp
 
@@ -93,24 +96,47 @@ LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_p
 
 
 @app.get("/api/listings")
-def listings(include_gone: int = 0, include_irrelevant: int = 0):
+def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 0):
+    """Every live listing, for the dashboard (14k+ rows once the deep sweep ran: ~35 MB of JSON).
+    Built once per change of the data, gzipped (~6 MB), and answered with 304 when the browser's
+    copy is current - the 2-minute refresh usually downloads nothing."""
     con = db.connect()
-    dist = _geo(con)
     where = ["parsed = 1"]
     if not include_irrelevant:
         where.append("relevant = 1")
     if not include_gone:
         where.append("status IN ('active','pending')")
-    rows = con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {' AND '.join(where)}").fetchall()
-    out = []
-    home = dist.home
-    for r in rows:
-        d = db.row_dict(r)
-        d["distance"] = dist(d)
-        d["lat"], d["lon"], d["approx"] = dist.point(d)
-        d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
-        out.append(d)
-    return JSONResponse(out, headers={"X-Home": f"{home[0]},{home[1]}"})
+    where_sql = " AND ".join(where)
+    # cheap fingerprint of everything the cards show: scans, rescoring, stars, hides, notes, Gone
+    version = tuple(con.execute(
+        f"""SELECT COUNT(*), MAX(last_seen), MAX(last_checked), TOTAL(score), TOTAL(price), TOTAL(starred),
+                   TOTAL(hidden), TOTAL(LENGTH(notes)), TOTAL(expected) FROM listings WHERE {where_sql}""").fetchone())
+    key = (where_sql, version, tuple(con.execute("SELECT COUNT(*), TOTAL(lat) FROM geocache").fetchone()),
+           tuple(db.settings(con).get(k) for k in ("home_lat", "home_lon")))
+    hit = _LISTINGS_CACHE.get(where_sql)
+    if not hit or hit["key"] != key:
+        dist = _geo(con)
+        out = []
+        for r in con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {where_sql}").fetchall():
+            d = db.row_dict(r)
+            d["distance"] = dist(d)
+            d["lat"], d["lon"], d["approx"] = dist.point(d)
+            d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
+            # empty fields are most of the bytes; the page treats missing like null / empty
+            out.append({k: v for k, v in d.items() if v is not None and v != "" and v != []})
+        body = json.dumps(out, separators=(",", ":")).encode()
+        hit = _LISTINGS_CACHE[where_sql] = {"key": key, "gz": gzip.compress(body, 5), "raw": body,
+                                            "etag": '"' + hashlib.md5(body).hexdigest() + '"',
+                                            "home": f"{dist.home[0]},{dist.home[1]}"}
+    headers = {"X-Home": hit["home"], "ETag": hit["etag"], "Cache-Control": "private, no-cache", "Vary": "Accept-Encoding"}
+    if request.headers.get("if-none-match") == hit["etag"]:
+        return Response(status_code=304, headers=headers)
+    if "gzip" in (request.headers.get("accept-encoding") or ""):
+        return Response(hit["gz"], media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(hit["raw"], media_type="application/json", headers=headers)
+
+
+_LISTINGS_CACHE: dict = {}
 
 
 @app.get("/api/search")

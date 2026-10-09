@@ -819,7 +819,7 @@ def test_listings_carry_map_points():
     rows = {d["id"]: d for d in resp.json()}
     assert (rows["facebook:0"]["lat"], rows["facebook:0"]["approx"]) == (45.1, False)       # own pin
     assert (rows["facebook:1"]["lat"], rows["facebook:1"]["approx"]) == (45.1977, True)     # town
-    assert rows["facebook:2"]["lat"] is None
+    assert rows["facebook:2"].get("lat") is None                 # no point: field left out (the page reads missing as null)
     assert resp.headers["X-Home"].startswith("45.")
 
 
@@ -1314,6 +1314,36 @@ def test_buy_box():
     text = digest.build(con)
     assert ">unknown use<" not in text and "6 new listings" in text, text
     assert ">t0<" in text and ">old<" not in text and ">far<" not in text and ">ranger<" not in text, text
+
+
+def test_long_lanes_step_aside_for_the_fast_lane_and_listings_feed_is_cached():
+    # the full scan holds the lock; the fast lane starts waiting; the full scan's next step hands it over
+    async def race():
+        full = await scan.acquire_fb_lock(5)
+        order = []
+
+        async def quick():
+            lk = await scan.acquire_fb_lock(30, quick=True)
+            order.append("quick"); await asyncio.sleep(0.3); lk.close()
+        q = asyncio.create_task(quick())
+        await asyncio.sleep(0.5)
+        assert scan.quick_waiting()
+        await scan.step_aside(full)           # gives the lock up, waits for the fast lane, takes it back
+        order.append("full again")
+        await q
+        full.close()
+        return order
+    assert asyncio.run(race()) == ["quick", "full again"]
+    assert not scan.quick_waiting()
+
+    con = reset([{"miles": None, "notes": None}])
+    c = client()
+    r = c.get("/api/listings")
+    assert r.status_code == 200 and r.headers["etag"] and "miles" not in r.json()[0], r.json()[0]
+    assert c.get("/api/listings", headers={"if-none-match": r.headers["etag"]}).status_code == 304
+    assert c.post("/api/listing/facebook:0", json={"notes": "call him"}).status_code == 200
+    r2 = c.get("/api/listings", headers={"if-none-match": r.headers["etag"]})
+    assert r2.status_code == 200 and r2.json()[0]["notes"] == "call him"
 
 
 if __name__ == "__main__":

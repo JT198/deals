@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from . import db, notify
+from . import buybox, db, notify
 from .categories import CATEGORIES
 
 PER_CATEGORY = 2
@@ -28,23 +28,28 @@ def build(con) -> str:
     lines = [f"☕ <b>Deal Finder - {time.strftime('%A %b %-d')}</b>"]
 
     # seen_active keeps the sold-pull backlog (listings first seen already sold) out of these counts
-    new_total = con.execute("SELECT COUNT(*) FROM listings WHERE relevant = 1 AND seen_active = 1 AND first_seen >= ?",
+    # backlog = older listings the deep sweep dug up: found yesterday, but not new on the market
+    new_total = con.execute("SELECT COUNT(*) FROM listings WHERE relevant = 1 AND seen_active = 1 AND backlog = 0 AND first_seen >= ?",
                             (since,)).fetchone()[0]
     gone_total = con.execute("SELECT COUNT(*) FROM listings WHERE relevant = 1 AND seen_active = 1 AND ended_at >= ?",
                              (since,)).fetchone()[0]
     lines.append(f"{new_total} new listings yesterday, {gone_total} sold or removed.")
 
     any_deal = False
+    radius = int(st.get("radius_mi") or 100)
+    dist = buybox.distance_fn(con, st)
     for cat, cfg in CATEGORIES.items():
-        if not rules.get(cat, {}).get("enabled"):
+        rule = rules.get(cat, {})
+        if not rule.get("digest", True):
             continue
         rows = con.execute(
-            """SELECT title, price, expected, score, location, url, utv_fit, category FROM listings
+            """SELECT * FROM listings
                WHERE relevant = 1 AND category = ? AND status = 'active' AND hidden = 0 AND first_seen >= ?
-                 AND score >= ? AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'
+                 AND backlog = 0 AND score >= ? AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'
                  AND COALESCE(is_new, 0) = 0
-               ORDER BY score DESC LIMIT ?""", (cat, since, MIN_SCORE, PER_CATEGORY)).fetchall()
-        rows = [r for r in rows if cat != "trailer" or r["utv_fit"] == "yes" or r["score"] >= cfg.get("fit_gate", 100)]
+               ORDER BY score DESC""", (cat, since, MIN_SCORE)).fetchall()
+        rows = [r for r in rows if (cat != "trailer" or r["utv_fit"] == "yes" or r["score"] >= cfg.get("fit_gate", 100))
+                and buybox.fits(rule, r, dist(r), radius)][:PER_CATEGORY]
         if not rows:
             continue
         any_deal = True

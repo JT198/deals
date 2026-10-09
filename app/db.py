@@ -90,7 +90,9 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 def _default_rule(cat: str) -> dict:
-    return {"enabled": True, "fresh": cat in ("utv4", "mower", "trailer"), "max_price": "", "min_year": ""}
+    """See buybox.py. New installs alert on everything; Jon's own box is set in Setup."""
+    return {"enabled": True, "fresh": cat in ("utv4", "mower", "trailer"), "digest": True, "models": [],
+            "max_price": "", "min_year": "", "max_miles": "", "max_hours": "", "within_mi": ""}
 
 
 DEFAULT_SETTINGS = {
@@ -223,6 +225,9 @@ def alert_rules(st: dict) -> dict:
         rules = {}
     for c in CATEGORIES:
         rules.setdefault(c, _default_rule(c))
+        for k, v in _default_rule(c).items():
+            if k not in ("enabled", "fresh"):
+                rules[c].setdefault(k, v)
         rules[c].setdefault("fresh", _default_rule(c)["fresh"])
     return rules
 

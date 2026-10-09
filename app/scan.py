@@ -23,7 +23,7 @@ import traceback
 import httpx
 from playwright.async_api import async_playwright
 
-from . import db, geo, notify, parse, score
+from . import buybox, db, geo, notify, parse, score
 from .categories import cfg
 from .sources import craigslist
 from .sources.facebook import Facebook, pause
@@ -529,14 +529,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
     private = ("AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
                if st.get("alert_private_only") == "1" else "")
     rules = db.alert_rules(st)
-    # FB sometimes mixes in "suggested" listings far outside the radius
-    home = (float(st["home_lat"]), float(st["home_lon"]))
     radius = int(st.get("radius_mi") or 100)
-    places = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
-
-    def in_range(r):
-        d = geo.distance(r, home, places)
-        return d is None or d <= radius + 10
+    dist = buybox.distance_fn(con, st)
 
     min_pct = float(st.get("alert_min_pct") or 0) / 100
     min_usd = float(st.get("alert_min_usd") or 0)
@@ -553,11 +547,9 @@ async def _send_alerts(con, http, st, quiet) -> int:
         return saving >= min_usd and saving / ref >= min_pct
 
     def passes_limits(r):
-        """Filters shared by both alert types; each type has its own on/off switch."""
-        rule = rules.get(r["category"]) or {}
-        return (in_range(r)
-                and not (rule.get("max_price") and (r["price"] or 0) > int(float(rule["max_price"])))
-                and not (rule.get("min_year") and (r["year"] or 0) < int(float(rule["min_year"]))))
+        """The category's buy box (models, year, price, use, distance), shared by both alert types;
+        each type has its own on/off switch."""
+        return buybox.fits(rules.get(r["category"]) or {}, r, dist(r), radius)
 
     def fits_need(r, kind):
         """Trailers that can't carry a 4-seat UTV only alert when the deal is exceptional."""

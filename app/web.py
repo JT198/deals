@@ -436,8 +436,14 @@ def put_settings(body: dict = Body(...)):
                     return str(int(float(raw)))
                 except (ValueError, OverflowError):      # "abc", "nan", "inf"
                     raise HTTPException(400, f"{f} must be a number")
+            def models(c, r):
+                m = r.get("models") or []
+                if not isinstance(m, list) or any(f not in CATEGORIES[c]["families"] for f in m):
+                    raise HTTPException(400, f"unknown model for {c}")
+                return m
             v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
-                                "max_price": whole(r, "max_price"), "min_year": whole(r, "min_year")}
+                                "digest": bool(r.get("digest", True)), "models": models(c, r),
+                                **{f: whole(r, f) for f in ("max_price", "min_year", "max_miles", "max_hours", "within_mi")}}
                             for c, r in v.items() if c in CATEGORIES})
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, str(v).strip()))
     con.commit()

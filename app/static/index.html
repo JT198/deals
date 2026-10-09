@@ -64,6 +64,10 @@ main { max-width: 1280px; margin: 0 auto; padding: 14px 16px 60px; }
 .cats button span { color: var(--muted); font-weight: 400; margin-left: 4px; }
 .rules td { white-space: nowrap; }
 .rules input[type=number] { width: 110px; }
+.rules input[type=number] { width: 90px; }
+.rules details.models summary { cursor: pointer; color: var(--text-2); }
+.rules details.models[open] { white-space: normal; min-width: 220px; max-height: 220px; overflow-y: auto; }
+.rules details.models label { display: block; font-size: 13px; padding: 2px 0; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px;
   padding: 3px 10px; cursor: pointer; font-size: 13px; }
@@ -369,8 +373,10 @@ td.t { white-space: normal; min-width: 240px; }
         and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
       <li><b>⭐ Watch alerts</b> - for starred listings: price drops, pending, sold/removed, back on the market.
         Stars are shared, so Alex's stars notify you too.</li>
-      <li>Per category you can turn each alert type on or off and set a max price and minimum year. Listings far outside
-        the radius and cross-posts of something already sent are skipped.</li>
+      <li><b>Buy box</b> (Setup): per category, the models, minimum year, max price, max miles / hours and how far you'd
+        drive. Deal and just-listed alerts only go out for listings inside the box; categories with Instant off still
+        show their best in the 7am digest (also limited to the box). A listing that doesn't state its miles or hours
+        isn't ruled out for it. Cross-posts of something already sent are skipped.</li>
     </ul>
 
     <h3>Using the dashboard</h3>
@@ -995,13 +1001,23 @@ async function renderSetup() {
         <span id="fbtest-msg"></span></span></label>
     <label>Scan hours<input name="active_hours" value="${esc(v.active_hours)}"><span class="hint">Local time, e.g. 6-23</span></label>
   </div>
-  <h2 style="margin-top:16px">Alerts by category</h2>
-  <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Deal alerts</th><th>Just-listed alerts</th><th>Max price</th><th>Min year</th></tr></thead><tbody>
-    ${CATS.map(c => { const r = s.alert_rules[c.key] || {}; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
+  <h2 style="margin-top:16px">Buy box</h2>
+  <p class="hint">What you'd actually buy, per category. <b>Instant</b> = a Telegram alert the moment a great deal inside the box shows up;
+    otherwise it waits for the 7am <b>digest</b>. Blank = no limit. A listing that doesn't state its miles or hours isn't ruled out for it.
+    "Within" defaults to the search radius.</p>
+  <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Instant</th><th>Just-listed</th><th>Digest</th>
+    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th></tr></thead><tbody>
+    ${CATS.map(c => { const r = s.alert_rules[c.key] || {}, m = r.models || []; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
       <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
       <td><label><input type="checkbox" data-r="fresh" ${r.fresh ? "checked" : ""}> on</label></td>
+      <td><label><input type="checkbox" data-r="digest" ${r.digest !== false ? "checked" : ""}> on</label></td>
+      <td><details class="models"><summary>${m.length ? m.length + " picked" : "any"}</summary>
+        ${c.families.map(f => `<label><input type="checkbox" data-model="${esc(f)}" ${m.includes(f) ? "checked" : ""}> ${esc(f)}</label>`).join("")}</details></td>
+      <td><input type="number" data-r="min_year" value="${esc(r.min_year)}" placeholder="any"></td>
       <td><input type="number" step="500" data-r="max_price" value="${esc(r.max_price)}" placeholder="any"></td>
-      <td><input type="number" data-r="min_year" value="${esc(r.min_year)}" placeholder="any"></td></tr>`; }).join("")}
+      <td>${["mower", "trailer", "pwc"].includes(c.key) ? "" : `<input type="number" step="500" data-r="max_miles" value="${esc(r.max_miles)}" placeholder="any">`}</td>
+      <td>${["trailer"].includes(c.key) ? "" : `<input type="number" step="50" data-r="max_hours" value="${esc(r.max_hours)}" placeholder="any">`}</td>
+      <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
   <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 5 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
@@ -1034,6 +1050,7 @@ async function renderSetup() {
     body.alert_rules = {};
     document.querySelectorAll("[data-rule]").forEach(tr => { const r = {};
       tr.querySelectorAll("[data-r]").forEach(i => r[i.dataset.r] = i.type === "checkbox" ? i.checked : i.value);
+      r.models = [...tr.querySelectorAll("[data-model]:checked")].map(i => i.dataset.model);
       body.alert_rules[tr.dataset.rule] = r; });
     try { await api("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       $("#savemsg").textContent = "Saved."; } catch (e) { $("#savemsg").textContent = "Save failed: " + e.message; }

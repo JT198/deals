@@ -1280,6 +1280,42 @@ def test_quick_lane_goes_first_and_far_padding_doesnt_split():
         assert asyncio.run(geo.lookup(H(), "Clearwater, MN")) == (45.42, -94.05) and calls == ["settlement"]
 
 
+def test_buy_box():
+    from app import buybox, digest
+    t = db.now() - 3 * 3600
+    base = dict(listed_at=t, score=90, price=12000, expected=20000, year=2021, miles=1500, family="RZR XP 4")
+    con = reset([dict(base),                                                                     # inside the box
+                 dict(base, id="facebook:1", ext_id="1", title="old", year=2018),                 # too old
+                 dict(base, id="facebook:2", ext_id="2", title="far", location="Ames, IA"),       # too far
+                 dict(base, id="facebook:3", ext_id="3", title="worn", miles=9000),               # too many miles
+                 dict(base, id="facebook:4", ext_id="4", title="unknown use", miles=None),        # unknown miles pass
+                 dict(base, id="facebook:5", ext_id="5", title="ranger", family="Ranger Crew 1000"),   # not a picked model
+                 dict(base, id="facebook:6", ext_id="6", title="doubt", miles=9000, usage_doubt="since rebuild")],
+                alert_min_pct="20", alert_min_usd="1500")
+    con.execute("INSERT OR REPLACE INTO geocache VALUES ('Ames, IA', 42.03, -93.62)")
+    con.commit()
+    rule = {"enabled": True, "fresh": False, "digest": True, "models": ["RZR XP 4", "Maverick X3 MAX"], "min_year": "2020",
+            "max_price": "", "max_miles": "3000", "max_hours": "", "within_mi": "150"}
+    r = client().put("/api/settings", json={"alert_rules": {"utv4": rule}})
+    assert r.status_code == 200, r.text
+    assert db.alert_rules(db.settings(con))["utv4"]["models"] == ["RZR XP 4", "Maverick X3 MAX"]
+    assert client().put("/api/settings", json={"alert_rules": {"utv4": dict(rule, models=["Toro TITAN"])}}).status_code == 400
+    asyncio.run(alerts(con))
+    assert sorted(SENT) == ["facebook:0", "facebook:4", "facebook:6"], SENT
+    # Ames is ~110 mi away: inside a 150 mi box, outside a 100 mi one
+    assert buybox.fits(dict(rule, within_mi="100"), con.execute("SELECT * FROM listings WHERE id='facebook:2'").fetchone(), 110, 100) is False
+    # instant off: no Telegram alert, but the digest still lists what's inside the box
+    con.execute("UPDATE listings SET alerted_score = NULL, fresh_alerted = NULL"); con.execute("DELETE FROM alert_log"); con.commit()
+    client().put("/api/settings", json={"alert_rules": {"utv4": dict(rule, enabled=False)}})
+    SENT.clear()
+    asyncio.run(alerts(con))
+    assert SENT == [], SENT
+    con.execute("UPDATE listings SET backlog = 1 WHERE id = 'facebook:4'"); con.commit()   # an old sweep find isn't news
+    text = digest.build(con)
+    assert ">unknown use<" not in text and "6 new listings" in text, text
+    assert ">t0<" in text and ">old<" not in text and ">far<" not in text and ">ranger<" not in text, text
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

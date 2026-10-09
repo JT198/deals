@@ -454,17 +454,26 @@ function bindFilters() {
 function save() { store.set("filters", F); render(); }
 
 // Cross-posts (same ad on Facebook and Craigslist, or reposted): show one card, link the copies.
+// Same title + price, or - for private sellers, who repost with a new title - same model, year, price and town.
 const postKey = d => (d.title || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + d.price;
+const machineKey = d => !d.dealer && d.family && d.year && d.price && d.location
+  ? [d.family, d.year, d.price, d.location.toLowerCase()].join("|") : null;
 function mergeCopies(rows) {
-  const by = new Map();
+  const by = new Map(), groups = [];
   for (const d of rows) {
-    const k = postKey(d), keep = by.get(k);
-    if (!keep) { d.copies = []; by.set(k, d); continue; }
-    const better = (d.starred - keep.starred) || ((d.score ?? -1) - (keep.score ?? -1)) || (listedAt(d) - listedAt(keep));
-    if (better > 0) { d.copies = [...keep.copies, keep]; keep.copies = []; by.set(k, d); }
-    else keep.copies.push(d);
+    const keys = [postKey(d), machineKey(d)].filter(Boolean);
+    const g = keys.map(k => by.get(k)).find(Boolean);
+    if (!g) { const ng = [d]; groups.push(ng); keys.forEach(k => by.set(k, ng)); continue; }
+    g.push(d); keys.forEach(k => by.has(k) || by.set(k, g));
   }
-  return [...by.values()];
+  // the card shows the copy with the most caution in it: a starred one, else the lowest score
+  // (a repost that drops "needs wheel hub" from its text is still the same machine)
+  return groups.map(g => {
+    g.sort((a, b) => (b.starred - a.starred) || ((a.score ?? 999) - (b.score ?? 999)) || (listedAt(b) - listedAt(a)));
+    const [keep, ...rest] = g;
+    keep.copies = rest;
+    return keep;
+  });
 }
 function filtered() { return mergeCopies(filteredRaw()); }
 function filteredRaw() {
@@ -629,7 +638,7 @@ function card(d) {
       ${offerBox(d)}
       ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
-        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>`).join(" · ")}</div>` : ""}
+        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
       <div class="tags">${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>

@@ -26,12 +26,13 @@ import traceback
 import httpx
 from playwright.async_api import async_playwright
 
-from . import db, notify, scan
+from . import db, geo, notify, scan
 from .categories import CATEGORIES
 from .sources.facebook import Facebook, pause
 
 PAGE_FULL = 13           # a best-match page holds 14-19; this many back means the band is probably cut off
 SPLIT_MIN_NEW = 3        # ...and it is only worth splitting while a full page still shows this many unseen listings
+SPLIT_REACH = 1.5        # ...within this multiple of the search radius (unknown distance counts as near)
 MIN_WIDTH = 100          # don't split a band narrower than 2x this ($)
 DAY_SEARCHES = 6         # per run (every 10 min) while the other lanes are busy - about 90 s of Facebook
 NIGHT_SEARCHES = 12      # outside active hours, when no other lane is running
@@ -139,7 +140,7 @@ async def run() -> None:
         if route is None:
             print("sweep: facebook is paused, skipping")
             return
-        lock = await scan.acquire_fb_lock(LOCK_WAIT)
+        lock = await scan.acquire_fb_lock(LOCK_WAIT, yield_to_quick=True)
         if lock is None:
             print("sweep: facebook busy with another scan lane, skipping")
             return
@@ -154,6 +155,12 @@ async def run() -> None:
                                ORDER BY {PRIORITY}, id LIMIT ?""",
                            (rnd, NIGHT_SEARCHES if night else DAY_SEARCHES)).fetchall()
         loc, radius = st.get("fb_location", "plymouth-mn"), int(st.get("radius_mi") or 100)
+        home = (float(st["home_lat"]), float(st["home_lon"]))
+        places = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}
+
+        def near(item) -> bool:
+            d = geo.distance({"lat": None, "lon": None, "location": item.get("location")}, home, places)
+            return d is None or d <= radius * SPLIT_REACH
         errors: list[str] = []
         found = new = splits = 0
         came_back_empty: list[int] = []
@@ -168,8 +175,12 @@ async def run() -> None:
                         errors.append(f"fb '{j['query']}' ${j['lo']}-{j['hi']}: {e}")
                         await pause()
                         continue
-                    n_new = sum(scan.upsert(con, "facebook", i, backlog=first) for i in items)
-                    halves = split(j["lo"], j["hi"]) if len(items) >= PAGE_FULL and n_new >= SPLIT_MIN_NEW else None
+                    fresh = [i for i in items if scan.upsert(con, "facebook", i, backlog=first)]
+                    n_new = len(fresh)
+                    # Facebook pads a price band with listings far outside the radius (Iowa, the Dakotas);
+                    # only unseen listings within reach are a reason to dig deeper
+                    near_new = sum(1 for i in fresh if near(i))
+                    halves = split(j["lo"], j["hi"]) if len(items) >= PAGE_FULL and near_new >= SPLIT_MIN_NEW else None
                     if halves:
                         splits += 1
                         con.executemany("INSERT INTO sweep_queue(round, query, category, lo, hi) VALUES (?,?,?,?,?)",

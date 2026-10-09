@@ -157,13 +157,34 @@ class SkipFacebook(Exception):
     """Facebook is paused or another lane has the browser - skip this run's Facebook work."""
 
 
-async def acquire_fb_lock(wait_secs: int):
-    """Only one scan lane talks to Facebook at a time. Returns the open lock file, or None after wait_secs."""
+QUICK_WAITING = "quick-waiting"   # marker file: the fast lane is waiting for Facebook
+
+
+async def acquire_fb_lock(wait_secs: int, yield_to_quick: bool = False, quick: bool = False):
+    """Only one scan lane talks to Facebook at a time. Returns the open lock file, or None after wait_secs.
+    quick=True marks the fast lane as waiting; a yield_to_quick waiter (the sweep) lets it go first, so
+    the sweep slipping in after a full scan doesn't cost a "just listed" run."""
     os.makedirs(LOCK_DIR, exist_ok=True)
     f = open(os.path.join(LOCK_DIR, "facebook.lock"), "w")
+    marker = os.path.join(LOCK_DIR, QUICK_WAITING)
     deadline = time.time() + wait_secs
+    if quick:
+        open(marker, "w").close()
+    try:
+        return await _wait_for(f, marker, deadline, yield_to_quick)
+    finally:
+        if quick:
+            try:
+                os.remove(marker)
+            except FileNotFoundError:
+                pass
+
+
+async def _wait_for(f, marker, deadline, yield_to_quick):
     while True:
         try:
+            if yield_to_quick and os.path.exists(marker) and time.time() - os.path.getmtime(marker) < 600:
+                raise BlockingIOError      # the fast lane is waiting: let it have Facebook first
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return f
         except BlockingIOError:
@@ -367,7 +388,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
 
         # --- Facebook search + item pages (one browser at a time across the scan lanes)
         fb_found = 0
-        fb_lock = await acquire_fb_lock(QUICK_LOCK_WAIT if quick else 900)
+        fb_lock = await acquire_fb_lock(QUICK_LOCK_WAIT if quick else 900, quick=quick)
         if fb_lock:     # the wait can be long: another lane may have been blocked and paused a route meanwhile
             st = db.settings(con)
             fb_route, fb_until = fb_pick_route(st, db.now())

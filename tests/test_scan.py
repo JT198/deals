@@ -1180,7 +1180,7 @@ def test_route_rechecked_after_lock_wait_and_inf_limits():
         def close(self):
             Lock.closed = True
 
-    async def lock_after_block(wait):       # the full scan got blocked while the sweep waited
+    async def lock_after_block(wait, **kw):  # the full scan got blocked while the sweep waited
         c2 = db.connect()
         c2.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_backoff_until:home', ?)", (str(db.now() + 7200),))
         c2.commit(); c2.close()
@@ -1209,6 +1209,75 @@ def test_route_rechecked_after_lock_wait_and_inf_limits():
     for bad in ("inf", "nan", "1e999"):
         r = client().put("/api/settings", json={"alert_rules": {"utv4": {"max_price": bad}}})
         assert r.status_code == 400, (bad, r.status_code)
+
+
+def test_quick_lane_goes_first_and_far_padding_doesnt_split():
+    from unittest.mock import AsyncMock, patch
+    from app import sweep, geo
+    # the sweep waits while the fast lane is waiting; the fast lane gets the lock
+    async def race():
+        held = await scan.acquire_fb_lock(5)
+        q = asyncio.create_task(scan.acquire_fb_lock(10, quick=True))
+        await asyncio.sleep(0.2)
+        s = asyncio.create_task(scan.acquire_fb_lock(10, yield_to_quick=True))
+        await asyncio.sleep(0.2)
+        held.close()
+        got = await q
+        assert not s.done()
+        got.close()
+        lock = await s                       # marker gone once the fast lane has the lock: the sweep follows
+        lock.close()
+    asyncio.run(race())
+
+    con = reset([], active_hours="0-24")
+    con.execute("DELETE FROM sweep_queue")
+    con.execute("UPDATE searches SET enabled = (query = 'jet ski')")
+    con.execute("INSERT OR REPLACE INTO geocache VALUES ('Ames, IA', 42.03, -93.62)")
+    con.commit()
+    far = [{"ext_id": f"f{i}", "url": "u", "title": f"ski {i}", "price": 900, "location": "Ames, IA",
+            "listed_at": db.now() - 86400 * 30, "status": "active"} for i in range(15)]
+
+    class FakeFB:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def search(self, q, *a, price=None, **kw):
+            return far if price == (500, 1999) else [far[0]]
+
+    class Lock:
+        def close(self):
+            pass
+    with patch.object(scan, "acquire_fb_lock", AsyncMock(return_value=Lock())), patch.object(sweep, "Facebook", FakeFB), \
+         patch.object(sweep, "pause", AsyncMock()):
+        asyncio.run(sweep.run())
+    assert con.execute("SELECT state FROM sweep_queue WHERE lo = 500").fetchone()[0] == "done"   # full, but all far away
+    assert con.execute("SELECT COUNT(*) FROM listings WHERE location = 'Ames, IA'").fetchone()[0] == 15  # still kept
+    con.execute("UPDATE searches SET enabled = 1"); con.commit()
+
+    # geocoder prefers the town over a county of the same name
+    calls = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, hit):
+            self.hit = hit
+
+        def json(self):
+            return self.hit
+
+    class H:
+        async def get(self, url, params):
+            calls.append(params.get("featureType"))
+            return R([{"lat": "45.42", "lon": "-94.05"}] if params.get("featureType") else [{"lat": "47.56", "lon": "-95.37"}])
+    with patch.object(geo.asyncio, "sleep", AsyncMock()):
+        assert asyncio.run(geo.lookup(H(), "Clearwater, MN")) == (45.42, -94.05) and calls == ["settlement"]
 
 
 if __name__ == "__main__":

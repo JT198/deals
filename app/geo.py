@@ -46,12 +46,49 @@ async def fill(con, limit: int = 25) -> None:
     async with httpx.AsyncClient(headers={"User-Agent": UA}, timeout=20) as http:
         for p in todo:
             try:
-                r = await http.get("https://nominatim.openstreetmap.org/search",
-                                   params={"q": p, "format": "json", "limit": 1, "countrycodes": "us"})
-                hit = r.json()[:1] if r.status_code == 200 else []
+                lat, lon = await lookup(http, p)
             except (httpx.HTTPError, ValueError):
                 continue
-            lat, lon = (float(hit[0]["lat"]), float(hit[0]["lon"])) if hit else (None, None)
             con.execute("INSERT OR REPLACE INTO geocache(place, lat, lon) VALUES (?,?,?)", (p, lat, lon))
             con.commit()
             await asyncio.sleep(1.1)
+
+
+async def lookup(http, place: str) -> tuple[float | None, float | None]:
+    """The town, not the county of the same name: "Clearwater, MN" is a town near St Cloud, but a plain
+    search returns Clearwater County, 130 miles further north. Settlements first, then anything."""
+    for extra in ({"featureType": "settlement"}, {}):
+        r = await http.get("https://nominatim.openstreetmap.org/search",
+                           params={"q": place, "format": "json", "limit": 1, "countrycodes": "us", **extra})
+        hit = r.json()[:1] if r.status_code == 200 else []
+        if hit:
+            return float(hit[0]["lat"]), float(hit[0]["lon"])
+        await asyncio.sleep(1.1)
+    return None, None
+
+
+async def refresh_all() -> None:
+    """One-off: look every cached town up again with lookup() and fix the ones that moved."""
+    from . import db
+    con = db.connect()
+    places = con.execute("SELECT place, lat, lon FROM geocache").fetchall()
+    moved = 0
+    async with httpx.AsyncClient(headers={"User-Agent": UA}, timeout=20) as http:
+        for row in places:
+            try:
+                lat, lon = await lookup(http, row["place"])
+            except (httpx.HTTPError, ValueError):
+                continue
+            if lat is not None and (row["lat"] is None or miles(lat, lon, row["lat"], row["lon"]) > 5):
+                print(f"{row['place']}: moved {'?' if row['lat'] is None else round(miles(lat, lon, row['lat'], row['lon']))} mi", flush=True)
+                con.execute("UPDATE geocache SET lat = ?, lon = ? WHERE place = ?", (lat, lon, row["place"]))
+                con.commit()
+                moved += 1
+            await asyncio.sleep(1.1)
+    print(f"checked {len(places)}, fixed {moved}")
+
+
+if __name__ == "__main__":
+    import sys
+    if "--refresh" in sys.argv:
+        asyncio.run(refresh_all())

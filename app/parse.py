@@ -65,7 +65,9 @@ Return ONLY a JSON object with these keys:
 - is_dealer: true if a dealership/business is selling (financing offers, "call Dave at <dealer>", stock numbers, "plus tax/fees", MSRP/"save $X"), false if it reads like a private owner, null if unclear
 - motivated: true if the seller signals urgency (must sell, moving, divorce, need it gone, priced to sell, first $X takes it, OBO, make an offer, price drop), else false
 - extras: list of up to 6 short strings for notable add-ons (cab/doors, heat, winch, plow, trailer included, new tires, bagger, mulch kit, warranty)
-- red_flags: list of short strings for real concerns: salvage/rebuilt title, no title (for trailers: "no title" or "bill of sale only" on a trailer over 3,000 lb or so), rotted floor/frame, bent axle, needs engine/trans/hydro work, doesn't run, smokes, accident damage, flood, shipping-only/deposit-first/"I'm deployed" style scam signs, price that is obviously a monthly payment or a down payment
+- red_flags: list of short strings for real, CURRENT, unresolved concerns. Work already done ("changed the parking brake",
+  "new wheel hub just installed"), a spare part the seller already has, and normal cosmetic wear are NOT red flags.
+  Examples: salvage/rebuilt title, no title (for trailers: "no title" or "bill of sale only" on a trailer over 3,000 lb or so), rotted floor/frame, bent axle, needs engine/trans/hydro work, doesn't run, smokes, accident damage, flood, shipping-only/deposit-first/"I'm deployed" style scam signs, price that is obviously a monthly payment or a down payment
 - summary: one plain-English sentence a buyer would want (condition, use, anything notable)
 
 Ad source: {source}

@@ -60,7 +60,8 @@ async def lookup(http, place: str) -> tuple[float | None, float | None]:
     for extra in ({"featureType": "settlement"}, {}):
         r = await http.get("https://nominatim.openstreetmap.org/search",
                            params={"q": place, "format": "json", "limit": 1, "countrycodes": "us", **extra})
-        hit = r.json()[:1] if r.status_code == 200 else []
+        r.raise_for_status()        # a 429 / 403 is "try later", never "this town doesn't exist"
+        hit = r.json()[:1]
         if hit:
             return float(hit[0]["lat"]), float(hit[0]["lon"])
         await asyncio.sleep(1.1)

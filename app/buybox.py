@@ -31,7 +31,8 @@ def fits(rule: dict, r, dist: float | None, radius: int) -> bool:
         return False
     if dist is not None and dist > reach(rule, radius):
         return False
-    doubt = bool(r["usage_doubt"]) if "usage_doubt" in r.keys() else False
+    # "unusually low" use can't be trusted either way; "N miles since a repair" is at least N, so a max still applies
+    doubt = "unusually low" in (r["usage_doubt"] or "") if "usage_doubt" in r.keys() else False
     for k, col, over in (("min_year", "year", False), ("max_price", "price", True),
                          ("max_miles", "miles", True), ("max_hours", "hours", True)):
         lim, val = _num(rule, k), r[col]

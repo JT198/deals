@@ -214,6 +214,8 @@ async def run() -> None:
                     todo += scan.stale_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
                     todo += scan.title_only_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
                     await scan.fb_details(con, fb, todo, errors, lock=lock, budget=budget)
+        except scan.SkipFacebook:
+            errors.append("facebook was paused by another lane mid-run - stopped")
         except Exception as e:
             errors.append(f"facebook: {e}")
         finally:
@@ -247,9 +249,18 @@ def main():
         return
     try:
         asyncio.run(run())
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
+        try:      # say so on Telegram, or the sweep just goes quiet
+            asyncio.run(_crash_alert(f"{type(e).__name__}: {e}"[:300]))
+        except Exception:
+            traceback.print_exc()
         sys.exit(1)
+
+
+async def _crash_alert(what: str) -> None:
+    async with httpx.AsyncClient(timeout=30) as http:
+        await scan.problem_alert(db.connect(), http, "sweep", "crashed: " + what)
 
 
 if __name__ == "__main__":

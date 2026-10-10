@@ -74,7 +74,7 @@ async def detail(http: httpx.AsyncClient, url: str) -> dict | None:
         return {"status": "gone"}
     r.raise_for_status()
     h = r.text
-    if "This posting has been deleted" in h or "This posting has expired" in h:
+    if any(x in h for x in ("This posting has been deleted", "This posting has expired", "has been flagged for removal")):
         return {"status": "gone"}
     body = re.search(r'<section id="postingbody">(.*?)</section>', h, re.S)
     text = ""

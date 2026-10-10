@@ -1270,6 +1270,9 @@ def test_quick_lane_goes_first_and_far_padding_doesnt_split():
         def __init__(self, hit):
             self.hit = hit
 
+        def raise_for_status(self):
+            pass
+
         def json(self):
             return self.hit
 
@@ -1291,7 +1294,8 @@ def test_buy_box():
                  dict(base, id="facebook:3", ext_id="3", title="worn", miles=9000),               # too many miles
                  dict(base, id="facebook:4", ext_id="4", title="unknown use", miles=None),        # unknown miles pass
                  dict(base, id="facebook:5", ext_id="5", title="ranger", family="Ranger Crew 1000"),   # not a picked model
-                 dict(base, id="facebook:6", ext_id="6", title="doubt", miles=9000, usage_doubt="since rebuild")],
+                 dict(base, id="facebook:6", ext_id="6", title="doubt", miles=9000,            # 9,000 since a rebuild: at least that
+                      usage_doubt="the ad only mentions 9,000 miles since a repair")],
                 alert_min_pct="20", alert_min_usd="1500")
     con.execute("INSERT OR REPLACE INTO geocache VALUES ('Ames, IA', 42.03, -93.62)")
     con.commit()
@@ -1302,7 +1306,7 @@ def test_buy_box():
     assert db.alert_rules(db.settings(con))["utv4"]["models"] == ["RZR XP 4", "Maverick X3 MAX"]
     assert client().put("/api/settings", json={"alert_rules": {"utv4": dict(rule, models=["Toro TITAN"])}}).status_code == 400
     asyncio.run(alerts(con))
-    assert sorted(SENT) == ["facebook:0", "facebook:4", "facebook:6"], SENT
+    assert sorted(SENT) == ["facebook:0", "facebook:4"], SENT
     # Ames is ~110 mi away: inside a 150 mi box, outside a 100 mi one
     assert buybox.fits(dict(rule, within_mi="100"), con.execute("SELECT * FROM listings WHERE id='facebook:2'").fetchone(), 110, 100) is False
     # instant off: no Telegram alert, but the digest still lists what's inside the box
@@ -1450,6 +1454,61 @@ def test_review_batch_2026_10_09():
     tandems = {fam: [comp(1, 5300, 2, 7000), comp(2, 5600, 2, 7000), comp(3, 5900, 2, 9990)]}
     assert score.new_price_for(me, tandems) == (5300, 3)
     assert score.new_price_for(me, {fam: tandems[fam][:2]})[0] is None               # fewer than 3: no ceiling
+
+
+def test_review_followups_2026_10_09():
+    """The smaller review findings: twins by seller, just-listed needs a posting time, non-runners aren't
+    comps, equipment wording, since-repair limits, JSON-only writes, validation, cache change counter."""
+    from app import buybox, equipment, score
+    now = db.now()
+    # twin suppression: same title + price from a different seller in another town is its own machine
+    con = reset([{"title": "2021 Polaris Ranger 1000", "price": 12000, "location": "Anoka, MN", "listed_at": now - 3 * 3600},
+                 {"id": "facebook:1", "ext_id": "1", "title": "2021 Polaris Ranger 1000", "price": 12000,
+                  "location": "Rochester, MN", "listed_at": now - 3 * 3600},
+                 {"id": "craigslist:2", "ext_id": "2", "source": "craigslist", "title": "2021 Polaris Ranger 1000",
+                  "price": 12000, "location": "anoka", "listed_at": now - 3 * 3600}])
+    asyncio.run(alerts(con))
+    assert sorted(SENT) == ["facebook:0", "facebook:1"], SENT       # the Craigslist copy (other site) is the twin
+    # just-listed: unknown posting time is not "just listed"
+    con = reset([{"score": 60, "listed_at": None, "first_seen": now - 600}], alert_threshold="90")
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'",
+                (json.dumps({"utv4": {"enabled": True, "fresh": True, "digest": True}}),))
+    con.commit()
+    asyncio.run(alerts(con))
+    assert SENT == [], SENT
+    # a non-runner's asking price is not a comp
+    con = reset([])
+    _insert(con, [dict(category="utv4", family="RZR XP 4", year=2022, price=p, red_flags=f) for p, f in
+                  ((16000, "[]"), (15500, "[]"), (4000, '["doesn\'t run"]'))])
+    assert len(score._comps(con)["RZR XP 4"]) == 2
+    # equipment wording
+    det = lambda text: equipment.detect({"category": "utv4", "title": "", "description": text, "extras": "[]", "summary": None, "trim": None, "family": "RZR XP 4"})
+    assert "cab" in det("full cab enclosure, no cab heater") and "heat" not in det("full cab enclosure, no cab heater")
+    assert "plow" not in det("plow ready with mount installed") and "plow" in det("comes with a 72 inch plow")
+    assert "trailer" not in det("will deliver with my trailer") and "trailer" not in det("ramps and trailer tie downs")
+    assert "trailer" in det("comes with trailer and cover")
+    # since-repair miles are a lower bound, so a max still applies; "unusually low" is skipped
+    rule = {"max_miles": "3000"}
+    assert buybox.fits(rule, {"family": "x", "year": 2022, "price": 1, "miles": 9000, "hours": None,
+                              "usage_doubt": "the ad only mentions 9,000 miles since a repair"}, None, 100) is False
+    assert buybox.fits(rule, {"family": "x", "year": 2022, "price": 1, "miles": 9000, "hours": None,
+                              "usage_doubt": "9,000 miles is unusually low for a 2022"}, None, 100) is True
+    # writes must be JSON (a cross-site form post can't be); validation; duplicate search; cache counter
+    con = reset([{}])
+    c = client()
+    assert c.post("/api/listing/facebook:0", data="starred=1", headers={"content-type": "application/x-www-form-urlencoded"}).status_code == 403
+    assert c.put("/api/settings", json={"active_hours": "23-6"}).status_code == 400
+    assert c.put("/api/settings", json={"active_hours": "6-23"}).status_code == 200
+    assert c.put("/api/settings", json={"home_zip": "02134"}).status_code == 200
+    assert db.settings(db.connect())["home_zip"] == "02134"
+    assert c.post("/api/appraise", json={"category": "utv4", "family": "RZR XP 4", "year": "inf"}).status_code == 400
+    assert c.post("/api/searches", json={"query": "ranger crew", "category": "atv"}).status_code == 409
+    e1 = c.get("/api/listings").headers["etag"]
+    assert c.post("/api/listing/facebook:0", json={"starred": True}).status_code == 200
+    e2 = c.get("/api/listings").headers["etag"]
+    assert e2 != e1 and c.get("/api/listings").json()[0]["starred"] == 1                  # an edit alone refreshes the feed
+    assert c.post("/api/listing/facebook:0", json={"starred": False}).status_code == 200
+    assert c.get("/api/listings").headers["etag"] == e1                                    # same data again: same ETag is right
 
 
 if __name__ == "__main__":

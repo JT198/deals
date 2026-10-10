@@ -76,7 +76,7 @@ def build(con) -> str:
     # pulse: how yesterday's new listings were priced, and how fast things are going
     pulse = con.execute(
         """SELECT COUNT(*), AVG(deal_pct) FROM listings WHERE relevant = 1 AND first_seen >= ? AND deal_pct IS NOT NULL
-             AND COALESCE(is_new, 0) = 0""", (since,)).fetchone()
+             AND COALESCE(is_new, 0) = 0 AND backlog = 0 AND COALESCE(is_dealer, 0) = 0""", (since,)).fetchone()
     if pulse[0] and pulse[0] >= 5:
         vs = -pulse[1] * 100
         lines.append(f"\nMarket: yesterday's used listings came in {'+' if vs > 0 else ''}{vs:.0f}% vs typical asking.")

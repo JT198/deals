@@ -133,8 +133,8 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
-        ("status = 'sold' AND COALESCE(red_flags, '[]') = '[]' AND COALESCE(ended_at, last_seen) >= ?"
-         if sold else "last_seen >= ?"),
+        "COALESCE(red_flags, '[]') = '[]' AND " +      # a non-runner's price says nothing about a runner
+        ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?"),
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
     for r in dedupe_cross_posts(rows):
@@ -439,7 +439,7 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         expected = None   # our comps are used machines; new units need an MSRP comparison
     if price is not None and (price < 100 or (expected and price < 0.2 * expected)):
         # "$1", "$3", "$123" - sellers who want offers, not a real price
-        return min(35, 45), None, [f"price ${price:,} looks like a placeholder"]
+        return 35, None, [f"price ${price:,} looks like a placeholder"]
     if expected and price:
         deal_pct = (expected - price) / expected
         s = 45 + 100 * max(-0.4, min(0.4, deal_pct))
@@ -454,7 +454,8 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
             reasons.append(f"{-deal_pct:.0%} over typical ${expected:,}")
     else:
         s = 40
-        reasons.append("new unit - compare to MSRP" if listing["is_new"] == 1 else "not enough comps yet")
+        reasons.append("new unit - compare to MSRP" if listing["is_new"] == 1
+                       else "no price stated" if price is None else "not enough comps yet")
 
     was = max(x for x in (listing["strike_price"], listing["first_price"], 0) if x is not None)
     if price and was and was > price:
@@ -662,7 +663,7 @@ def mark_ended(con) -> None:
 def days_to_sell(con) -> dict[str, float]:
     """family -> median days listed before it sold / disappeared (last 120 days, used only, >= 5 of them)."""
     out: dict[str, list] = {}
-    for r in con.execute("""SELECT family, ended_at - COALESCE(listed_at, first_seen) secs FROM listings
+    for r in con.execute("""SELECT family, MIN(ended_at, last_seen + 2 * 86400) - COALESCE(listed_at, first_seen) secs FROM listings
                             WHERE ended_at IS NOT NULL AND relevant = 1 AND family IS NOT NULL AND seen_active = 1
                               AND COALESCE(is_new, 0) = 0 AND ended_at > ?""", (int(time.time()) - 120 * 86400,)):
         if r["secs"] and r["secs"] > 0:

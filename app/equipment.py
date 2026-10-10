@@ -71,13 +71,14 @@ PATTERNS = {
     "ac": r"\bnorth\s?star\s+ultimate\b|\bhvac\b|\ba/c\b|\bair\s*condition(ing|er)?\b"
           r"|heat\s*(and|&|/|\+)\s*ac\b|\bac\s*(and|&|/|\+)\s*heat",
     "plow": r"\bplow\b",
-    "trailer": r"(with|w/|incl\w*|comes\s+with|plus|\+|&|and)\s+(an?\s+|the\s+|his\s+|my\s+)?"
-               r"([\w\-'\"./]+\s+){0,3}trailer\b(?!\s*(hitch|plug|wiring|light))",
+    "trailer": r"(with|w/|incl\w*|comes\s+with|plus|\+|&|and)\s+(an?\s+|the\s+)?"
+               r"([\w\-'\"./]+\s+){0,3}trailer\b(?!\s*(hitch|plug|wiring|light|tie|strap|is\s+sold|not\b|sold\b))",
 }
 
 NEGATIONS = r"\b(no|without|w/o|not|minus)\s+(\w+\s+){0,2}%s|%s\s+(\w+\s+){0,3}(not\s+included|sold\s+separately|" \
             r"available\s+(separately|for\s+(an\s+)?(extra|additional))|extra\s+\$|for\s+an?\s+additional|negotiable\s+separately)"
-NEG_WORD = {"cab": r"cab", "heat": r"heat\w*", "ac": r"(a/c|ac|air)", "plow": r"plow", "trailer": r"trailer"}
+# "no cab heater" / "no cab heat" negates the heat, not the cab
+NEG_WORD = {"cab": r"cab\b(?!\s*heat)", "heat": r"heat\w*", "ac": r"(a/c|ac|air)", "plow": r"plow", "trailer": r"trailer"}
 
 
 def detect(row) -> list[str]:
@@ -99,8 +100,13 @@ def detect(row) -> list[str]:
         w = NEG_WORD[f]
         if re.search(NEGATIONS % (w, w), text) and not re.search(r"\bnorth\s?star\b", text):
             continue
-        if f == "plow" and re.search(r"plow\s+(mount|frame|push\s*tubes?)\s+only", text):
-            continue
+        if f == "plow" and (re.search(r"plow\s+(mount|frame|push\s*tubes?)\s+only", text)
+                            or (re.search(r"plow\s*(ready|mount|bracket|frame|prep|tubes?)\b", text)
+                                and not re.search(r"\b(plow|blade)\s+(and|&|with|w/|\+)\s+(blade|mount|bracket|frame)"
+                                                  r"|\b(with|w/|comes\s+with|incl\w*)\s+(a\s+|the\s+)?(\d+\s*(\"|in\w*)\s+)?plow\b", text))):
+            continue      # "plow ready" / "plow mount included" is not a plow
+        if f == "trailer" and re.search(r"\b(my|his|our|your|their)\s+trailer\b|\bdeliver\w*\s+(it\s+)?(with|on)\b", text):
+            continue      # the seller's own trailer brings it to you; it isn't included
         found.append(f)
     if "heat" in found and "cab" not in found:     # heat without a cab is heated grips/seats, not cab heat
         found.remove("heat")

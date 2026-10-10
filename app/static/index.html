@@ -453,12 +453,14 @@ try {
   PREV_VISIT = +sessionStorage.getItem("deals.prevVisit") || 0;
   if (!PREV_VISIT) { PREV_VISIT = +localStorage.getItem("deals.lastSeen") || 0; sessionStorage.setItem("deals.prevVisit", PREV_VISIT || 1); }
 } catch {}
-const markSeen = () => { try { localStorage.setItem("deals.lastSeen", Math.floor(Date.now() / 1000)); } catch {} };
+const markSeen = () => { if (document.visibilityState !== "visible") return; try { localStorage.setItem("deals.lastSeen", Math.floor(Date.now() / 1000)); } catch {} };
 const isNew = d => PREV_VISIT > 1 && d.first_seen > PREV_VISIT;
 
 function bindFilters() {
   const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
-  for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value; save(); }; }
+  let typing;
+  for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value;
+    if (k === "q") { clearTimeout(typing); typing = setTimeout(save, 150); } else save(); }; }
   const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden", "f-fit": "fit" };
   for (const [id, k] of Object.entries(cb)) { $("#" + id).checked = F[k]; $("#" + id).onchange = e => { F[k] = e.target.checked; save(); }; }
 }
@@ -591,8 +593,10 @@ document.addEventListener("focusout", async e => {
   const d = DATA.find(x => x.id === ta.dataset.noteEdit); if (!d) return;
   const text = ta.value.trim();
   if (text === (d.notes || "")) { if (!text) ta.parentElement.hidden = true; return; }
-  await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ notes: text }) });
-  d.notes = text || null; render();
+  try {
+    await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ notes: text }) });
+    d.notes = text || null; render();
+  } catch (err) { problem(`Note not saved (${err.message}) - it's still in the box, try again`); }
 });
 function offerBox(d) {
   if (!d.offer_aim) return "";
@@ -624,7 +628,7 @@ function fitTag(d) {
 }
 function facts(d) {
   return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
-    d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
+    d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 && d.price ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
     d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt && d.category !== "trailer" ? d.miles.toLocaleString() + " mi" : null,
     d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : d.distance != null ? `${d.distance} mi away` : null,
@@ -635,7 +639,7 @@ function card(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
   const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
   return `<article class="card">
-    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image ? `background-image:url('${esc(d.image)}')` : ""}">
+    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^https?:\/\/[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
         : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold/removed</span>'
         : isNew(d) ? '<span class="ribbon new">NEW</span>'
@@ -847,14 +851,16 @@ function renderAll() {
 let MARKET_FAM = store.get("marketFam", null), LAST_MARKET = null;
 renderMarket.token = 0;
 async function renderMarket() {
+  const token = ++renderMarket.token;
   const fams = await api("/api/families");
+  if (token !== renderMarket.token) return;
   if (!fams.length) { $("#tab-market").innerHTML = `<div class="empty">No parsed listings yet.</div>`; return; }
   const inCat = fams.filter(f => CAT === "all" || f.category === CAT);
   const pool = inCat.length ? inCat : fams;
   if (!MARKET_FAM || !pool.some(f => f.family === MARKET_FAM)) MARKET_FAM = [...pool].sort((a, b) => b.count - a.count)[0].family;
   const m = await api("/api/market?family=" + encodeURIComponent(MARKET_FAM));
+  if (token !== renderMarket.token) return;
   LAST_MARKET = m;
-  const token = ++renderMarket.token;
   $("#tab-market").innerHTML = `<div class="panel">
     <div class="filters"><label>Model <select id="m-fam">${CATS.map(c => {
       const fs = fams.filter(f => f.category === c.key); if (!fs.length) return "";
@@ -1071,7 +1077,7 @@ async function renderSetup() {
     const qb = e.target.closest("[data-quick]");
     if (qb) { await api("/api/searches/" + qb.dataset.quick, { method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify({ quick: qb.dataset.on !== "1" }) }); renderSetup(); return; }
-    if (e.target.dataset.del) { await api("/api/searches/" + e.target.dataset.del, { method: "DELETE" }); renderSetup(); }
+    if (e.target.dataset.del) { await api("/api/searches/" + e.target.dataset.del, { method: "DELETE", headers: { "content-type": "application/json" } }); renderSetup(); }
     if (e.target.id === "addq" && $("#newq").value.trim()) {
       await api("/api/searches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: $("#newq").value, category: $("#newcat").value }) }); renderSetup(); }
   };
@@ -1173,16 +1179,21 @@ document.body.addEventListener("click", async e => {
   const d = DATA.find(x => x.id === b.dataset.id); if (!d) return;
   const all = [d, ...(d.copies || [])];      // a merged card acts on every copy behind it
   const post = (x, body) => api("/api/listing/" + encodeURIComponent(x.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (b.dataset.act === "gone") {
-    await Promise.all(all.map(x => post(x, { gone: true })));
-    const ids = new Set(all.map(x => x.id)); DATA = DATA.filter(x => !ids.has(x.id)); render(); return;
-  }
-  const body = b.dataset.act === "star" ? { starred: !d.starred } : { hidden: !d.hidden };
-  await Promise.all(all.map(x => post(x, body)));
-  all.forEach(x => Object.assign(x, { starred: body.starred ?? x.starred, hidden: body.hidden ?? x.hidden })); render();
+  try {
+    if (b.dataset.act === "gone") {
+      await Promise.all(all.map(x => post(x, { gone: true })));
+      const ids = new Set(all.map(x => x.id)); DATA = DATA.filter(x => !ids.has(x.id)); render(); return;
+    }
+    const body = b.dataset.act === "star" ? { starred: !d.starred } : { hidden: !d.hidden };
+    await Promise.all(all.map(x => post(x, body)));
+    all.forEach(x => Object.assign(x, { starred: body.starred ?? x.starred, hidden: body.hidden ?? x.hidden })); render();
+  } catch (err) { problem(`Couldn't save that (${err.message}) - try again`); }
 });
+function problem(msg) { const s = $("#statusline"); if (s) s.innerHTML = `<span class="err">${esc(msg)}</span>`; }
 $("#scanbtn").onclick = async () => { $("#scanbtn").disabled = true; $("#scanbtn").textContent = "Scanning…";
-  await api("/api/scan", { method: "POST" }); setTimeout(status, 3000); };
+  try { await api("/api/scan", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); }
+  catch (err) { problem(`Couldn't start a scan (${err.message})`); $("#scanbtn").disabled = false; $("#scanbtn").textContent = "Scan now"; }
+  setTimeout(status, 3000); };
 
 async function status() {
   const st = await api("/api/status");
@@ -1238,7 +1249,8 @@ let HOME = null;
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { if (TAB === "market" && LAST_MARKET && $("#chart")) drawScatter($("#chart"), LAST_MARKET); }, 200); });
-bindFilters(); load();
+bindFilters();
+load().catch(err => problem(`Couldn't load the listings (${err.message}) - reload to try again`));
 setInterval(refresh, 2 * 60 * 1000);   // matches the 5-minute fast lane closely enough
 </script>
 </body>

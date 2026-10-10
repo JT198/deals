@@ -66,7 +66,7 @@ Return ONLY a JSON object with these keys:
 - turbo: true if turbocharged or supercharged, false if not, else null
 - is_new: true if this is a new/unregistered unit (dealer stock, current or next model year with no use, "new", "demo"/"demonstrator" counts as new), false if used
 - is_dealer: true if a dealership/business is selling (financing offers, "call Dave at <dealer>", stock numbers, "plus tax/fees", MSRP/"save $X"), false if it reads like a private owner, null if unclear
-- motivated: true if the seller signals urgency (must sell, moving, divorce, need it gone, priced to sell, first $X takes it, OBO, make an offer, price drop), else false
+- motivated: true if the seller signals urgency (must sell, moving, divorce, need it gone, priced to sell, first $X takes it), else false. A plain "OBO" or "make an offer" is not urgency
 - extras: list of up to 6 short strings for notable add-ons (cab/doors, heat, winch, plow, trailer included, new tires, bagger, mulch kit, warranty)
 - red_flags: list of short strings for real, CURRENT, unresolved concerns. Work already done ("changed the parking brake",
   "new wheel hub just installed"), a spare part the seller already has, and normal cosmetic wear are NOT red flags.
@@ -95,7 +95,7 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
     r = await http.post(f"{OLLAMA_URL}/api/generate", json={
         "model": OLLAMA_MODEL, "prompt": prompt, "format": "json", "stream": False,
         "think": False, "keep_alive": "30m", "options": {"temperature": 0},
-    }, timeout=90)
+    }, timeout=httpx.Timeout(90, connect=10))
     r.raise_for_status()
     try:
         d = json.loads(r.json()["response"])

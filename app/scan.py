@@ -249,6 +249,8 @@ async def step_aside(lock) -> None:
     while quick_waiting() and time.time() < deadline:   # the marker goes once the fast lane has the lock
         await asyncio.sleep(1)
     await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
+    if fb_pick_route(db.settings(db.connect()), db.now())[0] is None:
+        raise SkipFacebook      # the fast lane got walled and paused Facebook: don't keep hitting it
 
 
 async def _wait_for(f, marker, deadline, yield_to_quick):
@@ -323,21 +325,28 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
 async def fb_details(con, fb, todo, errors: list, lock=None, budget=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
-    ok, missed = 0, []
+    ok, missed, failures = 0, [], 0
     for r in todo:
+        if failures >= 3:        # the browser is gone, not three pages in a row
+            errors.append("facebook: item pages keep failing - browser dead? (rest of the batch skipped)")
+            break
         if budget and budget.left() <= 0:
             errors.append(f"facebook hourly page budget reached - {len(todo) - ok - len(missed)} item pages wait")
             break
         await step_aside(lock)
         try:
             d = await fb.detail(r["ext_id"])
+            failures = 0
             if d is None:
                 missed.append(r["id"])
             else:
                 ok += 1
                 apply_detail(con, r["id"], d, r["price"])
                 con.commit()
+        except SkipFacebook:
+            raise
         except Exception as e:
+            failures += 1
             errors.append(f"fb detail {r['ext_id']}: {e}")
         await asyncio.sleep(random.uniform(3, 6))
     if len(missed) >= 3 and len(missed) > ok:      # more pages fail than load: a wall, not removals
@@ -462,6 +471,9 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
             except Exception as e:  # keep going; one bad query shouldn't kill the run
                 errors.append(f"cl '{q}': {e}")
             await asyncio.sleep(random.uniform(1.5, 3))
+        cl_failed = sum(e.startswith("cl '") for e in errors)
+        if not sold and searches and cl_failed == len(searches):
+            errors.append(f"craigslist failed for every search ({cl_failed}) - blocked?")
 
         # --- Facebook search + item pages (one browser at a time across the scan lanes)
         fb_found = 0
@@ -482,13 +494,16 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
             budget = FBBudget(con, reserve=0 if quick else FB_BUDGET_RESERVE)
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None,
                                                           on_load=budget.record) as fb:
-                empty = 0
+                empty = failures = 0
                 if quick:   # the full scan may have run the same search minutes ago
                     due = [s for s in due if (s["last_run"] or 0) < t0 - QUICK_REPEAT_SECS]
                 for srch in due:
                     if budget.left() <= 0:
                         errors.append(f"facebook hourly page budget reached ({budget.used()} loads) - rest of the run skipped")
                         raise BudgetSpent
+                    if failures >= 3:
+                        errors.append("facebook: searches keep failing - browser dead? (rest of the run skipped)")
+                        raise SkipFacebook
                     if not quick:
                         await step_aside(fb_lock)
                     q = srch["query"]
@@ -505,7 +520,11 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                         if not sold:
                             con.execute("UPDATE searches SET last_run = ? WHERE id = ?", (db.now(), srch["id"]))
                         con.commit()
+                        failures = 0
+                    except SkipFacebook:
+                        raise
                     except Exception as e:
+                        failures += 1
                         errors.append(f"fb '{q}': {e}")
                     await pause()
                 if due and empty == len(due):  # (skipped when --no-search)
@@ -589,7 +608,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     print(f"found={found} new={new} alerts={alerts} errors={len(errors)}")
     for e in errors[:10]:
         print("  !", e)
-    serious = [e for e in errors if "login wall" in e or "Ollama down" in e or e.startswith("pausing Facebook")]
+    serious = [e for e in errors if "login wall" in e or "Ollama down" in e or e.startswith("pausing Facebook")
+               or e.startswith("facebook: ") or e.startswith("craigslist failed")]
     if serious and not quiet:
         async with httpx.AsyncClient(timeout=30) as http:
             await problem_alert(con, http, mode, "; ".join(serious))
@@ -669,16 +689,19 @@ async def _send_alerts(con, http, st, quiet) -> int:
     # Cross-posts / reposts: a DIFFERENT listing with the same title has alerted at this price at any
     # point in the last 30 days (full history in alert_log), or was picked earlier in this run.
     # A listing never blocks its own follow-up alerts (score jump, price cut).
-    seen: dict[tuple, set] = {}
-    for r in con.execute("SELECT listing_id, title_key, price FROM alert_log WHERE ts >= ?",
-                         (db.now() - 30 * 86400,)):
-        seen.setdefault((r["title_key"], r["price"]), set()).add(r["listing_id"])
+    # ...and a twin must look like the same seller: the other site, or the same town (titles like
+    # "2021 Polaris Ranger 1000" at a round price belong to many different machines).
+    seen: dict[tuple, dict] = {}
+    for r in con.execute("""SELECT a.listing_id, a.title_key, a.price, l.source, l.location FROM alert_log a
+                            JOIN listings l ON l.id = a.listing_id WHERE a.ts >= ?""", (db.now() - 30 * 86400,)):
+        seen.setdefault((r["title_key"], r["price"]), {})[r["listing_id"]] = (r["source"], (r["location"] or "").lower())
 
     def first_copy(r):
-        ids = seen.setdefault((db.title_key(r["title"]), r["price"]), set())
-        if ids - {r["id"]}:
+        group = seen.setdefault((db.title_key(r["title"]), r["price"]), {})
+        mine = (r["source"], (r["location"] or "").lower())
+        if any(src != mine[0] or loc == mine[1] for lid, (src, loc) in group.items() if lid != r["id"]):
             return False
-        ids.add(r["id"])
+        group[r["id"]] = mine
         return True
 
     deals = [r for r in con.execute(
@@ -705,7 +728,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
         f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
               AND fresh_alerted IS NULL AND COALESCE(is_new, 0) = 0 AND score >= ?
               AND COALESCE(red_flags, '[]') = '[]'
-              AND COALESCE(listed_at, first_seen) >= ? {private}
+              AND listed_at IS NOT NULL AND listed_at >= ? {private}
             ORDER BY COALESCE(listed_at, first_seen) DESC""",
         (int(st.get("fresh_min_score") or 50), db.now() - window)).fetchall()
         if r["id"] not in deal_ids and switched_on(r, "fresh") and fits_need(r, "fresh") and passes_limits(r)

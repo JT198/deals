@@ -7,12 +7,14 @@ import asyncio
 import gzip
 import hashlib
 import ipaddress
+import math
 import json
 import re
 import time
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import httpx
@@ -50,8 +52,9 @@ async def gate(request: Request, call_next):
             return JSONResponse({"error": "forbidden"}, status_code=403)
     elif not _lan(ip):
         return JSONResponse({"error": "forbidden"}, status_code=403)      # default deny, not default allow
-    if request.method != "GET" and request.headers.get("sec-fetch-site") == "cross-site":
-        return JSONResponse({"error": "cross-site request"}, status_code=403)
+    if request.method != "GET" and (request.headers.get("sec-fetch-site") == "cross-site"
+                                    or not (request.headers.get("content-type") or "").startswith("application/json")):
+        return JSONResponse({"error": "cross-site request"}, status_code=403)      # JSON bodies need a CORS preflight
     resp = await call_next(request)
     # private data: never kept by Cloudflare; /api/listings may be kept by the browser and revalidated (ETag)
     resp.headers.setdefault("Cache-Control", "no-store")
@@ -111,32 +114,35 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
     version = tuple(con.execute(
         f"""SELECT COUNT(*), MAX(last_seen), MAX(last_checked), TOTAL(score), TOTAL(price), TOTAL(starred),
                    TOTAL(hidden), TOTAL(LENGTH(notes)), TOTAL(expected) FROM listings WHERE {where_sql}""").fetchone())
+    st = db.settings(con)
     key = (where_sql, version, tuple(con.execute("SELECT COUNT(*), TOTAL(lat) FROM geocache").fetchone()),
-           tuple(db.settings(con).get(k) for k in ("home_lat", "home_lon")))
-    hit = _LISTINGS_CACHE.get(where_sql)
-    if not hit or hit["key"] != key:
-        dist = _geo(con)
-        out = []
-        for r in con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {where_sql}").fetchall():
-            d = db.row_dict(r)
-            d["distance"] = dist(d)
-            d["lat"], d["lon"], d["approx"] = dist.point(d)
-            d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
-            # empty fields are most of the bytes; the page treats missing like null / empty
-            out.append({k: v for k, v in d.items() if v is not None and v != "" and v != []})
-        body = json.dumps(out, separators=(",", ":")).encode()
-        hit = _LISTINGS_CACHE[where_sql] = {"key": key, "gz": gzip.compress(body, 5), "raw": body,
-                                            "etag": '"' + hashlib.md5(body).hexdigest() + '"',
-                                            "home": f"{dist.home[0]},{dist.home[1]}"}
+           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"))   # rev: every star / hide / note / Gone
+    with _LISTINGS_BUILD:       # two tabs refreshing after a scan build it once, not twice in parallel
+        hit = _LISTINGS_CACHE.get(where_sql)
+        if not hit or hit["key"] != key:
+            dist = _geo(con)
+            out = []
+            for r in con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {where_sql}").fetchall():
+                d = db.row_dict(r)
+                d["distance"] = dist(d)
+                d["lat"], d["lon"], d["approx"] = dist.point(d)
+                d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
+                # empty fields are most of the bytes; the page treats missing like null / empty
+                out.append({k: v for k, v in d.items() if v is not None and v != "" and v != []})
+            body = json.dumps(out, separators=(",", ":")).encode()
+            hit = _LISTINGS_CACHE[where_sql] = {"key": key, "gz": gzip.compress(body, 5),
+                                                "etag": '"' + hashlib.md5(body).hexdigest() + '"',
+                                                "home": f"{dist.home[0]},{dist.home[1]}"}
     headers = {"X-Home": hit["home"], "ETag": hit["etag"], "Cache-Control": "private, no-cache", "Vary": "Accept-Encoding"}
     if request.headers.get("if-none-match") == hit["etag"]:
         return Response(status_code=304, headers=headers)
     if "gzip" in (request.headers.get("accept-encoding") or ""):
         return Response(hit["gz"], media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
-    return Response(hit["raw"], media_type="application/json", headers=headers)
+    return Response(gzip.decompress(hit["gz"]), media_type="application/json", headers=headers)
 
 
 _LISTINGS_CACHE: dict = {}
+_LISTINGS_BUILD = threading.Lock()
 
 
 @app.get("/api/search")
@@ -177,6 +183,9 @@ def mark(lid: str, body: dict = Body(...)):
     if "starred" in body:   # watching starts from the current price/status
         con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
                          watch_status = CASE WHEN starred = 1 THEN status END WHERE id = ?""", (lid,))
+    # the listings feed is cached by a fingerprint of the data; an edit bumps it so every browser sees it
+    con.execute("""INSERT INTO settings(key, value) VALUES ('listings_rev', '1')
+                   ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)""")
     con.commit()
     return {"ok": True}
 
@@ -295,7 +304,10 @@ def _appraisal(body: dict) -> dict:
         if not v:
             return None
         try:
-            return float(v)
+            f = float(v)
+            if not math.isfinite(f):
+                raise ValueError
+            return f
         except ValueError:
             raise HTTPException(400, f"{k} must be a number")
     me = {"id": "", "category": cat, "family": body.get("family"), "year": int(num("year")) if num("year") else None,
@@ -413,7 +425,7 @@ def get_settings():
 NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "tow_capacity_lb": (0, 40000, True),
            "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
-           "home_lat": (-90, 90, False), "home_lon": (-180, 180, False), "home_zip": (501, 99950, False)}
+           "home_lat": (-90, 90, False), "home_lon": (-180, 180, False)}
 EDITABLE = {"alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
 
@@ -448,8 +460,14 @@ def put_settings(body: dict = Body(...)):
                     proxy_config(v)
                 except ValueError as e:
                     raise HTTPException(400, str(e))
-        if k == "active_hours" and not re.fullmatch(r"\d{1,2}-\d{1,2}", str(v).strip()):
-            raise HTTPException(400, "active_hours looks like 6-23")
+        if k == "active_hours":
+            m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", str(v).strip())
+            if not m or not 0 <= int(m[1]) < int(m[2]) <= 24:
+                raise HTTPException(400, "active_hours looks like 6-23 (start before end, within 0-24)")
+        if k == "home_zip":
+            if not re.fullmatch(r"\d{5}", str(v).strip()):
+                raise HTTPException(400, "home_zip must be 5 digits")
+            v = str(v).strip()
         if k == "alert_rules":
             if not isinstance(v, dict) or not all(isinstance(r, dict) for r in v.values()):
                 raise HTTPException(400, "alert_rules must be an object of objects")
@@ -483,7 +501,10 @@ def add_search(body: dict = Body(...)):
         raise HTTPException(400, "query required")
     con = db.connect()
     cat = body.get("category") if body.get("category") in CATEGORIES else "utv4"
-    con.execute("INSERT OR IGNORE INTO searches(query, category) VALUES (?, ?)", (q, cat))
+    have = con.execute("SELECT category FROM searches WHERE query = ?", (q,)).fetchone()
+    if have:
+        raise HTTPException(409, f'"{q}" is already a search under {CATEGORIES[have[0]]["label"]}')
+    con.execute("INSERT INTO searches(query, category) VALUES (?, ?)", (q, cat))
     con.commit()
     return get_settings()
 

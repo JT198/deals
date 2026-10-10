@@ -389,6 +389,7 @@ async def parse_pending(con, http, limit: int, errors: list, concurrency: int = 
                 cols = ", ".join(f"{k} = ?" for k in p)
                 con.execute(f"UPDATE listings SET {cols}, parsed = 1, equipment = NULL, title_only = ? WHERE id = ?",
                             (*p.values(), int(r["detail_fetched"] == 0), r["id"]))
+                db.apply_correction(con, r["id"])      # what Jon fixed by hand stays fixed
             else:
                 # unusable output; the model is deterministic, so give up after a few tries
                 con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
@@ -707,13 +708,38 @@ async def _send_alerts(con, http, st, quiet) -> int:
         group[r["id"]] = mine
         return True
 
-    deals = [r for r in con.execute(
-        f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
-              AND score >= ? AND (alerted_score IS NULL
-                                  OR price <= alerted_price * (1 - ?)                 -- a real price cut
-                                  OR (score >= alerted_score + 10 AND price < alerted_price)) {private}
-            ORDER BY score DESC""", (threshold, REALERT_CUT)).fetchall()
-        if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and enough_savings(r) and first_copy(r)]
+    def why_not(r) -> str | None:
+        """The first reason a candidate above the threshold is not alerted (recorded for the activity panel)."""
+        if not switched_on(r, "enabled"):
+            return "instant alerts are off for this category"
+        if not fits_need(r, "enabled"):
+            return "trailer too small for a UTV"
+        if not passes_limits(r):
+            return "outside the buy box"
+        if not enough_savings(r):
+            return "savings under the alert floor"
+        if not first_copy(r):
+            return "same ad already alerted (cross-post)"
+        return None
+
+    deals, activity = [], []
+    for r in con.execute(
+            f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
+                  AND score >= ? AND (alerted_score IS NULL
+                                      OR price <= alerted_price * (1 - ?)                 -- a real price cut
+                                      OR (score >= alerted_score + 10 AND price < alerted_price)) {private}
+                ORDER BY score DESC""", (threshold, REALERT_CUT)).fetchall():
+        reason = why_not(r)
+        if reason is None:
+            deals.append(r)
+        elif reason != "instant alerts are off for this category" or r["alerted_score"] is None:
+            activity.append((r["id"], "skipped", reason))
+    # a skip is recorded once per listing per reason per day, not every 10 minutes
+    recent = {(a["listing_id"], a["reason"]) for a in con.execute(
+        "SELECT listing_id, reason FROM alert_activity WHERE outcome = 'skipped' AND ts >= ?", (db.now() - 86400,))}
+    con.executemany("INSERT INTO alert_activity(ts, listing_id, outcome, reason) VALUES (?, ?, ?, ?)",
+                    [(db.now(), lid, o, why) for lid, o, why in activity if (lid, why) not in recent])
+    con.commit()
 
     # Old listings the first deep sweep dug up: Jon gets a summary of those, not a Telegram flood.
     # Recorded as alerted at this score, so a later price cut that lifts the score still alerts.
@@ -737,7 +763,15 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if r["id"] not in deal_ids and switched_on(r, "fresh") and fits_need(r, "fresh") and passes_limits(r)
         and first_copy(r)]
 
+    def log(rows, outcome, reason=None):
+        con.executemany("INSERT INTO alert_activity(ts, listing_id, outcome, reason) VALUES (?, ?, ?, ?)",
+                        [(db.now(), r["id"], outcome, reason) for r in rows])
+        con.commit()
+
+    if old_news:
+        log(old_news, "recorded", "older listing dug up by the deep sweep - no alert, it's on the dashboard")
     if quiet:   # backfill: remember everything as seen so the first real run doesn't flood
+        log(deals, "recorded", "quiet run")
         mark(deal_mark, deals, "backfill")
         mark(fresh_mark, fresh, "backfill")
         await _watch_alerts(con, http, quiet=True)
@@ -749,6 +783,9 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if await notify.send_listing(http, r):
             sent += 1
             mark(deal_mark, [r], "deal")
+            log([r], "sent", f"deal alert at score {r['score']}" + (" (price cut)" if r["alerted_score"] is not None else ""))
+        else:
+            log([r], "failed", "Telegram did not accept the message - will retry next run")
     rest = deals[MAX_ALERTS_PER_RUN:]      # go out one by one over the next runs, nothing is swallowed
     if rest:
         await notify.send_text(http, f"…and {len(rest)} more above {threshold} coming, or see the "
@@ -758,6 +795,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):
             sent += 1
             mark(fresh_mark, [r], "fresh")
+            log([r], "sent", "just-listed alert")
     sent += await _watch_alerts(con, http, quiet)
     return sent
 

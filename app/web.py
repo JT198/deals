@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from . import db, geo, scan, score, sweep
 from .sources.facebook import proxy_config
 from .categories import CATEGORIES, FAMILY_CATEGORY
-from .equipment import APPLIES
+from .equipment import APPLIES, TRIM_FEATS
 from .parse import OLLAMA_MODEL, OLLAMA_URL
 
 TUNNEL_IPS = set(os.environ.get("TUNNEL_IPS", "10.10.10.5").split(","))
@@ -95,7 +95,8 @@ LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_p
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
   reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, usage_doubt, lat, lon, new_price, new_comps, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit,
-  units, track_in, cc"""
+  units, track_in, cc, stage, stage_ts, alerted_score,
+  (SELECT 1 FROM corrections c WHERE c.listing_id = listings.id) corrected"""
 
 
 @app.get("/api/listings")
@@ -183,12 +184,80 @@ def mark(lid: str, body: dict = Body(...)):
     if body.get("gone"):     # "Gone" button: the listing is no longer up (Jon checked); searches won't bring it back
         con.execute("UPDATE listings SET status = 'gone', user_gone = 1, last_checked = ? WHERE id = ?", (db.now(), lid))
         score.mark_ended(con)
+    if "stage" in body:     # buying workflow; a stage implies watching, except once it's bought or passed on
+        stage = body["stage"] or None
+        if stage is not None and stage not in db.STAGES:
+            raise HTTPException(400, f"stage must be one of {', '.join(db.STAGES)}")
+        con.execute("UPDATE listings SET stage = ?, stage_ts = ?, starred = ? WHERE id = ?",
+                    (stage, db.now() if stage else None, 0 if stage in ("purchased", "passed") else 1 if stage else None, lid))
+        con.execute("UPDATE listings SET starred = COALESCE(starred, 0) WHERE id = ?", (lid,))
+        body.setdefault("starred", stage not in (None, "purchased", "passed"))
     if "starred" in body:   # watching starts from the current price/status
         con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
                          watch_status = CASE WHEN starred = 1 THEN status END WHERE id = ?""", (lid,))
     db.bump_rev(con)        # the cached listings feed must not answer 304 with the old star / note
     con.commit()
     return {"ok": True}
+
+
+@app.post("/api/correct/{lid:path}")   # own prefix: POST /api/listing/{lid:path} would swallow /correct
+def correct(lid: str, body: dict = Body(...)):
+    """Jon overrides what the model read. Fields: family, year, miles, hours, is_dealer, red_flags (list),
+    equipment (list), relevant. A null clears that field's correction; {} clears them all."""
+    con = db.connect()
+    r = con.execute("SELECT category FROM listings WHERE id = ?", (lid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "no such listing")
+    c = db.correction(con, lid)
+    for k, v in body.items():
+        if k not in db.CORRECTABLE:
+            raise HTTPException(400, f"can't correct {k}")
+        if v is None:
+            c.pop(k, None)
+            continue
+        if k == "family" and v not in FAMILY_CATEGORY:
+            raise HTTPException(400, "unknown model")
+        if k in ("year", "miles", "hours"):
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} must be a whole number")
+            if (k == "year" and not 1965 <= v <= 2030) or (k != "year" and not 0 <= v <= 500000):
+                raise HTTPException(400, f"{k} out of range")
+        if k in ("is_dealer", "relevant"):
+            v = 1 if v else 0
+        if k == "red_flags":
+            if not isinstance(v, list):
+                raise HTTPException(400, "red_flags must be a list")
+            v = [str(x).strip()[:80] for x in v if str(x).strip()][:6]
+        if k == "equipment":
+            cat = FAMILY_CATEGORY.get(c.get("family") or "", r["category"]) if "family" in c or "family" in body else r["category"]
+            allowed = set(APPLIES.get(cat, ())) | set(TRIM_FEATS)
+            if not isinstance(v, list) or any(x not in allowed for x in v):
+                raise HTTPException(400, f"equipment must be some of {', '.join(sorted(allowed)) or 'nothing for this category'}")
+        c[k] = v
+    if not body or not c:
+        con.execute("DELETE FROM corrections WHERE listing_id = ?", (lid,))
+        con.execute("UPDATE listings SET parsed = 0, equipment = NULL WHERE id = ?", (lid,))   # re-read the ad as the model saw it
+    else:
+        con.execute("INSERT OR REPLACE INTO corrections(listing_id, data, ts) VALUES (?, ?, ?)", (lid, json.dumps(c), db.now()))
+        db.apply_correction(con, lid, c)
+        if "equipment" not in c:
+            con.execute("UPDATE listings SET equipment = NULL WHERE id = ?", (lid,))   # re-detect from the text
+    con.commit()
+    score.rescore_all(con)       # the card shows the corrected price right away
+    _MARKET_CACHE.clear()
+    return {"ok": True, "correction": c}
+
+
+@app.get("/api/alerts")
+def alert_activity(limit: int = 80):
+    """Why recent candidates alerted or didn't, newest first."""
+    con = db.connect()
+    return [dict(r) for r in con.execute(
+        """SELECT a.ts, a.listing_id, a.outcome, a.reason, l.title, l.url, l.price, l.score, l.category
+           FROM alert_activity a LEFT JOIN listings l ON l.id = a.listing_id
+           ORDER BY a.ts DESC LIMIT ?""", (max(1, min(limit, 500)),))]
 
 
 @app.get("/api/market")
@@ -221,13 +290,57 @@ def market(family: str):
 _MARKET_CACHE: dict = {}
 
 
-def _market_inputs(con):
-    """Comps + equipment effects, recomputed only after a scan has finished (they scan the whole table)."""
+def _market_inputs(con, sold: bool = False):
+    """Comps + equipment effects, recomputed only after a scan has finished (they scan the whole table).
+    sold=True returns the sold-listing comps instead (what "typically sells around" is based on)."""
     key = tuple(con.execute("SELECT (SELECT MAX(id) FROM runs WHERE finished IS NOT NULL), COUNT(*), MAX(rowid), "
                             "SUM(parsed) FROM listings").fetchone())
     if "comps" not in _MARKET_CACHE or _MARKET_CACHE["key"] != key:
-        _MARKET_CACHE.update(key=key, comps=score._comps(con), effects=score.equipment_effects(con))
+        _MARKET_CACHE.update(key=key, comps=score._comps(con), effects=score.equipment_effects(con), sold=None)
+    if sold:
+        if _MARKET_CACHE.get("sold") is None:
+            _MARKET_CACHE["sold"] = score._comps(con, sold=True)
+        return _MARKET_CACHE["sold"], _MARKET_CACHE["effects"]
     return _MARKET_CACHE["comps"], _MARKET_CACHE["effects"]
+
+
+@app.get("/api/listing/{lid:path}/why")
+def why(lid: str):
+    """How this listing's typical price was reached: the comps that went into it, each lined up to this
+    machine, plus the sold comps behind "typically sells around"."""
+    con = db.connect()
+    r = con.execute("SELECT * FROM listings WHERE id = ?", (lid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "no such listing")
+    listing = dict(r)
+    if listing["usage_doubt"]:      # the scorer ignores doubtful use; so does the explanation
+        listing["miles"] = listing["hours"] = None
+    out = {}
+    for kind in ("asking", "sold"):
+        comps, effects = _market_inputs(con, sold=kind == "sold")
+        trace: dict = {}
+        exp, n, base, note, pre = score.expected_price(listing, comps, effects, trace)
+        ids = [c["id"] for c in trace.get("comps", [])]
+        rows = {x["id"]: dict(x) for x in con.execute(
+            f"""SELECT id, title, url, source, year, price, end_price, miles, hours, status, location, equipment,
+                       is_dealer, seller_type, listed_at, ended_at FROM listings WHERE id IN ({",".join("?" * len(ids))})""", ids)} if ids else {}
+        shown = []
+        for c in trace.get("comps", []):
+            x = rows.get(c["id"])
+            if not x:
+                continue
+            shown.append({**c, "title": x["title"], "url": x["url"], "source": x["source"], "year": x["year"],
+                          "asked": x["price"], "last_price": x["end_price"] or x["price"], "miles": x["miles"], "hours": x["hours"],
+                          "status": x["status"], "location": x["location"], "dealer": bool(x["is_dealer"] == 1 or x["seller_type"] == "dealer"),
+                          "equipment": json.loads(x["equipment"] or "[]"), "ended_at": x["ended_at"]})
+        shown.sort(key=lambda c: (c.get("adjusted") is None, c.get("adjusted") or 0))
+        out[kind] = {"expected": exp, "n": n, "base": base, "pre": pre, "note": note, "method": trace.get("method"),
+                     "metric": trace.get("metric"), "slope": trace.get("slope"), "typical_use": trace.get("typical_use"),
+                     "effects": trace.get("effects"), "units": trace.get("units", 1), "comps": shown}
+    out["listing"] = {k: listing[k] for k in ("id", "title", "price", "year", "family", "miles", "hours", "equipment",
+                                              "expected", "expected_sold", "sold_basis", "sold_comps", "comps", "usage_doubt",
+                                              "new_price", "new_comps", "usage_note")}
+    return out
 
 
 @app.get("/api/trends")

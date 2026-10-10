@@ -36,7 +36,8 @@ notify.send_text = fake_send_text
 def reset(rows, **settings):
     db.init()
     con = db.connect()
-    con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log; DELETE FROM scorecard_log;")   # every test starts clean
+    con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log; DELETE FROM scorecard_log; "
+                      "DELETE FROM alert_activity; DELETE FROM corrections;")   # every test starts clean
     con.commit()
     db.init()
     con.execute("DELETE FROM listings")
@@ -1556,6 +1557,77 @@ def test_codex_round3_2026_10_09():
     # the installer: every failure after the swap restores the previous release
     r = subprocess.run(["bash", os.path.join(os.path.dirname(__file__), "test_deploy.sh")], capture_output=True, text=True)
     assert r.returncode == 0 and "deploy tests passed" in r.stdout, r.stdout + r.stderr
+
+
+def test_why_corrections_stages_and_alert_activity():
+    from app import score, web
+    now = db.now()
+    # why: the comps behind the price, each lined up to this machine; the median of that column is the typical
+    con = reset([{"title": "2022 RZR XP 4 mine", "price": 13000, "miles": 1500, "year": 2022, "listed_at": now - 3 * 3600}])
+    _family(con)
+    web._MARKET_CACHE.clear()
+    score.rescore_all(con)
+    c = client()
+    w = c.get("/api/listing/facebook:0/why").json()
+    me = con.execute("SELECT expected, comps FROM listings WHERE id = 'facebook:0'").fetchone()
+    assert w["asking"]["expected"] == me["expected"] and len(w["asking"]["comps"]) == me["comps"] >= 4, w["asking"]["method"]
+    adj = sorted(x["adjusted"] for x in w["asking"]["comps"])
+    assert all(x["url"] and x["year"] for x in w["asking"]["comps"]) and "within 1 model year" in w["asking"]["method"]
+    assert abs(adj[len(adj) // 2] - me["expected"]) <= max(1, 0.15 * me["expected"])   # (trend blend may move it a little)
+
+    # corrections: applied now, kept through a re-parse, equipment overlay, and clearable
+    before = me["expected"]
+    r = c.post("/api/correct/facebook:0", json={"miles": 9000, "red_flags": ["needs engine work"], "equipment": ["cab", "heat"]})
+    assert r.status_code == 200, r.text
+    row = con.execute("SELECT miles, red_flags, equipment, expected, corrected FROM listings, (SELECT 1 corrected) WHERE id = 'facebook:0'").fetchone()
+    assert row["miles"] == 9000 and json.loads(row["red_flags"]) == ["needs engine work"] and json.loads(row["equipment"]) == ["cab", "heat"]
+    assert row["expected"] != before
+    assert c.get("/api/listings").json()[0]["corrected"] == 1
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": json.dumps({"category": "utv4", "relevant": True, "family": "RZR XP 4", "year": 2022, "miles": 1500})}
+
+    class HTTP:
+        async def post(self, url, json, **kw):
+            return Resp()
+    con.execute("UPDATE listings SET parsed = 0 WHERE id = 'facebook:0'"); con.commit()     # the seller edited the ad
+    asyncio.run(scan.parse_pending(con, HTTP(), 5, []))
+    score.rescore_all(con)
+    row = con.execute("SELECT miles, red_flags, equipment, usage_doubt FROM listings WHERE id = 'facebook:0'").fetchone()
+    assert row["miles"] == 9000 and json.loads(row["red_flags"]) == ["needs engine work"] and json.loads(row["equipment"]) == ["cab", "heat"]
+    assert c.post("/api/correct/facebook:0", json={"equipment": ["jetpack"]}).status_code == 400
+    assert c.post("/api/correct/facebook:0", json={"family": "Toro TITAN"}).status_code == 200    # moves category too
+    assert con.execute("SELECT category FROM listings WHERE id = 'facebook:0'").fetchone()[0] == "mower"
+    assert c.post("/api/correct/facebook:0", json={}).status_code == 200                           # clear: re-read the ad
+    assert con.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
+    assert con.execute("SELECT parsed FROM listings WHERE id = 'facebook:0'").fetchone()[0] == 0
+
+    # stages: a stage stars the listing; purchased / passed stop the watch
+    con = reset([{}])
+    c = client()
+    assert c.post("/api/listing/facebook:0", json={"stage": "contacted"}).status_code == 200
+    r = con.execute("SELECT stage, starred, watch_price FROM listings").fetchone()
+    assert (r["stage"], r["starred"], r["watch_price"]) == ("contacted", 1, 10000)
+    assert c.post("/api/listing/facebook:0", json={"stage": "purchased"}).status_code == 200
+    assert con.execute("SELECT starred FROM listings").fetchone()[0] == 0
+    assert c.post("/api/listing/facebook:0", json={"stage": "bought"}).status_code == 400
+
+    # alert activity: a skip is explained once a day, a send is logged
+    con = reset([{"score": 90, "price": 12000, "expected": 20000, "listed_at": now - 3 * 3600},
+                 {"id": "facebook:1", "ext_id": "1", "title": "far", "score": 90, "price": 12000, "expected": 20000,
+                  "location": "Ames, IA", "listed_at": now - 3 * 3600}], alert_min_pct="20", alert_min_usd="1500")
+    con.execute("INSERT OR REPLACE INTO geocache VALUES ('Ames, IA', 42.03, -93.62)")
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'",
+                (json.dumps({"utv4": {"enabled": True, "fresh": False, "digest": True, "within_mi": "100"}}),)); con.commit()
+    asyncio.run(alerts(con)); asyncio.run(alerts(con))
+    acts = [dict(a) for a in client().get("/api/alerts").json()]
+    got = {(a["listing_id"], a["outcome"]): a["reason"] for a in acts}
+    assert got[("facebook:0", "sent")].startswith("deal alert") and got[("facebook:1", "skipped")] == "outside the buy box", got
+    assert sum(a["listing_id"] == "facebook:1" for a in acts) == 1          # once, not every run
 
 
 if __name__ == "__main__":

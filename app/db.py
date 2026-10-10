@@ -72,6 +72,16 @@ CREATE INDEX IF NOT EXISTS alert_log_key ON alert_log(title_key, price);
 
 CREATE TABLE IF NOT EXISTS geocache (place TEXT PRIMARY KEY, lat REAL, lon REAL);
 
+-- Jon's corrections to what the model read (model, year, use, dealer, red flags, equipment, not-a-machine);
+-- re-applied after every re-parse, so a seller's edit can't undo them (db.apply_correction)
+CREATE TABLE IF NOT EXISTS corrections (listing_id TEXT PRIMARY KEY, data TEXT NOT NULL, ts INTEGER NOT NULL);
+
+-- why each candidate alerted or didn't (scan._send_alerts); the dashboard's Alert activity panel
+CREATE TABLE IF NOT EXISTS alert_activity (
+  ts INTEGER NOT NULL, listing_id TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT
+);
+CREATE INDEX IF NOT EXISTS alert_activity_ts ON alert_activity(ts);
+
 -- one row per Facebook page load, any lane: the shared hourly budget (scan.fb_budget) reads it
 CREATE TABLE IF NOT EXISTS fb_loads (ts INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS fb_loads_ts ON fb_loads(ts);
@@ -166,6 +176,7 @@ def init() -> None:
         "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
         "backlog": "INTEGER NOT NULL DEFAULT 0",                 # old listing dug up by the first deep sweep: no alert
         "title_only": "INTEGER NOT NULL DEFAULT 0",              # parsed without its page (re-read when there is time)
+        "stage": "TEXT", "stage_ts": "INTEGER",                  # buying workflow: contacted | viewing | offer | purchased | passed
         "new_price": "INTEGER", "new_comps": "INTEGER",          # what new ones list for at dealers (trailers)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio
@@ -206,6 +217,7 @@ def prune(con) -> None:
     cutoff = now() - 90 * 86400
     con.execute("DELETE FROM runs WHERE started < ?", (cutoff,))
     con.execute("DELETE FROM alert_log WHERE ts < ?", (cutoff,))
+    con.execute("DELETE FROM alert_activity WHERE ts < ?", (now() - 30 * 86400,))
     old = [r[0] for r in con.execute("""SELECT id FROM listings WHERE status IN ('gone', 'sold') AND starred = 0
                                         AND COALESCE(ended_at, last_seen) < ?""", (now() - 200 * 86400,))]
     if old:
@@ -235,6 +247,44 @@ def alert_rules(st: dict) -> dict:
                 rules[c].setdefault(k, v)
         rules[c].setdefault("fresh", _default_rule(c)["fresh"])
     return rules
+
+
+CORRECTABLE = ("family", "year", "miles", "hours", "is_dealer", "red_flags", "equipment", "relevant")
+STAGES = ("contacted", "viewing", "offer", "purchased", "passed")
+
+
+def correction(con, lid: str) -> dict:
+    row = con.execute("SELECT data FROM corrections WHERE listing_id = ?", (lid,)).fetchone()
+    try:
+        return json.loads(row[0]) if row else {}
+    except ValueError:
+        return {}
+
+
+def apply_correction(con, lid: str, data: dict | None = None) -> dict:
+    """Write Jon's corrections over the model's reading of this ad. Called when he saves one and again
+    after every re-parse. Equipment is handled by score.rescore_all (it re-detects, then overlays)."""
+    from .categories import FAMILY_CATEGORY
+    c = data if data is not None else correction(con, lid)
+    sets, vals = [], []
+    if "family" in c:
+        sets += ["family = ?", "category = ?"]
+        vals += [c["family"], FAMILY_CATEGORY.get(c["family"])]
+    for k in ("year", "miles", "hours", "is_dealer", "relevant"):
+        if k in c:
+            sets.append(f"{k} = ?")
+            vals.append(c[k])
+    if "miles" in c or "hours" in c:
+        sets.append("usage_doubt = NULL")      # he gave the real number
+    if "red_flags" in c:
+        sets.append("red_flags = ?")
+        vals.append(json.dumps(c["red_flags"]))
+    if "equipment" in c:
+        sets.append("equipment = ?")
+        vals.append(json.dumps(c["equipment"]))
+    if sets:
+        con.execute(f"UPDATE listings SET {', '.join(sets)} WHERE id = ?", (*vals, lid))
+    return c
 
 
 def bump_rev(con) -> None:

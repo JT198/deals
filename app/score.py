@@ -214,34 +214,40 @@ def _equip(listing) -> frozenset:
         return frozenset()
 
 
-def expected_price(listing, comps_by_fam, effects=None):
+def expected_price(listing, comps_by_fam, effects=None, trace: dict | None = None):
     """-> (expected, comps used, expected before any adjustment, plain-English note, expected before equipment).
 
     A listing selling several machines for one price (a pair of jet skis) is priced per machine, then
     multiplied back up, so the numbers still compare with its asking price.
+    trace: pass a dict to get back how the number was reached (the comps and what each was adjusted to)
+    for the dashboard's "why this price" panel.
     """
     units = _v(listing, "units") or 1
     if units <= 1:
-        return _expected_one(listing, comps_by_fam, effects)
+        return _expected_one(listing, comps_by_fam, effects, trace)
     # one trailer carries them all: price each machine without it, then add the trailer once
     feats = _equip(listing)
     trailer = (effects or {}).get(_v(listing, "category"), {}).get("trailer", 0) if "trailer" in feats else 0
     one = dict(listing)
     one["equipment"] = json.dumps(sorted(feats - {"trailer"}))
-    exp, n, base, note, pre = _expected_one(one, comps_by_fam, effects)
+    exp, n, base, note, pre = _expected_one(one, comps_by_fam, effects, trace)
+    if trace is not None:
+        trace["units"] = units
     if not exp:
         return exp, n, base, note, pre
     each = f"{units} machines at about ${exp:,} each" + (f" + ${trailer:,} trailer" if trailer else "")
     return (exp * units + trailer, n, base * units, f"{each}; {note}" if note else each, pre * units)
 
 
-def _expected_one(listing, comps_by_fam, effects=None):
+def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None):
     """Expected price of one machine (see expected_price).
 
     Comps are lined up to this machine: model year (dep/yr), then miles/hours, then equipment
     (cab/heat/A-C as learned percentages, plow/trailer as dollars). effects comes from equipment_effects().
     """
     none = (None, 0, None, None, None)
+    tr = trace if trace is not None else {}
+    tr.update(method=None, comps=[], metric=None, slope=0.0, typical_use=None, effects={})
     fam, year = _v(listing, "family"), _v(listing, "year")
     if not fam:
         return none
@@ -279,7 +285,10 @@ def _expected_one(listing, comps_by_fam, effects=None):
                 def per_ft(x):   # line up for age too when both years are known
                     return x.price / x.len_ft * ((1 + c["dep"]) ** (year - x.year) if year and x.year else 1)
                 exp = int(statistics.median(per_ft(x) for x in pool) * length)
+                tr.update(method=f"per foot, from {len(pool)} trailers of this type in other sizes",
+                          comps=[{"id": x.id, "price": x.price, "adjusted": int(per_ft(x) * length)} for x in pool])
                 return exp, len(pool), exp, f"priced per foot from {len(pool)} {fam.lower()} trailers of other sizes", exp
+            tr.update(method="not enough same-size trailers", comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in same_size])
             return None, len(same_size), None, None, None
 
     trend_note = None
@@ -318,9 +327,11 @@ def _expected_one(listing, comps_by_fam, effects=None):
     def shares(pool):
         return {f: sum(f in x.equip for x in pool) / len(pool) for f in eff} if pool else {}
 
+    tr.update(metric=metric, slope=slope, effects=dict(eff))
     if not year:
         # no model year (common for mowers): compare against the whole family, still adjusted for use/equipment
         if len(others) < 5:
+            tr.update(method="fewer than 5 comps in the family", comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in others])
             return None, len(others), None, None, None
         base = int(statistics.median(x.price for x in others))
         with_use = [getattr(x, metric) for x in others if metric and getattr(x, metric) is not None]
@@ -328,17 +339,23 @@ def _expected_one(listing, comps_by_fam, effects=None):
         pre = int(base * usage_factor(typical_use))
         exp = int(equip_adjust(pre, shares(others)))
         n = len(others)
+        tr.update(method=f"median of every {fam} listing (no model year stated), then adjusted for use and equipment",
+                  comps=[{"id": x.id, "price": x.price, "adjusted": x.price} for x in others], typical_use=typical_use)
     else:
         dated = [x for x in others if x.year]
         near = [x for x in dated if abs(x.year - year) <= c["window"]]
         if len(near) >= 4:
-            aligned = [(x.price * (1 + c["dep"]) ** (year - x.year), comp_use(x), x.equip) for x in near]
-            base = int(statistics.median(p for p, _, _ in aligned))
-            pre = int(statistics.median(p * usage_factor(u) for p, u, _ in aligned))
-            exp = int(statistics.median(equip_adjust(p * usage_factor(u), eq) for p, u, eq in aligned))
-            typical_use = [u for _, u, _ in aligned if u is not None]
+            aligned = [(x.price * (1 + c["dep"]) ** (year - x.year), comp_use(x), x.equip, x) for x in near]
+            base = int(statistics.median(p for p, _, _, _ in aligned))
+            pre = int(statistics.median(p * usage_factor(u) for p, u, _, _ in aligned))
+            exp = int(statistics.median(equip_adjust(p * usage_factor(u), eq) for p, u, eq, _ in aligned))
+            typical_use = [u for _, u, _, _ in aligned if u is not None]
             typical_use = statistics.median(typical_use) if typical_use else None
             pool, n = near, len(near)
+            tr.update(method=f"median of {n} comps within {c['window']} model year, each lined up for year, use and equipment",
+                      typical_use=typical_use,
+                      comps=[{"id": x.id, "price": x.price, "aligned": int(p), "use": u,
+                              "adjusted": int(equip_adjust(p * usage_factor(u), eq))} for p, u, eq, x in aligned])
             yrs = [x.year for x in dated]
             # not for trailers (size, not age, sets the price), vintage families, or machines past ~12 years
             # (old ones bottom out instead of following the exponential trend)
@@ -353,10 +370,13 @@ def _expected_one(listing, comps_by_fam, effects=None):
                 blended = base * k
                 if abs(k - 1) >= 0.02:
                     trend_note = f"{n} same-age comps, leaned toward the {fam} price-by-year trend"
+                    tr["method"] += f"; blended {int(100 * (1 - w))}% toward the price-by-year trend of all {len(dated)} dated comps"
                 base, pre, exp = int(blended), int(pre * k), int(exp * k)
         else:
             yrs = [x.year for x in dated]
             if not (c["fit"] and len(dated) >= 5 and len(set(yrs)) >= 2 and min(yrs) - 1 <= year <= max(yrs) + 1):
+                tr.update(method=f"only {len(near)} comps within {c['window']} year and not enough dated comps for a trend",
+                          comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in near or dated])
                 return None, len(others), None, None, None
             a, b = _fit(dated)
             base = int(math.exp(a + b * year))
@@ -364,6 +384,9 @@ def _expected_one(listing, comps_by_fam, effects=None):
             pre = int(base * usage_factor(typical_use))
             exp = int(equip_adjust(pre, shares(dated)))
             pool, n = dated, len(dated)
+            tr.update(method=f"fewer than 4 comps within {c['window']} year: fitted the price-by-year trend of {n} dated comps "
+                             f"({100 * (math.exp(b) - 1):+.0f}%/yr) and read off {year}", typical_use=typical_use,
+                      comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in dated])
         others = pool
 
     notes = [x for x in (_usage_note(use, typical_use, metric, pre, base),
@@ -750,15 +773,18 @@ def rescore_all(con) -> None:
         con.execute("UPDATE listings SET equipment = NULL")
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('equip_version', ?)", (str(EQUIP_VERSION),))
     # (ended listings too: they stay comps for 180 days)
+    fixed = {r["listing_id"]: json.loads(r["data"]) for r in con.execute("SELECT listing_id, data FROM corrections")}
     for r in con.execute("SELECT id, category, family, trim, title, description, extras, summary FROM listings "
                          "WHERE parsed = 1 AND relevant = 1 AND equipment IS NULL").fetchall():
-        con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(detect(r)), r["id"]))
+        feats = fixed.get(r["id"], {}).get("equipment")       # Jon's list wins over the text
+        con.execute("UPDATE listings SET equipment = ? WHERE id = ?", (json.dumps(feats if feats is not None else detect(r)), r["id"]))
     con.commit()
     # 1b. is the stated mileage / hours really the machine's total? ("clutches replaced 60 miles ago")
     for r in con.execute("""SELECT id, category, title, description, miles, hours, year, is_new, usage_doubt FROM listings
                             WHERE parsed = 1 AND relevant = 1 AND status != 'gone'
                               AND (miles IS NOT NULL OR hours IS NOT NULL OR usage_doubt IS NOT NULL)""").fetchall():
-        d = usage.doubt(r)
+        c = fixed.get(r["id"], {})
+        d = None if ("miles" in c or "hours" in c) else usage.doubt(r)      # a corrected number is not in doubt
         if d != r["usage_doubt"]:
             con.execute("UPDATE listings SET usage_doubt = ? WHERE id = ?", (d, r["id"]))
     con.commit()

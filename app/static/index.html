@@ -85,6 +85,11 @@ details.offer { background: var(--surface-2); border-radius: 8px; padding: 7px 1
 details.offer summary { cursor: pointer; font-weight: 600; list-style: none; }
 details.offer summary::-webkit-details-marker { display: none; }
 details.offer summary::after { content: " ▸"; color: var(--muted); font-weight: 400; }
+details.why { margin-top: 6px; }
+.fixbox { margin-top: 8px; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
+select.stage { max-width: 160px; }
+details.why h4 { margin: 8px 0 2px; font-size: 13px; }
+table.why { font-size: 12px; } table.why td.t { white-space: normal; max-width: 260px; } table.why td, table.why th { padding: 3px 6px; }
 details.offer[open] summary::after { content: " ▾"; }
 details.offer .nums { display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 details.offer .nums b { font-size: 15px; }
@@ -238,7 +243,7 @@ td.t { white-space: normal; min-width: 240px; }
         <option value="price">lowest price</option></select></label>
       <label id="f-fit-wrap"><input id="f-fit" type="checkbox"> Fits a 4-seat UTV</label>
       <label><input id="f-private" type="checkbox"> Private only</label>
-      <label><input id="f-star" type="checkbox"> Starred</label>
+      <label><input id="f-star" type="checkbox"> Starred / shortlist</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
       <span class="viewtoggle"><button class="btn" id="view-cards">Cards</button> <button class="btn" id="view-map">Map</button></span>
     </div>
@@ -377,7 +382,16 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
         and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
       <li><b>⭐ Watch alerts</b> - for starred listings: price drops, pending, sold/removed, back on the market.
-        Stars are shared, so Alex's stars notify you too.</li>
+        Stars are shared, so Alex's stars notify you too. A starred card has a stage menu - Contacted, Viewing
+        scheduled, Offer made, Purchased, Passed - so you both know where each one stands; Purchased and Passed stop
+        the watching. The "Starred / shortlist" filter shows everything with a star or a stage.</li>
+      <li><b>Why $X?</b> on a card opens the comparable listings behind its typical price, each lined up to this
+        machine's year, use and equipment, and the sold listings behind "typically sells around".</li>
+      <li><b>Fix</b> on a card corrects what the model read - model, year, miles, hours, dealer, red flags, equipment,
+        or "not a machine we track". Corrections are kept even when the ad is re-read after the seller edits it;
+        the price and score update right away. "Clear corrections" goes back to the model's reading.</li>
+      <li><b>Alert activity</b> (Setup) lists every listing above the threshold lately and whether it was sent,
+        skipped (and why - outside the buy box, savings floor, cross-post...), recorded quietly, or failed.</li>
       <li><b>Buy box</b> (Setup): per category, the models, minimum year, max price, max miles / hours and how far you'd
         drive. Deal and just-listed alerts only go out for listings inside the box; categories with Instant off still
         show their best in the 7am digest (also limited to the box). A listing that doesn't state its miles or hours
@@ -500,7 +514,7 @@ function filteredRaw() {
     (CAT === "all" || d.category === CAT) &&
     (!F.fit || CAT !== "trailer" || d.utv_fit === "yes") &&
     (F.hidden || !d.hidden) &&
-    (!F.star || d.starred) &&
+    (!F.star || d.starred || d.stage) &&
     (!F.priv || !d.dealer) &&
     (!F.max || (d.price && d.price <= +F.max)) &&
     (!F.year || (d.year && d.year >= +F.year)) &&
@@ -600,6 +614,42 @@ document.addEventListener("focusout", async e => {
     d.notes = text || null; render();
   } catch (err) { problem(`Note not saved (${err.message}) - it's still in the box, try again`); }
 });
+// "Why this price": the comps behind the typical price, fetched when the box is opened
+function whyBox(d) {
+  if (!d.expected && !d.comps) return "";
+  const id = "why-" + d.id.replace(/[^a-z0-9]/gi, "");
+  return `<details class="offer why" data-why="${esc(d.id)}"><summary>Why ${money(d.expected)}? <span class="hint">${d.comps || 0} comps</span></summary>
+    <div id="${id}" class="whybody"><span class="hint">Loading…</span></div></details>`;
+}
+document.addEventListener("toggle", async e => {
+  const det = e.target; if (!det.matches || !det.matches("details.why") || !det.open) return;
+  const box = det.querySelector(".whybody"); if (!box || box.dataset.loaded) return;
+  try {
+    const w = await api("/api/listing/" + encodeURIComponent(det.dataset.why) + "/why");
+    box.innerHTML = whyHtml(w); box.dataset.loaded = 1;
+  } catch (err) { box.innerHTML = `<span class="err">Couldn't load the comps (${esc(err.message)})</span>`; }
+}, true);
+function whyHtml(w) {
+  const L = w.listing, unit = w.asking.metric === "hours" ? "hrs" : "mi";
+  const useOf = c => c.miles != null ? c.miles.toLocaleString() + " mi" : c.hours != null ? c.hours.toLocaleString() + " hrs" : "—";
+  const table = (k, title, priceHead) => {
+    const s = w[k]; if (!s || !s.comps.length) return "";
+    const rows = s.comps.map(c => `<tr><td class="t"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title.slice(0, 48))}</a>
+        <span class="hint">${c.year ?? ""} · ${useOf(c)} · ${esc(c.location || "")}${c.dealer ? " · dealer" : ""}${c.status !== "active" ? " · " + esc(c.status) : ""}${(c.equipment || []).length ? " · " + esc(c.equipment.join(", ")) : ""}</span></td>
+        <td>${money(k === "sold" ? c.last_price : c.asked)}</td><td>${c.adjusted != null ? money(c.adjusted) : "—"}</td></tr>`).join("");
+    return `<h4>${title}${s.expected ? `: <b>${money(s.expected)}</b>` : ""}</h4>
+      <p class="hint">${esc(s.method || "")}${s.typical_use != null ? ` · similar ones average about ${Math.round(s.typical_use).toLocaleString()} ${unit}` : ""}${s.slope ? ` · ${(100 * (Math.exp(s.slope * (unit === "mi" ? 1000 : 100)) - 1)).toFixed(1)}% per ${unit === "mi" ? "1,000 mi" : "100 hrs"}` : ""}${s.units > 1 ? ` · priced per machine ×${s.units}` : ""}</p>
+      <div class="tablewrap"><table class="why"><thead><tr><th>Comparable</th><th>${priceHead}</th><th>Lined up to this one</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
+  const eff = w.asking.effects || {}, effTxt = Object.keys(eff).filter(f => (L.equipment || []).includes(f) || true).map(f => `${f}: ${eff[f] > 1 ? "$" + Math.round(eff[f]).toLocaleString() : (100 * eff[f]).toFixed(0) + "%"}`).join(", ");
+  return `<p class="hint">"Lined up" = that comp's price moved to this machine's model year (~8%/yr), its use (${unit}) and its equipment; the typical price is the median of that column. Asking prices are what sellers want; "sold" prices are the last asking price before the listing was marked sold.</p>
+    ${L.usage_doubt ? `<p class="hint">⚠ ${esc(L.usage_doubt)} - use was not adjusted for.</p>` : ""}
+    ${table("asking", "Typical asking", "Asking")}
+    ${table("sold", "Typically sells around", "Last price")}
+    ${!w.sold.comps.length && L.sold_basis === "est" ? `<p class="hint">Not enough sold ${esc(L.family || "")} listings yet - the sold estimate (${money(L.expected_sold)}) uses this category's typical sold-vs-asking ratio.</p>` : ""}
+    ${L.new_price ? `<p class="hint">Capped by what new ones list for at dealers: ${money(L.new_price)} (${L.new_comps} listings) less 15%.</p>` : ""}
+    ${effTxt ? `<p class="hint">Equipment values learned from this market: ${esc(effTxt)}.</p>` : ""}`;
+}
 function offerBox(d) {
   if (!d.offer_aim) return "";
   const mid = "msg-" + d.id.replace(/[^a-z0-9]/gi, "");
@@ -653,21 +703,90 @@ function card(d) {
       <div class="facts">${facts(d)}</div>
       ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
       ${offerBox(d)}
+      ${whyBox(d)}
       ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
         `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
-      <div class="tags">${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">
         <a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
-        <button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">${d.starred ? "★ Watching" : "☆ Star"}</button>
+        ${d.starred || d.stage ? `<select class="btn stage" data-stage="${esc(d.id)}" title="Where you are with this one">${[["", "★ Watching"], ...STAGES].map(([v, l]) =>
+            `<option value="${v}" ${(d.stage || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`
+          : `<button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">☆ Star</button>`}
         <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
         <button class="btn" data-act="gone" data-id="${esc(d.id)}" title="It's no longer posted - remove it from the dashboard">Gone</button>
         ${d.notes ? "" : `<button class="btn" data-act="note" data-id="${esc(d.id)}" title="Add a note (shared with Alex)">Note</button>`}
+        <button class="btn" data-fix="${esc(d.id)}" title="The model misread this ad? Correct the model, year, miles, equipment or red flags">${d.corrected ? "✎ Fixed" : "Fix"}</button>
       </div>
+      <div class="fixbox" id="fix-${d.id.replace(/[^a-z0-9]/gi, "")}" hidden></div>
     </div></article>`;
 }
+const STAGES = [["contacted", "Contacted"], ["viewing", "Viewing scheduled"], ["offer", "Offer made"], ["purchased", "Purchased ✓"], ["passed", "Passed"]];
+const STAGE_LABEL = Object.fromEntries(STAGES);
+document.addEventListener("change", async e => {
+  const sel = e.target.closest("[data-stage]"); if (!sel) return;
+  const d = DATA.find(x => x.id === sel.dataset.stage); if (!d) return;
+  try {
+    await api("/api/listing/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: sel.value || null }) });
+    d.stage = sel.value || null; d.stage_ts = Math.floor(Date.now() / 1000); d.starred = sel.value && !["purchased", "passed"].includes(sel.value) ? 1 : sel.value ? 0 : 1;
+    render();
+  } catch (err) { problem(`Couldn't save that (${err.message})`); }
+});
+// ---- Fix: Jon's corrections to what the model read ----
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-fix]"); if (!b) return;
+  const d = DATA.find(x => x.id === b.dataset.fix); if (!d) return;
+  const box = document.getElementById("fix-" + d.id.replace(/[^a-z0-9]/gi, ""));
+  if (!box.hidden) { box.hidden = true; return; }
+  const cat = catOf(d.category), fams = cat.families || [];
+  const eq = (cat.equipment || []);
+  box.innerHTML = `<div class="sellform">
+      <label>Model<select name="family">${fams.map(f => `<option ${f === d.family ? "selected" : ""}>${esc(f)}</option>`).join("")}</select></label>
+      <label>Year<input name="year" type="number" value="${d.year ?? ""}" placeholder="unknown"></label>
+      ${d.category === "trailer" ? "" : `<label>Miles<input name="miles" type="number" value="${d.miles ?? ""}" placeholder="unknown"></label>
+      <label>Hours<input name="hours" type="number" value="${d.hours ?? ""}" placeholder="unknown"></label>`}
+      <label>Seller<select name="is_dealer"><option value="0" ${!d.dealer ? "selected" : ""}>private</option><option value="1" ${d.dealer ? "selected" : ""}>dealer</option></select></label>
+      <label class="wide">Red flags (comma-separated; blank = none)<input name="red_flags" value="${esc((d.red_flags || []).join(", "))}"></label>
+      ${eq.length ? `<div class="wide checks">${eq.map(f => `<label><input type="checkbox" name="eq" value="${f}" ${(d.equipment || []).includes(f) ? "checked" : ""}> ${{ cab: "Cab", heat: "Heat", ac: "A/C", plow: "Plow", trailer: "Trailer included" }[f]}</label>`).join("")}</div>` : ""}
+      <label class="wide"><input type="checkbox" name="irrelevant"> Not a machine we track (parts, wrong category) - drop it</label>
+    </div>
+    <p><button class="btn primary" data-fixsave="${esc(d.id)}">Save correction</button> ${d.corrected ? `<button class="btn" data-fixclear="${esc(d.id)}">Clear corrections</button>` : ""}
+      <span class="hint">Kept even if the seller edits the ad and it's re-read.</span></p>`;
+  box.hidden = false;
+});
+document.addEventListener("click", async e => {
+  const save = e.target.closest("[data-fixsave]"), clear = e.target.closest("[data-fixclear]");
+  if (!save && !clear) return;
+  const id = (save || clear).dataset.fixsave || clear.dataset.fixclear;
+  const d = DATA.find(x => x.id === id); if (!d) return;
+  const box = document.getElementById("fix-" + d.id.replace(/[^a-z0-9]/gi, ""));
+  let body = {};
+  if (save) {
+    const v = n => { const i = box.querySelector(`[name=${n}]`); return i ? i.value.trim() : null; };
+    const num = n => { const x = v(n); return x === null ? undefined : x === "" ? null : +x; };
+    body = { family: v("family"), year: num("year"), miles: num("miles"), hours: num("hours"), is_dealer: v("is_dealer") === "1",
+             red_flags: (v("red_flags") || "").split(",").map(s => s.trim()).filter(Boolean),
+             equipment: box.querySelector("[name=eq]") ? [...box.querySelectorAll("[name=eq]:checked")].map(i => i.value) : undefined };
+    if (box.querySelector("[name=irrelevant]").checked) body.relevant = false;
+    Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+    // only send what differs from the card, so an untouched field keeps following the ad text
+    if (body.family === d.family) delete body.family;
+    if (body.year === (d.year ?? null)) delete body.year;
+    if (body.miles === (d.miles ?? null)) delete body.miles;
+    if (body.hours === (d.hours ?? null)) delete body.hours;
+    if (body.is_dealer === !!d.dealer) delete body.is_dealer;
+    if (JSON.stringify(body.red_flags) === JSON.stringify(d.red_flags || [])) delete body.red_flags;
+    if (body.equipment && JSON.stringify([...body.equipment].sort()) === JSON.stringify([...(d.equipment || [])].filter(f => !f.endsWith("_trim")).sort())) delete body.equipment;
+    if (!Object.keys(body).length && !d.corrected) { box.hidden = true; return; }
+  }
+  (save || clear).disabled = true;
+  try {
+    await api("/api/correct/" + encodeURIComponent(d.id), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    LAST_ETAG = null; await load();     // the rescore changed this card (and maybe its comps' cards)
+  } catch (err) { problem(`Correction not saved (${err.message})`); (save || clear).disabled = false; }
+});
 
 function quickBar(n) {
   return QUICK ? `<div class="quickbar"><span>Showing <b>${n}</b> ${QUICK_LABEL[QUICK]} (all categories, newest first)</span>
@@ -993,7 +1112,8 @@ function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x))); const 
 
 // ---------- Setup ----------
 async function renderSetup() {
-  const [s, st] = await Promise.all([api("/api/settings"), api("/api/status")]);
+  const [s, st, alerts] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/alerts").catch(() => [])]);
+  st.alerts = alerts;
   const v = s.settings;
   $("#tab-setup").innerHTML = `
   <div class="panel"><h2>Search area and alerts</h2><div class="form" id="setform">
@@ -1048,6 +1168,10 @@ async function renderSetup() {
       <select id="newcat">${CATS.map(c => `<option value="${c.key}" ${c.key === CAT ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
       <button class="btn" id="addq">Add</button></p></div>
   ${st.sweep && st.sweep.round ? `<div class="panel"><h2>Deep sweep</h2><p class="hint">Pass ${st.sweep.round}: ${st.sweep.searches - st.sweep.todo} of ${st.sweep.searches} price-range searches done, ${st.sweep.new.toLocaleString()} listings found this pass that the regular scans had not seen.${st.sweep.backlog_found ? ` First pass dug up ${st.sweep.backlog_found.toLocaleString()} older listings (${st.sweep.backlog_machines.toLocaleString()} machines or trailers we track${st.sweep.backlog_pending ? `, ${st.sweep.backlog_pending.toLocaleString()} still being read` : ""}).` : ""}</p></div>` : ""}
+  <div class="panel"><h2>Alert activity</h2><p class="hint">Every listing that scored above the alert threshold lately, and what happened to it. A skip is listed once per reason per day.</p>
+    <div class="tablewrap"><table class="runs"><thead><tr><th>When</th><th>Listing</th><th>Score</th><th>Outcome</th><th>Why</th></tr></thead><tbody>
+    ${(st.alerts || []).map(a => `<tr><td>${ago(a.ts)}</td><td class="t">${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc((a.title || a.listing_id).slice(0, 50))}</a>` : esc(a.listing_id)}${a.price ? ` · ${money(a.price)}` : ""}</td>
+      <td>${a.score ?? ""}</td><td>${a.outcome === "sent" ? "✅ sent" : a.outcome === "failed" ? '<span class="err">✗ failed</span>' : a.outcome === "recorded" ? "📝 recorded" : "⏭ skipped"}</td><td>${esc(a.reason || "")}</td></tr>`).join("") || '<tr><td colspan="5" class="hint">nothing above the threshold yet</td></tr>'}</tbody></table></div></div>
   <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Type</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
     ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.source === "quick" ? "⚡ fast" : "full"}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;

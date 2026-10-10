@@ -72,6 +72,10 @@ CREATE INDEX IF NOT EXISTS alert_log_key ON alert_log(title_key, price);
 
 CREATE TABLE IF NOT EXISTS geocache (place TEXT PRIMARY KEY, lat REAL, lon REAL);
 
+-- one row per Facebook page load, any lane: the shared hourly budget (scan.fb_budget) reads it
+CREATE TABLE IF NOT EXISTS fb_loads (ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS fb_loads_ts ON fb_loads(ts);
+
 -- the deep sweep's work list: one row per (search, asking-price band) per round (see sweep.py)
 CREATE TABLE IF NOT EXISTS sweep_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,6 +165,7 @@ def init() -> None:
         "parse_attempts": "INTEGER NOT NULL DEFAULT 0",
         "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
         "backlog": "INTEGER NOT NULL DEFAULT 0",                 # old listing dug up by the first deep sweep: no alert
+        "title_only": "INTEGER NOT NULL DEFAULT 0",              # parsed without its page (re-read when there is time)
         "new_price": "INTEGER", "new_comps": "INTEGER",          # what new ones list for at dealers (trailers)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
         "sold_basis": "TEXT",                                    # 'sold' = sold listings of this family, 'est' = category ratio

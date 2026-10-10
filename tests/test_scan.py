@@ -176,14 +176,15 @@ def test_price_drop_realerts():
 
 
 def test_twin_blocked_even_after_its_own_alert_price_changes():
-    # twin A alerted at $4,000; B is a cross-post at $4,000 -> skipped, even if A later drops to $3,500
+    # twin A alerted at $4,000; B is a cross-post at $4,000 -> skipped, even when A later drops to $3,500
+    # (A's 12.5% cut re-alerts A itself; B at the old price stays a twin of the original alert)
     con = reset([{"title": "Arctic Cat HDX", "price": 4000},
                  {"id": "craigslist:2", "source": "craigslist", "ext_id": "2", "title": "Arctic Cat HDX", "price": 4000}])
     asyncio.run(alerts(con))
     assert SENT == ["facebook:0"], SENT
     con.execute("UPDATE listings SET price = 3500 WHERE id = 'facebook:0'"); con.commit()
     asyncio.run(alerts(con))
-    assert SENT == ["facebook:0"], SENT
+    assert SENT == ["facebook:0", "facebook:0"], SENT
 
 
 def test_twin_stays_blocked_after_original_realerts_at_new_price():
@@ -912,7 +913,7 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     class FakeFB:
         wall = False
 
-        def __init__(self, pw, proxy=None):
+        def __init__(self, pw, proxy=None, **kw):
             pass
 
         async def __aenter__(self):
@@ -959,7 +960,7 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     asyncio.run(alerts(con))
     assert SENT == ["facebook:2"], SENT
     assert con.execute("SELECT alerted_score FROM listings WHERE ext_id = '1'").fetchone()[0] == 90
-    con.execute("UPDATE listings SET score = 100 WHERE ext_id = '1'")
+    con.execute("UPDATE listings SET score = 100, price = 2700 WHERE ext_id = '1'")   # a 10% price cut: alerts after all
     con.commit()
     SENT.clear()
     asyncio.run(alerts(con))
@@ -1344,6 +1345,111 @@ def test_long_lanes_step_aside_for_the_fast_lane_and_listings_feed_is_cached():
     assert c.post("/api/listing/facebook:0", json={"notes": "call him"}).status_code == 200
     r2 = c.get("/api/listings", headers={"if-none-match": r.headers["etag"]})
     assert r2.status_code == 200 and r2.json()[0]["notes"] == "call him"
+
+
+def test_review_batch_2026_10_09():
+    """Full-codebase review: stale handling, wall guard, title-only re-reads, price-cut re-alerts,
+    the hourly Facebook budget, the sold pull, and the trailer new-price ceiling."""
+    from unittest.mock import AsyncMock, patch
+    from app import score
+    old = db.now() - 10 * 86400
+    # a. a Facebook machine nobody has re-seen is NOT marked gone by the calendar; junk and Craigslist still are
+    con = reset([{"last_seen": old, "detail_fetched": 1},
+                 {"id": "facebook:1", "ext_id": "1", "last_seen": old, "detail_fetched": 1, "relevant": 0},
+                 {"id": "craigslist:2", "ext_id": "2", "source": "craigslist", "last_seen": old, "detail_fetched": 1}],
+                active_hours="0-24")
+    item = {"ext_id": "newcl", "url": "https://x.test/i", "title": "cl", "price": 12000, "status": "active"}
+
+    class Lock:
+        def close(self):
+            pass
+    with patch.object(scan, "acquire_fb_lock", AsyncMock(return_value=None)), \
+         patch.object(scan.craigslist, "search", AsyncMock(return_value=[item])), \
+         patch.object(scan.craigslist, "detail", AsyncMock(return_value={"status": "active"})), \
+         patch.object(scan, "parse_pending", AsyncMock()), patch.object(scan.geo, "fill", AsyncMock()), \
+         patch.object(scan, "send_alerts", AsyncMock(return_value=0)), patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.run(force=True))
+    got = {r["id"]: r["status"] for r in con.execute("SELECT id, status FROM listings")}
+    assert got["facebook:0"] == "active" and got["facebook:1"] == "gone" and got["craigslist:2"] == "gone", got
+    assert [r["id"] for r in scan.stale_candidates(con, 5)] == ["facebook:0"]      # its page gets checked instead
+
+    # b. most of a batch failing to load is a wall, not a batch of removals
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1} for i in range(6)])
+
+    class FB:
+        async def detail(self, ext_id):
+            return {"status": "active"} if ext_id == "0" else None
+    errors = []
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, FB(), con.execute("SELECT id, ext_id, price FROM listings").fetchall(), errors))
+    assert any("login wall" in e for e in errors), errors
+    assert con.execute("SELECT SUM(detail_misses) FROM listings").fetchone()[0] == 0
+
+    # c. backlog finds wait a day for their page before a title-only parse; title-only dismissals are re-read later
+    now = db.now()
+    con = reset([{"parsed": 0, "detail_fetched": 0, "backlog": 1, "first_seen": now - 2 * 3600},
+                 {"id": "facebook:1", "ext_id": "1", "parsed": 0, "detail_fetched": 0, "backlog": 1, "first_seen": now - 25 * 3600},
+                 {"id": "facebook:2", "ext_id": "2", "parsed": 0, "detail_fetched": 0, "backlog": 0, "first_seen": now - 2 * 3600}])
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": json.dumps({"category": "none", "relevant": False})}
+
+    class HTTP:
+        async def post(self, url, json, **kw):
+            return Resp()
+    asyncio.run(scan.parse_pending(con, HTTP(), 10, []))
+    rows = {r["id"]: (r["parsed"], r["title_only"]) for r in con.execute("SELECT id, parsed, title_only FROM listings")}
+    assert rows == {"facebook:0": (0, 0), "facebook:1": (1, 1), "facebook:2": (1, 1)}, rows
+    assert {r["id"] for r in scan.title_only_candidates(con, 5)} == {"facebook:1", "facebook:2"}
+    assert scan.pending_details(con, 5) == [] or all(r["id"] == "facebook:0" for r in scan.pending_details(con, 5))
+
+    # d. an alerted listing alerts again on a real price cut, not on comp drift alone
+    con = reset([{"score": 92, "price": 10000, "alerted_score": 92, "alerted_price": 10000, "listed_at": now - 3 * 3600}])
+    asyncio.run(alerts(con))
+    assert SENT == [], SENT                                                   # nothing changed
+    con.execute("UPDATE listings SET score = 100"); con.commit()              # comps moved, price didn't
+    asyncio.run(alerts(con))
+    assert SENT == [], SENT
+    con.execute("UPDATE listings SET price = 9000"); con.commit()             # 10% cut
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
+
+    # e. the hourly Facebook budget is shared and stops the long lanes
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 0, "parsed": 0} for i in range(3)])
+    b = scan.FBBudget(con, reserve=scan.FB_HOURLY_BUDGET - 2)
+    assert b.left() == 2
+    b.record(); b.record()
+    assert b.left() == 0
+
+    class Ok:
+        async def detail(self, ext_id):
+            return {"status": "active", "description": "x"}
+    errors = []
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, Ok(), scan.pending_details(con, 10), errors, budget=b))
+    assert con.execute("SELECT SUM(detail_fetched) FROM listings").fetchone()[0] == 0 and "budget" in errors[0], errors
+
+    # f. the sold pull only sends watch alerts
+    con = reset([{"score": 95, "price": 5000, "expected": 9000, "listed_at": now - 3 * 3600}])
+    asyncio.run(scan.send_alerts(con, None, db.settings(con), watch_only=True))
+    assert SENT == []
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"]
+
+    # g. a used tandem with no stated GVWR is not capped by cheap single-axle new trailers
+    fam = "Open utility (rails / mesh sides)"
+    def comp(i, price, axles, gvwr):
+        return score.Comp((f"n{i}", 2026, price, None, None, None, 16.0, axles, frozenset(), None, None, gvwr, 7.0, (f"n{i}", price)))
+    me = {"category": "trailer", "family": fam, "len_ft": 16.0, "axles": 2, "gvwr_lb": None, "width_ft": 7.0}
+    singles = {fam: [comp(1, 3295, 1, 2990), comp(2, 3495, 1, 2990), comp(3, 3395, 1, None)]}
+    assert score.new_price_for(me, singles)[0] is None
+    tandems = {fam: [comp(1, 5300, 2, 7000), comp(2, 5600, 2, 7000), comp(3, 5900, 2, 9990)]}
+    assert score.new_price_for(me, tandems) == (5300, 3)
+    assert score.new_price_for(me, {fam: tandems[fam][:2]})[0] is None               # fewer than 3: no ceiling
 
 
 if __name__ == "__main__":

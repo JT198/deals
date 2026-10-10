@@ -5,6 +5,7 @@ different num_ctx would force Ollama to reload the model for every app).
 """
 import json
 import os
+import time
 
 import httpx
 
@@ -29,12 +30,14 @@ Categories:
 The ad may already be marked SOLD - classify it exactly as if it were still for sale (sold ads are used as price history).
 
 Seat hints: "MAX", "Crew", "XP 4", "4-seat", "Teryx4", "KRX4", "X4", "RMAX4", "General 4", "Pioneer 1000-5/6", "6-passenger", "Viking VI" mean 4+ seats (utv4). A plain "General", "General 1000", "Ranger XP 1000", "Ranger 570", "RZR XP 1000", "RZR Pro XP", "Defender HD10", "Pioneer 1000", "Pioneer 700", "Teryx", "Wolverine X2" with no 4-seat marker are 2-3 seat models (utv2). Only use utv4 when the ad actually indicates 4+ seats.
-Jet skis are often sold as a PAIR on a double trailer ("two Sea-Doos", "his and hers", "2 skis") - that is one pwc listing with units 2.
+Jet skis are often sold as a PAIR on a double trailer ("two Sea-Doos", "his and hers", "2 skis") - that is one pwc listing with units 2,
+but ONLY when the one listed price buys both. "$3,500 each" / "price is per ski" means the price is for ONE machine: units 1.
+Today is {today}; the current model year is {model_year}. A used machine of the current or next model year is still used.
 Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family.
 
 Return ONLY a JSON object with these keys:
 - category: one of "utv4", "utv2", "atv", "trike", "mower", "trailer", "pwc", "sled", or "none" (anything else: dirt bikes, golf carts, lawn tractors, campers, boats, cars)
-- relevant: true only if the ad sells one complete machine in one of the categories above. false for parts, accessories, attachments alone, "wanted"/"looking for" ads, rentals, services, and category "none".
+- relevant: true only if the ad sells one or more complete machines in one of the categories above. false for parts, accessories, attachments alone, "wanted"/"looking for" ads, rentals, services, and category "none".
 - family: exactly one family from the list for that category (or null):
 {families}
 - year: model year as an integer, or null
@@ -47,7 +50,7 @@ Return ONLY a JSON object with these keys:
   Only total use counts. "clutches replaced 60 miles ago", "800 miles on new top end", "6500 miles on rebuilt motor",
   "20 hours since rebuild" describe a repair, NOT the machine's total - use null for miles/hours in that case and do
   not mention that number as the mileage in the summary.
-- units: how many complete machines the one price buys (a pair of jet skis = 2, two snowmobiles = 2), else 1
+- units: how many complete machines the ONE listed price buys (a pair of jet skis for one price = 2), else 1. Priced "each" = 1
 - track_in (snowmobiles only): track length in inches (e.g. "129", "137", "146", "154", "165"; "15x137" means 137), else null
 - cc: engine displacement in cc as an integer if stated or implied by the model name (e.g. "850" = 850, "600R" = 600, "1.8L" = 1800, "Spark 90" = 900), else null
 - deck_in: mower cutting deck width in inches as an integer (mowers only), else null
@@ -82,7 +85,7 @@ Description:
 
 async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
     prompt = PROMPT.format(
-        families=FAMILY_MENU,
+        families=FAMILY_MENU, today=time.strftime("%B %Y"), model_year=time.localtime().tm_year + 1,
         source=listing["source"], title=listing["title"],
         price=f"${listing['price']:,}" if listing.get("price") else "not stated",
         location=listing.get("location") or "unknown",

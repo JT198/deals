@@ -368,7 +368,12 @@ td.t { white-space: normal; min-width: 240px; }
         "N mi from you" to each pin's popup; tap it again to stop. Only works on https://deals.alerolabs.ai, not the LAN address.</li>
       <li><b>Deal alerts</b> - private listings scoring at or above the threshold in Setup, and - if you set the savings
         floors - at least that % and that many dollars under typical (or under what similar ones sell for, when lower). Sent again if the score
-        jumps 10+ points (e.g. a price cut).</li>
+        the price is cut 7% or more (or the score jumps 10+ on a lower price) - never just because the comps moved.</li>
+      <li><b>Gone or still there?</b> A Facebook search only shows its first page, so a listing that hasn't turned up
+        in a while isn't assumed gone: its own page is re-opened (hot listings every 6 hours, the rest in turn, plus
+        a nightly pass) and only a page that no longer loads marks it gone. Craigslist shows every live posting, so
+        there "not seen for 5 days" does mean gone. All lanes share one hourly budget of Facebook page loads
+        (300) so a busy hour can't get the home IP blocked; the fast lane keeps a reserve.</li>
       <li><b>🆕 Just-listed alerts</b> - fresh private listings (posted within 2 hours) that are priced normally or better
         and have no red flags, so you can be first to message. On for 4-seat UTVs, mowers and UTV-size trailers; change per category in Setup.</li>
       <li><b>⭐ Watch alerts</b> - for starred listings: price drops, pending, sold/removed, back on the market.
@@ -809,26 +814,31 @@ function renderMap(rows) {
 function fitRadius(group, shown, home) {
   // open on the search radius; the few far-away listings are there if you zoom out
   const radius = +(SETTINGS_RADIUS || 100), near = shown.filter(d => d.distance == null || d.distance <= radius + 10);
-  const fit = L.featureGroup(near.length ? group.getLayers().filter(m => { const ll = m.getLatLng();
-    return near.some(d => Math.abs(d.lat - ll.lat) < 0.05 && Math.abs(d.lon - ll.lng) < 0.05); }) : group.getLayers());
+  // markers were added in the same order as `shown`, so the index says which marker is which listing
+  const layers = group.getLayers();
+  const fit = L.featureGroup(near.length ? shown.map((d, i) => d.distance == null || d.distance <= radius + 10 ? layers[i] : null).filter(Boolean) : layers);
   if (fit.getLayers().length) MAP.fitBounds(fit.getBounds().pad(0.08), { maxZoom: 11 }); else MAP.setView(home, 8);
 }
 
+let ALL_ROWS = 300;
 const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["offer_aim","Aim to pay"],
   ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
 function renderAll() {
   const [k, dir] = SORT;
-  filtered().forEach(d => d.listed = listedAt(d));
-  const rows = filtered().sort((a, b) => { const x = a[k], y = b[k];
+  const all = filtered();
+  all.forEach(d => d.listed = listedAt(d));
+  all.sort((a, b) => { const x = a[k], y = b[k];
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
-  $("#tab-all").innerHTML = filterBar(rows.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
+  const rows = all.slice(0, ALL_ROWS);      // 14k rows would be ~200k table cells: a phone freezes
+  $("#tab-all").innerHTML = filterBar(all.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
     <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}${d.notes ? ` <span class="hint">📝 ${esc(d.notes.slice(0, 60))}</span>` : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>
     <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${money(d.offer_aim)}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
     <td>${d.distance ?? "—"}</td><td>${d.dealer ? "dealer" : "private"}</td><td>${ago(d.first_seen)}</td></tr>`).join("")}</tbody></table></div>
-    <p class="hint">${rows.length} listings. "Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
+    <p class="hint">${all.length > rows.length ? `Showing the first ${rows.length} of ${all.length} listings <button class="btn" id="morerows">Show ${Math.min(500, all.length - rows.length)} more</button>. ` : `${all.length} listings. `}"Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
+  const more = $("#morerows"); if (more) more.onclick = () => { ALL_ROWS += 500; renderAll(); };
   $("#tab-all thead").onclick = e => { const c = e.target.dataset.k; if (!c) return;
     SORT = [c, SORT[0] === c ? -SORT[1] : (c === "title" || c === "family" ? 1 : -1)]; store.set("sort", SORT); renderAll(); };
 }
@@ -1020,11 +1030,11 @@ async function renderSetup() {
       <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
-  <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 5 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
+  <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 10 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
     ${CATS.map(c => { const qs = s.searches.filter(q => q.category === c.key); return `<h3 style="font-size:13px;margin:14px 0 6px">${c.emoji} ${esc(c.label)}</h3>
     <div class="searchlist">${qs.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
       <span>${esc(q.query)}</span><button class="btn qbtn ${q.quick ? "on" : ""}" data-quick="${q.id}" data-on="${q.quick ? 1 : 0}"
-        title="Fast lane: also check this search every 5 minutes">⚡ ${q.quick ? "fast" : "normal"}</button>
+        title="Fast lane: also check this search every 10 minutes">⚡ ${q.quick ? "fast" : "normal"}</button>
       <button class="btn" data-del="${q.id}">Remove</button></div>`).join("") || '<span class="hint">none</span>'}</div>`; }).join("")}
     <p class="filters" style="margin-top:14px"><input id="newq" placeholder="add a search, e.g. mule pro fxt">
       <select id="newcat">${CATS.map(c => `<option value="${c.key}" ${c.key === CAT ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
@@ -1208,14 +1218,20 @@ function busy() {   // typing, an open offer box, or a non-listing tab: don't re
     document.querySelector("details.offer[open]") || !(TAB === "deals" || TAB === "all");
 }
 async function refresh() {   // the 2-minute background poll
-  if (busy()) { status(); return; }
+  if (busy() || document.hidden) { status(); return; }
   await load();
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+let LAST_ETAG = null;
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
   if (!CATS.some(c => c.key === CAT) && CAT !== "all") { CAT = "all"; store.set("cat", CAT); }
   try { TOW = +(await api("/api/settings")).settings.tow_capacity_lb || 0; } catch {}
   const resp = await fetch("/api/listings"); if (!resp.ok) throw new Error(resp.status);
+  // unchanged on the server (the browser got a 304 and replayed its copy): nothing to re-parse or redraw
+  const etag = resp.headers.get("ETag");
+  if (DATA.length && etag && etag === LAST_ETAG) { status(); return; }
+  LAST_ETAG = etag;
   HOME = (resp.headers.get("X-Home") || "").split(",").map(Number); if (HOME.length !== 2 || HOME.some(isNaN)) HOME = null;
   DATA = await resp.json(); catBar(); famChips(); render(); status(); markSeen(); }
 let HOME = null;

@@ -166,8 +166,13 @@ async def run() -> None:
         came_back_empty: list[int] = []
         walled = False
         try:
-            async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if route == "proxy" else None) as fb:
+            budget = scan.FBBudget(con, reserve=scan.FB_BUDGET_RESERVE)
+            async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if route == "proxy" else None,
+                                                          on_load=budget.record) as fb:
                 for j in jobs:
+                    if budget.left() <= 0:
+                        errors.append(f"facebook hourly page budget reached ({budget.used()} loads)")
+                        break
                     await scan.step_aside(lock)
                     try:
                         items = await fb.search(j["query"], loc, radius, sort="best_match", scrolls=0,
@@ -203,7 +208,12 @@ async def run() -> None:
                         con.commit()
                         errors.append("facebook returned nothing for every search (login wall?)")
                 if night and not walled:
-                    await scan.fb_details(con, fb, scan.pending_details(con, NIGHT_DETAILS), errors, lock=lock)
+                    # the idle window: pages for new finds first, then listings nobody has seen in a while,
+                    # then ads dismissed from their title alone
+                    todo = scan.pending_details(con, NIGHT_DETAILS)
+                    todo += scan.stale_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
+                    todo += scan.title_only_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
+                    await scan.fb_details(con, fb, todo, errors, lock=lock, budget=budget)
         except Exception as e:
             errors.append(f"facebook: {e}")
         finally:

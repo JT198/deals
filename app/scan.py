@@ -29,6 +29,7 @@ from .sources import craigslist
 from .sources.facebook import Facebook, pause
 
 MAX_ALERTS_PER_RUN = 6
+REALERT_CUT = 0.07            # an alerted listing alerts again when its price drops this much (or the score jumps 10 on a cut)
 MAX_FRESH_PER_RUN = 8
 LOCK_DIR = os.path.join(os.path.dirname(db.DB_PATH), "locks")
 ALERT_LOCK = os.path.join(LOCK_DIR, "alert.lock")
@@ -38,6 +39,9 @@ FB_BACKOFF_HOURS = (2, 4, 8)  # pause all Facebook traffic this long after it re
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
 FB_RECHECKS_PER_RUN = 6
+STALE_RECHECKS_PER_RUN = 12   # listings nobody has seen in a while: their page decides, not the calendar
+FB_HOURLY_BUDGET = 300        # Facebook page loads per hour across every lane (blocked once at ~410)
+FB_BUDGET_RESERVE = 45        # ...of which the long lanes leave this many for the fast lane
 QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
@@ -131,7 +135,8 @@ def recheck_candidates(con) -> list:
       1. suspects - failed to load last time; retried every scan so a removed listing is confirmed in ~an hour
       2. starred listings, every scan (watch alerts)
       3. listings scoring HOT_SCORE+ not checked in HOT_RECHECK_SECS (the ones Jon actually looks at)
-      4. a round-robin of everything else relevant, oldest check first"""
+      4. stale - not seen by any search or sweep in stale_after(): the page says whether it is gone
+      5. a round-robin of everything else relevant, least recently seen first"""
     live = "source='facebook' AND detail_fetched=1 AND status IN ('active','pending')"
     now = db.now()
     groups = [
@@ -141,8 +146,9 @@ def recheck_candidates(con) -> list:
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1 AND score >= ?
                         AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
                     (HOT_SCORE, now - HOT_RECHECK_SECS, HOT_RECHECKS_PER_RUN)).fetchall(),
+        stale_candidates(con, STALE_RECHECKS_PER_RUN),
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1
-                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall(),
+                        ORDER BY last_seen ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall(),
     ]
     out, seen = [], set()
     for g in groups:
@@ -153,11 +159,54 @@ def recheck_candidates(con) -> list:
     return out
 
 
+def stale_candidates(con, limit: int) -> list:
+    """Live Facebook listings no search or sweep has shown for stale_after(): a search only ever shows
+    its first page, so not being seen proves nothing - the item page does."""
+    return con.execute("""SELECT id, ext_id, price FROM listings
+                          WHERE source='facebook' AND detail_fetched=1 AND status IN ('active','pending')
+                            AND relevant = 1 AND last_seen < ? ORDER BY last_seen ASC LIMIT ?""",
+                       (db.now() - stale_after(db.settings(con)), limit)).fetchall()
+
+
+def title_only_candidates(con, limit: int) -> list:
+    """Ads the model dropped from their title alone, without ever seeing the page (the deep sweep's
+    finds wait longest for theirs): worth a second look when Facebook is idle."""
+    return con.execute("""SELECT id, ext_id, price FROM listings
+                          WHERE source='facebook' AND detail_fetched=0 AND status='active' AND title_only = 1
+                            AND relevant = 0 AND detail_misses = 0 ORDER BY first_seen DESC LIMIT ?""",
+                       (limit,)).fetchall()
+
+
+class FBBudget:
+    """One hourly budget of Facebook page loads shared by every lane (table fb_loads). The full scan,
+    the sweep and the sold pull stop when the hour is nearly spent; the fast lane may use the rest."""
+
+    def __init__(self, con, reserve: int = 0):
+        self.con, self.reserve = con, reserve
+
+    def record(self) -> None:
+        self.con.execute("INSERT INTO fb_loads(ts) VALUES (?)", (db.now(),))
+        self.con.execute("DELETE FROM fb_loads WHERE ts < ?", (db.now() - 7200,))
+        self.con.commit()
+
+    def used(self) -> int:
+        return self.con.execute("SELECT COUNT(*) FROM fb_loads WHERE ts >= ?", (db.now() - 3600,)).fetchone()[0]
+
+    def left(self) -> int:
+        return FB_HOURLY_BUDGET - self.reserve - self.used()
+
+
+class BudgetSpent(Exception):
+    """This lane's share of the hourly Facebook budget is gone; finish the run without Facebook."""
+
+
 class SkipFacebook(Exception):
     """Facebook is paused or another lane has the browser - skip this run's Facebook work."""
 
 
 QUICK_WAITING = "quick-waiting"   # marker file: the fast lane is waiting for Facebook
+QUICK_REPEAT_SECS = 8 * 60        # the fast lane skips a search any lane ran this recently
+CANARY = "ranger crew"            # a search that always has results: empty means Facebook is walling us
 
 
 async def acquire_fb_lock(wait_secs: int, yield_to_quick: bool = False, quick: bool = False):
@@ -264,18 +313,21 @@ def fb_backoff(con, st, walled: bool, fb_found: int, route: str = "home") -> str
 
 def pending_details(con, limit: int, where: str = "status='active'") -> list:
     """Facebook listings whose item page we haven't read yet: fresh finds first, then what the deep sweep
-    dug up. Ads the model already dropped from their title alone (parts, cars, furniture) are skipped."""
+    dug up. Ads the model already dropped from their title alone wait for title_only_candidates()."""
     return con.execute(
         """SELECT id, ext_id, price FROM listings
            WHERE source='facebook' AND detail_fetched=0 AND (parsed = 0 OR COALESCE(relevant, 1) != 0) AND """ + where + """
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
-async def fb_details(con, fb, todo, errors: list, lock=None) -> None:
+async def fb_details(con, fb, todo, errors: list, lock=None, budget=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
-    unless every one fails - that is Facebook walling us, not a batch of removed listings."""
+    unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
     ok, missed = 0, []
     for r in todo:
+        if budget and budget.left() <= 0:
+            errors.append(f"facebook hourly page budget reached - {len(todo) - ok - len(missed)} item pages wait")
+            break
         await step_aside(lock)
         try:
             d = await fb.detail(r["ext_id"])
@@ -288,8 +340,8 @@ async def fb_details(con, fb, todo, errors: list, lock=None) -> None:
         except Exception as e:
             errors.append(f"fb detail {r['ext_id']}: {e}")
         await asyncio.sleep(random.uniform(3, 6))
-    if missed and ok == 0 and len(missed) >= 3:
-        errors.append(f"facebook item pages unreadable ({len(missed)}/{len(todo)}) - login wall?")
+    if len(missed) >= 3 and len(missed) > ok:      # more pages fail than load: a wall, not removals
+        errors.append(f"facebook item pages unreadable ({len(missed)}/{ok + len(missed)}) - login wall?")
     else:
         for lid in missed:
             record_miss(con, lid)
@@ -298,11 +350,12 @@ async def fb_details(con, fb, todo, errors: list, lock=None) -> None:
 
 async def parse_pending(con, http, limit: int, errors: list, concurrency: int = PARSE_CONCURRENCY,
                         only: str = "") -> None:
-    """LLM parse, once the description is in or after an hour without one. Fresh finds go first."""
+    """LLM parse, once the description is in - or from the title alone after an hour without it (a day
+    for the deep sweep's backlog, which queues behind everything else for its page). Fresh finds go first."""
     rows = con.execute(
         """SELECT * FROM listings WHERE parsed = 0 AND status != 'gone'
-             AND (detail_fetched = 1 OR first_seen < ?)""" + only + """
-           ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (db.now() - 3600, limit)).fetchall()
+             AND (detail_fetched = 1 OR first_seen < CASE WHEN backlog = 1 THEN ? ELSE ? END)""" + only + """
+           ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (db.now() - 86400, db.now() - 3600, limit)).fetchall()
     gate = asyncio.Semaphore(concurrency)
     failures = {"streak": 0}
 
@@ -323,7 +376,8 @@ async def parse_pending(con, http, limit: int, errors: list, concurrency: int = 
             if p is not None:
                 # equipment is re-detected by the next rescore: the text it came from may have changed
                 cols = ", ".join(f"{k} = ?" for k in p)
-                con.execute(f"UPDATE listings SET {cols}, parsed = 1, equipment = NULL WHERE id = ?", (*p.values(), r["id"]))
+                con.execute(f"UPDATE listings SET {cols}, parsed = 1, equipment = NULL, title_only = ? WHERE id = ?",
+                            (*p.values(), int(r["detail_fetched"] == 0), r["id"]))
             else:
                 # unusable output; the model is deterministic, so give up after a few tries
                 con.execute("UPDATE listings SET parse_attempts = parse_attempts + 1 WHERE id = ?", (r["id"],))
@@ -425,9 +479,16 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         try:
             if fb_paused or fb_lock is None:
                 raise SkipFacebook
-            async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None) as fb:
+            budget = FBBudget(con, reserve=0 if quick else FB_BUDGET_RESERVE)
+            async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None,
+                                                          on_load=budget.record) as fb:
                 empty = 0
+                if quick:   # the full scan may have run the same search minutes ago
+                    due = [s for s in due if (s["last_run"] or 0) < t0 - QUICK_REPEAT_SECS]
                 for srch in due:
+                    if budget.left() <= 0:
+                        errors.append(f"facebook hourly page budget reached ({budget.used()} loads) - rest of the run skipped")
+                        raise BudgetSpent
                     if not quick:
                         await step_aside(fb_lock)
                     q = srch["query"]
@@ -448,15 +509,17 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                         errors.append(f"fb '{q}': {e}")
                     await pause()
                 if due and empty == len(due):  # (skipped when --no-search)
-                    errors.append("facebook returned nothing for every search (login wall?)")
+                    # a short list of thin searches can all be empty honestly: ask one that never is
+                    if len(due) >= 3 or not await fb.search(CANARY, st.get("fb_location", "plymouth-mn"), radius, scrolls=0):
+                        errors.append("facebook returned nothing for every search (login wall?)")
 
                 todo = pending_details(con, (SOLD_DETAILS_PER_RUN if sold else FB_DETAILS_PER_RUN) * boost,
                                        fb_status + ("" if sold else only_new))
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
                     todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
-                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock)
-        except SkipFacebook:
+                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget)
+        except (SkipFacebook, BudgetSpent):
             pass
         except Exception as e:
             errors.append(f"facebook: {e}")
@@ -492,15 +555,17 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         await parse_pending(con, http, PARSES_PER_RUN * boost, errors,
                             concurrency=1 if (quick or sold) else PARSE_CONCURRENCY, only=only_new if quick else "")
 
-        # listings we haven't seen or confirmed in a while are probably gone - judged per source, and only
-        # when that source actually answered this run (a paused, skipped or walled Facebook proves nothing)
-        fb_blocked = any("login wall" in e for e in errors)
+        # Craigslist search shows every live posting, so not seen in a while there means gone (only judged
+        # when Craigslist answered this run). A Facebook search shows only its first page, so a Facebook
+        # listing is marked gone by its item page (fb_details / record_miss), never by the calendar - except
+        # ads that aren't machines, which nobody re-checks.
         if not (quick or sold):
             cutoff = db.now() - stale_after(db.settings(con))
-            for source, answered in (("craigslist", cl_found > 0), ("facebook", fb_found > 0 and not fb_blocked)):
-                if answered:
-                    con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
-                                   AND source = ? AND last_seen < ?""", (source, cutoff))
+            if cl_found > 0:
+                con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
+                               AND source = 'craigslist' AND last_seen < ?""", (cutoff,))
+            con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
+                           AND source = 'facebook' AND COALESCE(relevant, 0) = 0 AND parsed = 1 AND last_seen < ?""", (cutoff,))
             con.commit()
 
         score.rescore_all(con)
@@ -515,7 +580,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         except Exception as e:
             errors.append(f"geocode: {e}")
 
-        alerts = await send_alerts(con, http, st, quiet=backfill or quiet)
+        # the 04:30 sold pull only reports on watched listings; deals wait for the morning's first scan
+        alerts = await send_alerts(con, http, st, quiet=backfill or quiet, watch_only=sold)
 
     con.execute("UPDATE runs SET finished=?, found=?, new=?, alerts=?, errors=? WHERE id=?",
                 (db.now(), found, new, alerts, json.dumps(errors[:30]) if errors else None, run_id))
@@ -540,12 +606,14 @@ async def problem_alert(con, http, mode: str, what: str) -> None:
         con.commit()
 
 
-async def send_alerts(con, http, st, quiet=False) -> int:
+async def send_alerts(con, http, st, quiet=False, watch_only=False) -> int:
     # The full scan and the fast lane both alert. One shared lock around select -> send -> mark
     # means a listing is claimed by exactly one of them.
     os.makedirs(LOCK_DIR, exist_ok=True)
     with open(ALERT_LOCK, "w") as lock:
         await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
+        if watch_only:
+            return await _watch_alerts(con, http, quiet)
         return await _send_alerts(con, http, st, quiet)
 
 
@@ -615,8 +683,10 @@ async def _send_alerts(con, http, st, quiet) -> int:
 
     deals = [r for r in con.execute(
         f"""SELECT * FROM listings WHERE relevant = 1 AND status = 'active' AND hidden = 0
-              AND score >= ? AND (alerted_score IS NULL OR score >= alerted_score + 10) {private}
-            ORDER BY score DESC""", (threshold,)).fetchall()
+              AND score >= ? AND (alerted_score IS NULL
+                                  OR price <= alerted_price * (1 - ?)                 -- a real price cut
+                                  OR (score >= alerted_score + 10 AND price < alerted_price)) {private}
+            ORDER BY score DESC""", (threshold, REALERT_CUT)).fetchall()
         if switched_on(r, "enabled") and fits_need(r, "enabled") and passes_limits(r) and enough_savings(r) and first_copy(r)]
 
     # Old listings the first deep sweep dug up: Jon gets a summary of those, not a Telegram flood.
@@ -653,10 +723,10 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if await notify.send_listing(http, r):
             sent += 1
             mark(deal_mark, [r], "deal")
-    rest = deals[MAX_ALERTS_PER_RUN:]
-    if rest and await notify.send_text(http, f"…and {len(rest)} more above {threshold} "
-                                             f'on the <a href="{notify.DASHBOARD_URL}">dashboard</a>.'):
-        mark(deal_mark, rest, "deal-summary")
+    rest = deals[MAX_ALERTS_PER_RUN:]      # go out one by one over the next runs, nothing is swallowed
+    if rest:
+        await notify.send_text(http, f"…and {len(rest)} more above {threshold} coming, or see the "
+                                     f'<a href="{notify.DASHBOARD_URL}">dashboard</a>.')
     for r in fresh[:MAX_FRESH_PER_RUN]:   # any beyond the cap go out next run (still fresh)
         mins = max(1, (db.now() - (r["listed_at"] or r["first_seen"])) // 60)
         if await notify.send_listing(http, r, header=f"🆕 <b>Just listed</b> {mins} min ago - be first to message"):

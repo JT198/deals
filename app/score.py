@@ -58,6 +58,7 @@ def family_pool(by_fam: dict, fam: str) -> list:
 
 
 NEW_DISCOUNT = 0.85      # a used trailer is "typically" worth at most this share of what new ones list for
+NEW_MIN_COMPS = 3        # ...once this many new ones of the same size and build are listed
 
 
 def gvwr_class(g) -> int | None:
@@ -96,11 +97,15 @@ def new_price_for(listing, new_by_fam) -> tuple[int | None, int]:
     if _v(listing, "category") != "trailer" or not length:
         return None, 0
     pool = [x for x in family_pool(new_by_fam, _v(listing, "family")) if x.len_ft and abs(x.len_ft - length) <= 2]
-    gc, wd = gvwr_class(_v(listing, "gvwr_lb")), _wide(_v(listing, "width_ft"))
+    gc, wd, axles = gvwr_class(_v(listing, "gvwr_lb")), _wide(_v(listing, "width_ft")), _v(listing, "axles")
+    # same weight class when the ad states one; otherwise same axle count, and a tandem is never
+    # capped by a 3.5K single-axle (an unstated GVWR used to let any light new trailer set the ceiling)
     pool = [x for x in pool
             if (gc is None or (x.gvwr and gvwr_class(x.gvwr) == gc))
+            and (axles is None or x.axles is None or x.axles == axles)
+            and not (gc is None and axles == 2 and x.gvwr and gvwr_class(x.gvwr) == 0)
             and (wd is None or x.width is None or _wide(x.width) == wd or (_wide(x.width) and not wd))]
-    if len(pool) < 2:
+    if len(pool) < NEW_MIN_COMPS:
         return None, len(pool)
     prices = sorted({x.price for x in pool})
     return prices[int(0.25 * (len(prices) - 1))], len(pool)

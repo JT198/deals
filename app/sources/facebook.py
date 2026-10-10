@@ -88,11 +88,12 @@ def proxy_config(url: str | None) -> dict | None:
 
 
 class Facebook:
-    def __init__(self, pw, proxy: str | None = None):
+    def __init__(self, pw, proxy: str | None = None, on_load=None):
         self.pw = pw
         self.proxy = proxy_config(proxy)
         self.browser = None
         self.ctx = None
+        self.on_load = on_load      # called once per page load, so the lanes can share an hourly budget
 
     async def __aenter__(self):
         self.browser = await self.pw.chromium.launch(args=["--no-sandbox"], proxy=self.proxy)
@@ -109,6 +110,8 @@ class Facebook:
                      price: tuple[int, int] | None = None) -> list[dict]:
         page = await self.ctx.new_page()
         found: list[dict] = []
+        if self.on_load:
+            self.on_load()
 
         async def on_response(resp):
             if "/api/graphql" not in resp.url:
@@ -156,6 +159,8 @@ class Facebook:
         login wall) - the caller counts misses instead of assuming it was removed.
         """
         page = await self.ctx.new_page()
+        if self.on_load:
+            self.on_load()
         try:
             await page.goto(f"https://www.facebook.com/marketplace/item/{ext_id}/",
                             timeout=45000, wait_until="domcontentloaded")

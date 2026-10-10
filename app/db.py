@@ -237,6 +237,14 @@ def alert_rules(st: dict) -> dict:
     return rules
 
 
+def bump_rev(con) -> None:
+    """Something the dashboard shows changed (a scan, a rescore, an edit): the cached listings feed
+    checks this before answering 304."""
+    con.execute("""INSERT INTO settings(key, value) VALUES ('listings_rev', '1')
+                   ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)""")
+    con.commit()
+
+
 def now() -> int:
     return int(time.time())
 

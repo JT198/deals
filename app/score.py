@@ -12,7 +12,7 @@ from .categories import FAMILY_CATEGORY, cfg
 from . import db, usage
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, detect
 
-EQUIP_VERSION = 2   # bump when equipment.detect learns something new: every listing is re-detected once
+EQUIP_VERSION = 3   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -821,3 +821,4 @@ def rescore_all(con) -> None:
              o and o["open"], o and o["aim"], o and o["walk"], json.dumps(o["notes"]) if o else None,
              o and int(o["rough"]), fit, sold_exp, sold_n, basis, new_price, n_new or None, r["id"]))
     con.commit()
+    db.bump_rev(con)      # the dashboard's cached feed must see the new scores and notes

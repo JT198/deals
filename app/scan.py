@@ -116,12 +116,14 @@ def apply_detail(con, lid, d: dict | None, old_price):
     con.execute(
         """UPDATE listings SET parsed = CASE WHEN description IS NULL AND ? IS NOT NULL THEN 0 ELSE parsed END,
              description = COALESCE(?, description), seller_type = COALESCE(?, seller_type),
-             listed_at = COALESCE(?, listed_at), image = COALESCE(?, image), status = ?,
+             listed_at = COALESCE(?, listed_at), image = COALESCE(?, image),
+             status = CASE WHEN user_gone = 1 AND ? != 'sold' THEN 'gone' ELSE ? END,
              lat = COALESCE(?, lat), lon = COALESCE(?, lon),
              detail_fetched = 1, detail_misses = 0, last_checked = ?, last_seen = ?,
              seen_active = CASE WHEN ? = 'active' THEN 1 ELSE seen_active END WHERE id = ?""",
         (d.get("description"), d.get("description"), d.get("seller_type"), d.get("listed_at"), d.get("image"),
-         d.get("status", "active"), d.get("lat"), d.get("lon"), t, t, d.get("status", "active"), lid))
+         d.get("status", "active"), d.get("status", "active"), d.get("lat"), d.get("lon"), t, t,
+         d.get("status", "active"), lid))
     set_price(con, lid, old_price, d.get("price"))
 
 
@@ -237,7 +239,7 @@ def quick_waiting() -> bool:
         return False
 
 
-async def step_aside(lock) -> None:
+async def step_aside(lock, route: str = "home") -> None:
     """Called by the long lanes (full scan, sweep, sold pull) between Facebook pages: if the fast lane
     is waiting, hand it the Facebook lock for its one-minute run, then take it back. Without this the
     full scan (17-23 minutes of every 20) made the fast lane skip about a third of its runs.
@@ -249,8 +251,8 @@ async def step_aside(lock) -> None:
     while quick_waiting() and time.time() < deadline:   # the marker goes once the fast lane has the lock
         await asyncio.sleep(1)
     await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
-    if fb_pick_route(db.settings(db.connect()), db.now())[0] is None:
-        raise SkipFacebook      # the fast lane got walled and paused Facebook: don't keep hitting it
+    if int(db.settings(db.connect()).get(f"fb_backoff_until:{route}") or 0) > db.now():
+        raise SkipFacebook      # the fast lane got walled on this route meanwhile: don't keep hitting it
 
 
 async def _wait_for(f, marker, deadline, yield_to_quick):
@@ -322,7 +324,7 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
-async def fb_details(con, fb, todo, errors: list, lock=None, budget=None) -> None:
+async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home") -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
     ok, missed, failures = 0, [], 0
@@ -333,7 +335,7 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None) -> Non
         if budget and budget.left() <= 0:
             errors.append(f"facebook hourly page budget reached - {len(todo) - ok - len(missed)} item pages wait")
             break
-        await step_aside(lock)
+        await step_aside(lock, route)
         try:
             d = await fb.detail(r["ext_id"])
             failures = 0
@@ -505,7 +507,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                         errors.append("facebook: searches keep failing - browser dead? (rest of the run skipped)")
                         raise SkipFacebook
                     if not quick:
-                        await step_aside(fb_lock)
+                        await step_aside(fb_lock, fb_route)
                     q = srch["query"]
                     try:
                         items = await fb.search(q, st.get("fb_location", "plymouth-mn"), radius,
@@ -537,17 +539,18 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
                     todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
-                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget)
+                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget, route=fb_route)
         except (SkipFacebook, BudgetSpent):
             pass
         except Exception as e:
             errors.append(f"facebook: {e}")
         finally:
+            # record a block while we still hold the lock, so the next lane in sees the pause first thing
+            msg = fb_backoff(con, st, walled=any("login wall" in e for e in errors), fb_found=fb_found, route=fb_route or "home")
+            if msg:
+                errors.append(msg)
             if fb_lock:
                 fb_lock.close()
-        msg = fb_backoff(con, st, walled=any("login wall" in e for e in errors), fb_found=fb_found, route=fb_route or "home")
-        if msg:
-            errors.append(msg)
 
         # --- Craigslist posting pages (new ones, plus every starred one on full scans)
         cl_todo = con.execute(

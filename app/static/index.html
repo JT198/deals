@@ -467,8 +467,10 @@ function bindFilters() {
 function save() { store.set("filters", F); render(); }
 
 // Cross-posts (same ad on Facebook and Craigslist, or reposted): show one card, link the copies.
-// Same title + price, or - for private sellers, who repost with a new title - same model, year, price and town.
-const postKey = d => (d.title || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + d.price;
+// Same title + price + town, or - for private sellers, who repost with a new title - same model, year, price
+// and town. Two sellers in different towns with the same generic title and round price stay separate
+// (Star / Hide / Gone act on every copy behind a card, so a merge has to be the same machine).
+const postKey = d => (d.title || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + d.price + "|" + (d.location || "").toLowerCase();
 const machineKey = d => !d.dealer && d.family && d.year && d.price && d.location
   ? [d.family, d.year, d.price, d.location.toLowerCase()].join("|") : null;
 function mergeCopies(rows) {

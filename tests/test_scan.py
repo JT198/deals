@@ -1511,6 +1511,53 @@ def test_review_followups_2026_10_09():
     assert c.get("/api/listings").headers["etag"] == e1                                    # same data again: same ETag is right
 
 
+def test_codex_round3_2026_10_09():
+    """Codex review of e734d1f: feed revision from every writer, Gone survives a page check,
+    a lane that yielded to the fast lane checks its own route, and the installer's rollback."""
+    import subprocess
+    from app import score
+    # a rescore that changes only a note / offer still refreshes the cached feed
+    con = reset([{"score": 80, "price": 10000}])
+    c = client()
+    e1 = c.get("/api/listings").headers["etag"]
+    con.execute("UPDATE listings SET usage_doubt = 'the ad only mentions 60 miles since a repair' WHERE id = 'facebook:0'")
+    con.commit()
+    score.rescore_all(con)
+    assert c.get("/api/listings").headers["etag"] != e1
+    # a manual Gone is not undone by a page check that was already in flight
+    con.execute("UPDATE listings SET status = 'gone', user_gone = 1 WHERE id = 'facebook:0'"); con.commit()
+    scan.apply_detail(con, "facebook:0", {"status": "active", "description": "still up"}, 10000); con.commit()
+    assert con.execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] == "gone"
+    scan.apply_detail(con, "facebook:0", {"status": "sold"}, 10000); con.commit()
+    assert con.execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] == "sold"
+    # the home-IP browser stops when the home route got paused while it was stepping aside, even with a proxy configured
+    con = reset([], fb_proxy="http://u:p@h:1", fb_route="auto")
+
+    async def paused_meanwhile():
+        lock = await scan.acquire_fb_lock(5)
+        marker = os.path.join(scan.LOCK_DIR, scan.QUICK_WAITING)
+        open(marker, "w").close()                    # the fast lane is waiting...
+
+        async def fast_lane_gets_walled():
+            await asyncio.sleep(0.3)
+            c2 = db.connect()
+            c2.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_backoff_until:home', ?)", (str(db.now() + 7200),))
+            c2.commit(); c2.close()
+            os.remove(marker)                        # ...ran, got walled, paused the home route, and finished
+        asyncio.create_task(fast_lane_gets_walled())
+        try:
+            await scan.step_aside(lock, "home")
+            return "continued"
+        except scan.SkipFacebook:
+            return "stopped"
+        finally:
+            lock.close()
+    assert asyncio.run(paused_meanwhile()) == "stopped"
+    # the installer: every failure after the swap restores the previous release
+    r = subprocess.run(["bash", os.path.join(os.path.dirname(__file__), "test_deploy.sh")], capture_output=True, text=True)
+    assert r.returncode == 0 and "deploy tests passed" in r.stdout, r.stdout + r.stderr
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

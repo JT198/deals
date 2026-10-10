@@ -173,7 +173,7 @@ async def run() -> None:
                     if budget.left() <= 0:
                         errors.append(f"facebook hourly page budget reached ({budget.used()} loads)")
                         break
-                    await scan.step_aside(lock)
+                    await scan.step_aside(lock, route)
                     try:
                         items = await fb.search(j["query"], loc, radius, sort="best_match", scrolls=0,
                                                 price=(j["lo"], j["hi"]))
@@ -213,17 +213,18 @@ async def run() -> None:
                     todo = scan.pending_details(con, NIGHT_DETAILS)
                     todo += scan.stale_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
                     todo += scan.title_only_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
-                    await scan.fb_details(con, fb, todo, errors, lock=lock, budget=budget)
+                    await scan.fb_details(con, fb, todo, errors, lock=lock, budget=budget, route=route)
         except scan.SkipFacebook:
             errors.append("facebook was paused by another lane mid-run - stopped")
         except Exception as e:
             errors.append(f"facebook: {e}")
         finally:
+            walled = walled or any("login wall" in e for e in errors)
+            msg = scan.fb_backoff(con, st, walled=walled, fb_found=found, route=route)   # before the lock goes
+            if msg:
+                errors.append(msg)
             lock.close()
-        walled = walled or any("login wall" in e for e in errors)
-        msg = scan.fb_backoff(con, st, walled=walled, fb_found=found, route=route)
-        if msg:
-            errors.append(msg)
+        db.bump_rev(con)
         if night and not walled:
             await scan.parse_pending(con, http, NIGHT_PARSES, errors)
         left = con.execute(f"SELECT COUNT(*) FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}", (rnd,)).fetchone()[0]

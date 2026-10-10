@@ -110,13 +110,11 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
     if not include_gone:
         where.append("status IN ('active','pending')")
     where_sql = " AND ".join(where)
-    # cheap fingerprint of everything the cards show: scans, rescoring, stars, hides, notes, Gone
-    version = tuple(con.execute(
-        f"""SELECT COUNT(*), MAX(last_seen), MAX(last_checked), TOTAL(score), TOTAL(price), TOTAL(starred),
-                   TOTAL(hidden), TOTAL(LENGTH(notes)), TOTAL(expected) FROM listings WHERE {where_sql}""").fetchone())
+    # listings_rev is bumped by every writer (scans, rescoring, the edit endpoint); the counts are a backstop
+    version = tuple(con.execute(f"SELECT COUNT(*), MAX(last_seen) FROM listings WHERE {where_sql}").fetchone())
     st = db.settings(con)
     key = (where_sql, version, tuple(con.execute("SELECT COUNT(*), TOTAL(lat) FROM geocache").fetchone()),
-           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"))   # rev: every star / hide / note / Gone
+           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"))
     with _LISTINGS_BUILD:       # two tabs refreshing after a scan build it once, not twice in parallel
         hit = _LISTINGS_CACHE.get(where_sql)
         if not hit or hit["key"] != key:
@@ -142,6 +140,11 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
 
 
 _LISTINGS_CACHE: dict = {}
+# written by deploy/remote-install.sh; the installer checks the running service reports this release
+try:
+    RELEASE = (Path(__file__).parent / "RELEASE").read_text().strip()
+except OSError:
+    RELEASE = "dev"
 _LISTINGS_BUILD = threading.Lock()
 
 
@@ -183,9 +186,7 @@ def mark(lid: str, body: dict = Body(...)):
     if "starred" in body:   # watching starts from the current price/status
         con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
                          watch_status = CASE WHEN starred = 1 THEN status END WHERE id = ?""", (lid,))
-    # the listings feed is cached by a fingerprint of the data; an edit bumps it so every browser sees it
-    con.execute("""INSERT INTO settings(key, value) VALUES ('listings_rev', '1')
-                   ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)""")
+    db.bump_rev(con)        # the cached listings feed must not answer 304 with the old star / note
     con.commit()
     return {"ok": True}
 
@@ -544,7 +545,8 @@ def status():
           "mode": st.get("fb_route") or "auto",
           "pauses": {r: int(st.get(f"fb_backoff_until:{r}") or 0) for r in ("home", "proxy")
                      if int(st.get(f"fb_backoff_until:{r}") or 0) > now}}
-    return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb, "sweep": sweep.status(con)}
+    return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb, "sweep": sweep.status(con),
+            "release": RELEASE}
 
 
 MASK = "********"

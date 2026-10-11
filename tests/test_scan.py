@@ -18,7 +18,7 @@ SENT: list[str] = []
 FAIL = {"on": False}
 
 
-async def fake_send_listing(http, r, header=None):
+async def fake_send_listing(http, r, header=None, ask=True):
     await asyncio.sleep(0.05)          # widen the window for the overlap test
     if FAIL["on"]:
         return False
@@ -1021,7 +1021,7 @@ def test_review_fixes_2026_10_05():
     # 1. alert markers record the row as it was sent, even if another lane changed it meanwhile
     con = reset([{"score": 75, "price": 10000, "listed_at": db.now() - 3 * 3600}])
 
-    async def mutate_during_send(http, row, header=None):
+    async def mutate_during_send(http, row, header=None, ask=True):
         other = db.connect()
         other.execute("UPDATE listings SET price = 7000, score = 90 WHERE id = ?", (row["id"],))
         other.commit(); other.close()
@@ -1628,6 +1628,62 @@ def test_why_corrections_stages_and_alert_activity():
     got = {(a["listing_id"], a["outcome"]): a["reason"] for a in acts}
     assert got[("facebook:0", "sent")].startswith("deal alert") and got[("facebook:1", "skipped")] == "outside the buy box", got
     assert sum(a["listing_id"] == "facebook:1" for a in acts) == 1          # once, not every run
+
+
+def test_alert_opener_and_feedback():
+    from app import feedback
+    con = reset([{"model": "RZR XP 4 1000 Premium", "year": 2022, "price": 14000, "offer_open": 12500, "deal_pct": 0.2,
+                  "listed_at": db.now() - 3 * 3600},
+                 {"id": "facebook:1", "ext_id": "1", "title": "dealer", "is_dealer": 1},
+                 {"id": "facebook:2", "ext_id": "2", "title": "trailer", "category": "trailer", "family": "Open utility (rails / mesh sides)",
+                  "model": None, "price": 3000, "deal_pct": 0.05, "offer_rough": 1, "listed_at": db.now() - 5 * 86400}])
+    rows = {r["id"]: r for r in con.execute("SELECT * FROM listings")}
+    assert notify.seller_message(rows["facebook:0"]) == ("Hi! Is the 2022 RZR XP 4 1000 Premium still available? I'm ready to buy - cash, "
+                                                         "and I can come see it today or tomorrow. Would you take $12,500?")
+    assert notify.seller_message(rows["facebook:1"]).startswith("Hi, is the") and "out-the-door" in notify.seller_message(rows["facebook:1"])
+    assert "I'll bring my truck" in notify.seller_message(rows["facebook:2"])
+    cap = notify.listing_caption(rows["facebook:0"])
+    assert "✉️ <i>Hi! Is the 2022 RZR XP 4 1000 Premium" in cap and len(cap) <= 1024
+    kb = notify.buttons(rows["facebook:0"])["inline_keyboard"][0]
+    assert [b["callback_data"] for b in kb] == ["fb:+:facebook:0", "fb:-:facebook:0"] and all(len(b["callback_data"]) <= 64 for b in kb)
+
+    # a tap from our chat is recorded and acted on; one from elsewhere is ignored; the offset moves past everything
+    notify.CHAT = "1"
+    updates = [{"update_id": 10, "callback_query": {"id": "c1", "data": "fb:+:facebook:0", "from": {"first_name": "Jon"},
+                                                    "message": {"message_id": 5, "chat": {"id": 1}}}},
+               {"update_id": 11, "callback_query": {"id": "c2", "data": "fb:-:facebook:1", "from": {"first_name": "Jon"},
+                                                    "message": {"message_id": 6, "chat": {"id": 1}}}},
+               {"update_id": 12, "callback_query": {"id": "c3", "data": "fb:-:facebook:0", "from": {"first_name": "X"},
+                                                    "message": {"message_id": 7, "chat": {"id": 999}}}}]
+    calls = []
+
+    class R:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class HTTP:
+        async def get(self, url, params=None):
+            calls.append(("get", url.rsplit("/", 1)[1], params))
+            return R({"ok": True, "result": updates})
+
+        async def post(self, url, data=None):
+            calls.append(("post", url.rsplit("/", 1)[1], data))
+            return R({"ok": True})
+    assert asyncio.run(feedback.poll(con, HTTP())) == 2
+    rows = {r["id"]: r for r in con.execute("SELECT id, starred, hidden, watch_price FROM listings")}
+    assert (rows["facebook:0"]["starred"], rows["facebook:0"]["hidden"], rows["facebook:0"]["watch_price"]) == (1, 0, 14000)
+    assert rows["facebook:1"]["hidden"] == 1
+    assert [r["verdict"] for r in con.execute("SELECT verdict FROM feedback ORDER BY ts, rowid")] == ["+", "-"]
+    assert db.settings(con)["tg_update_offset"] == "13"
+    assert [c[1] for c in calls] == ["getUpdates", "answerCallbackQuery", "editMessageReplyMarkup", "answerCallbackQuery", "editMessageReplyMarkup"]
+    assert client().get("/api/listings").json()[0]["feedback"] == "+"
+    assert any(a["outcome"] == "feedback" for a in client().get("/api/alerts").json())
 
 
 if __name__ == "__main__":

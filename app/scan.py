@@ -816,7 +816,7 @@ async def _watch_alerts(con, http, quiet) -> int:
                       f"(−${r['watch_price'] - r['price']:,}) on a listing you're watching")
         elif r["status"] == "active" and r["watch_status"] in ("pending", "sold", "gone"):
             header = "⭐ <b>Back on the market</b>"
-        ok = quiet or header is None or await notify.send_listing(http, r, header=header)
+        ok = quiet or header is None or await notify.send_listing(http, r, header=header, ask=False)
         if ok:      # a failed send keeps the old state, so it's retried next scan
             con.execute("UPDATE listings SET watch_price = ?, watch_status = ? WHERE id = ?",
                         (r["price"], r["status"], r["id"]))

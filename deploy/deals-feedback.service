@@ -1,0 +1,11 @@
+[Unit]
+Description=Deal finder: read the thumbs up / down under Telegram alerts
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/deals
+EnvironmentFile=/opt/deals/.env
+ExecStart=/opt/deals/venv/bin/python -m app.feedback
+StandardOutput=append:/var/log/deals-scan.log
+StandardError=append:/var/log/deals-scan.log

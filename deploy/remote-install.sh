@@ -65,5 +65,5 @@ done
 [ "$ok" = 1 ] || rollback
 trap - ERR
 systemctl restart deals-scan.timer deals-quick.timer deals-sold.timer deals-backup.timer deals-digest.timer 2>/dev/null || true
-systemctl enable -q --now deals-sweep.timer
+systemctl enable -q --now deals-sweep.timer deals-feedback.timer
 echo "deployed OK ($RELEASE)"

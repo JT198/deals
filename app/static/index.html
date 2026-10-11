@@ -390,6 +390,9 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Fix</b> on a card corrects what the model read - model, year, miles, hours, dealer, red flags, equipment,
         or "not a machine we track". Corrections are kept even when the ad is re-read after the seller edits it;
         the price and score update right away. "Clear corrections" goes back to the model's reading.</li>
+      <li><b>👍 / 👎 under each Telegram alert</b>: 👍 stars the listing (watch alerts start), 👎 hides it from the
+        dashboard, and both are kept as your verdicts for tuning the score to what you call a deal. Each alert also
+        carries a ready-to-send opener in italics - long-press to copy it into Messenger or the Craigslist reply.</li>
       <li><b>Alert activity</b> (Setup) lists every listing above the threshold lately and whether it was sent,
         skipped (and why - outside the buy box, savings floor, cross-post...), recorded quietly, or failed.</li>
       <li><b>Buy box</b> (Setup): per category, the models, minimum year, max price, max miles / hours and how far you'd
@@ -707,7 +710,7 @@ function card(d) {
       ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
         `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
-      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.feedback ? `<span class="tag ${d.feedback === "+" ? "plus" : "flag"}" title="Your thumbs on the Telegram alert">${d.feedback === "+" ? "👍 good one" : "👎 not for me"}</span>` : d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">

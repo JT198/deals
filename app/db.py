@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS geocache (place TEXT PRIMARY KEY, lat REAL, lon REAL)
 -- re-applied after every re-parse, so a seller's edit can't undo them (db.apply_correction)
 CREATE TABLE IF NOT EXISTS corrections (listing_id TEXT PRIMARY KEY, data TEXT NOT NULL, ts INTEGER NOT NULL);
 
+-- Jon's 👍 / 👎 on Telegram alerts (feedback.py): what he calls a deal, for tuning the score
+CREATE TABLE IF NOT EXISTS feedback (listing_id TEXT NOT NULL, verdict TEXT NOT NULL, ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS feedback_listing ON feedback(listing_id);
+
 -- why each candidate alerted or didn't (scan._send_alerts); the dashboard's Alert activity panel
 CREATE TABLE IF NOT EXISTS alert_activity (
   ts INTEGER NOT NULL, listing_id TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT

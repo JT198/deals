@@ -38,12 +38,12 @@ Set on 10/4 so the scoring could be tuned once ~2 weeks of data existed. Now wit
 - [ ] `rescore_all` runs one long write transaction (~5 s on 16k listings); fine today, watch it.
 - [ ] Craigslist `detail` never returns None, so `record_miss` for Craigslist is dead code.
 - [ ] Facebook budget (220/h since 10/11, long lanes stop at 175) cuts the full scan's item pages; the leftovers
-      wait for the night window. Blocked twice: 10/01 at ~410 loads/h, 10/11 14:23 at ~233/h (2 h back-off, Craigslist
+      wait for the night window. Blocked twice: 10/01 at ~410 loads/h, 10/11 14:23 right at the 300/h cap (rolling hour; 2 h back-off, Craigslist
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
 
-- 10/11 Facebook blocked at ~233 loads/h (back-off worked) -> hourly budget 300 -> 220.
+- 10/11 Facebook blocked at the 300/h cap (back-off worked) -> hourly budget 300 -> 220.
 - 10/10 Telegram 👍/👎 + seller opener in alerts; feedback poller; TODO.md.
 - 10/09 Why-this-price panel, Fix (corrections), buying stages, alert activity log; Codex round 3 (real rollback
   with release check + deploy tests, feed revision, Gone survives page checks, route-aware hand-offs).

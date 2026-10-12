@@ -673,13 +673,13 @@ async def _send_alerts(con, http, st, quiet) -> int:
     def enough_savings(r):
         """A deal alert must be worth acting on: the discount against typical asking (or what similar
         ones sell for, when that's lower) clears both the % and the $ floors from Setup."""
-        if not (min_pct or min_usd):
+        if not (min_pct or min_usd or any(buybox.min_usd(x, 0) for x in rules.values())):
             return True
         ref = min(x for x in (r["expected"], r["expected_sold"]) if x) if (r["expected"] or r["expected_sold"]) else None
         if not ref or not r["price"]:
             return False
         saving = ref - r["price"]
-        return saving >= min_usd and saving / ref >= min_pct
+        return saving >= buybox.min_usd(rules.get(r["category"]) or {}, min_usd) and saving / ref >= min_pct
 
     def passes_limits(r):
         """The category's buy box (models, year, price, use, distance), shared by both alert types;

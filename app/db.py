@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS runs (
 def _default_rule(cat: str) -> dict:
     """See buybox.py. New installs alert on everything; Jon's own box is set in Setup."""
     return {"enabled": True, "fresh": cat in ("utv4", "mower", "trailer"), "digest": True, "models": [],
-            "max_price": "", "min_year": "", "max_miles": "", "max_hours": "", "within_mi": "", "min_score": ""}
+            "max_price": "", "min_year": "", "max_miles": "", "max_hours": "", "within_mi": "", "min_score": "", "min_usd": ""}
 
 
 DEFAULT_SETTINGS = {

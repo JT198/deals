@@ -602,7 +602,7 @@ def put_settings(body: dict = Body(...)):
                 return m
             v = json.dumps({c: {"enabled": bool(r.get("enabled")), "fresh": bool(r.get("fresh")),
                                 "digest": bool(r.get("digest", True)), "models": models(c, r),
-                                **{f: whole(r, f) for f in ("max_price", "min_year", "max_miles", "max_hours", "within_mi", "min_score")}}
+                                **{f: whole(r, f) for f in ("max_price", "min_year", "max_miles", "max_hours", "within_mi", "min_score", "min_usd")}}
                             for c, r in v.items() if c in CATEGORIES})
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (k, str(v).strip()))
     con.commit()

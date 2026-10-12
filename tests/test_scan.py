@@ -827,6 +827,14 @@ def test_alert_bar_per_category():
                 alert_threshold="80", alert_rules=_j.dumps(rules))
     asyncio.run(alerts(con))
     assert SENT == ["facebook:0"], SENT
+    # $ floor per category: $700 saved clears a mower's $500, not the global $1,500
+    rules = {"utv4": {"enabled": True}, "mower": {"enabled": True, "min_usd": "500"}}
+    con = reset([dict(old, id="facebook:m", ext_id="m", title="mower", category="mower", family="Toro TimeCutter",
+                      score=85, price=2300, expected=3000),
+                 dict(old, id="facebook:u", ext_id="u", title="utv", score=85, price=4000, expected=5200)],  # 23% but $1,200
+                alert_threshold="80", alert_min_pct="20", alert_min_usd="1500", alert_rules=_j.dumps(rules))
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:m"], SENT
     resp = client().put("/api/settings", json={"alert_rules": {"utv4": {"enabled": True, "min_score": "74.0"}}})
     assert resp.status_code == 200 and resp.json()["alert_rules"]["utv4"]["min_score"] == "74", resp.text
 

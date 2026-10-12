@@ -1149,10 +1149,11 @@ async function renderSetup() {
   <h2 style="margin-top:16px">Buy box</h2>
   <p class="hint">What you'd actually buy, per category. <b>Instant</b> = a Telegram alert the moment a great deal inside the box shows up;
     otherwise it waits for the 7am <b>digest</b>. Blank = no limit. A listing that doesn't state its miles or hours isn't ruled out for it.
-    "Within" defaults to the search radius. "Alert at score" overrides the deal-alert score for one category
-    (blank = the setting above); the % and $ savings floors still apply.</p>
+    "Within" defaults to the search radius. "Alert at score" and "Min $ saved" override the deal-alert score and the
+    $-under floor for one category (blank = the settings above) - $1,500 matters on a UTV, not on a $3,000 mower.
+    The % floor applies everywhere.</p>
   <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Instant</th><th>Just-listed</th><th>Digest</th>
-    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th><th>Alert at score</th></tr></thead><tbody>
+    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th><th>Alert at score</th><th>Min $ saved</th></tr></thead><tbody>
     ${CATS.map(c => { const r = s.alert_rules[c.key] || {}, m = r.models || []; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
       <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
       <td><label><input type="checkbox" data-r="fresh" ${r.fresh ? "checked" : ""}> on</label></td>
@@ -1164,7 +1165,8 @@ async function renderSetup() {
       <td>${["mower", "trailer", "pwc"].includes(c.key) ? "" : `<input type="number" step="500" data-r="max_miles" value="${esc(r.max_miles)}" placeholder="any">`}</td>
       <td>${["trailer"].includes(c.key) ? "" : `<input type="number" step="50" data-r="max_hours" value="${esc(r.max_hours)}" placeholder="any">`}</td>
       <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td>
-      <td><input type="number" min="0" max="100" data-r="min_score" value="${esc(r.min_score)}" placeholder="${esc(v.alert_threshold)}"></td></tr>`; }).join("")}
+      <td><input type="number" min="0" max="100" data-r="min_score" value="${esc(r.min_score)}" placeholder="${esc(v.alert_threshold)}"></td>
+      <td><input type="number" min="0" step="100" data-r="min_usd" value="${esc(r.min_usd)}" placeholder="${esc(v.alert_min_usd)}"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
   <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 10 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>

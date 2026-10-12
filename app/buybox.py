@@ -7,6 +7,8 @@ A rule (settings.alert_rules[category]) holds:
   min_year / max_price / max_miles / max_hours   '' = no limit
   within_mi how far he will drive ('' = the search radius + 10)
   min_score this category's instant-alert score bar ('' = Setup's "Deal alert when score >=")
+  min_usd   this category's $-saved floor ('' = Setup's "...and at least this many $ under"): $1,500 means
+            something on a $17k UTV and blocks every deal on a $3k mower
 Unknown values pass: a listing that doesn't state its miles isn't ruled out for it (the card says so).
 """
 from . import geo
@@ -23,6 +25,11 @@ def _num(rule, k):
 
 def min_score(rule, default: int) -> int:
     return _num(rule, "min_score") or default
+
+
+def min_usd(rule, default: float) -> float:
+    v = _num(rule, "min_usd")
+    return default if v is None else v
 
 
 def reach(rule, radius: int) -> int:

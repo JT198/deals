@@ -43,6 +43,8 @@ Set on 10/4 so the scoring could be tuned once ~2 weeks of data existed. Now wit
 
 ## Done
 
+- 10/12 Sold pull waits out the hourly Facebook budget (holding the lock, fast lane still first, 3 h cap)
+  instead of quitting - on 10/12 the overnight sweep had spent the hour and the 04:30 pull got 0.
 - 10/11 Facebook blocked at the 300/h cap (back-off worked) -> hourly budget 300 -> 220.
 - 10/10 Telegram 👍/👎 + seller opener in alerts; feedback poller; TODO.md.
 - 10/09 Why-this-price panel, Fix (corrections), buying stages, alert activity log; Codex round 3 (real rollback

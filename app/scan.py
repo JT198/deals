@@ -38,6 +38,7 @@ FB_SEARCHES_PER_RUN = 20      # ~5 min of searching; keep Facebook traffic modes
 FB_BACKOFF_HOURS = (2, 4, 8)  # pause all Facebook traffic this long after it returns nothing; escalates on repeats
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
+SOLD_MAX_SECS = 3 * 3600      # the sold pull (~190 loads) waits out the hourly budget instead of quitting, up to this long
 FB_RECHECKS_PER_RUN = 6
 STALE_RECHECKS_PER_RUN = 12   # listings nobody has seen in a while: their page decides, not the calendar
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
@@ -255,6 +256,18 @@ async def step_aside(lock, route: str = "home") -> None:
         raise SkipFacebook      # the fast lane got walled on this route meanwhile: don't keep hitting it
 
 
+async def wait_for_budget(budget, lock, route: str, deadline: float) -> bool:
+    """The sold pull's turn when the hour's Facebook budget is spent: keep the lock (so the sweep can't
+    spend the hour again meanwhile) and wait for old loads to age out, still letting the fast lane go first.
+    False when the deadline passes first. (10/12: the 04:30 pull found the sweep had used the hour and quit.)"""
+    while budget.left() <= 0:
+        if time.time() >= deadline:
+            return False
+        await step_aside(lock, route)
+        await asyncio.sleep(60)
+    return True
+
+
 async def _wait_for(f, marker, deadline, yield_to_quick):
     while True:
         try:
@@ -324,7 +337,7 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
-async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home") -> None:
+async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home", wait_until=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
     ok, missed, failures = 0, [], 0
@@ -332,7 +345,7 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
         if failures >= 3:        # the browser is gone, not three pages in a row
             errors.append("facebook: item pages keep failing - browser dead? (rest of the batch skipped)")
             break
-        if budget and budget.left() <= 0:
+        if budget and budget.left() <= 0 and not (wait_until and await wait_for_budget(budget, lock, route, wait_until)):
             errors.append(f"facebook hourly page budget reached - {len(todo) - ok - len(missed)} item pages wait")
             break
         await step_aside(lock, route)
@@ -500,8 +513,9 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 empty = failures = 0
                 if quick:   # the full scan may have run the same search minutes ago
                     due = [s for s in due if (s["last_run"] or 0) < t0 - QUICK_REPEAT_SECS]
+                wait_until = t0 + SOLD_MAX_SECS if sold else None
                 for srch in due:
-                    if budget.left() <= 0:
+                    if budget.left() <= 0 and not (sold and await wait_for_budget(budget, fb_lock, fb_route, wait_until)):
                         errors.append(f"facebook hourly page budget reached ({budget.used()} loads) - rest of the run skipped")
                         raise BudgetSpent
                     if failures >= 3:
@@ -540,7 +554,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
                     todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
-                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget, route=fb_route)
+                await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget, route=fb_route,
+                                 wait_until=wait_until)
         except (SkipFacebook, BudgetSpent):
             pass
         except Exception as e:

@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 
 os.environ["DEALS_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "x")
@@ -1437,6 +1438,21 @@ def test_review_batch_2026_10_09():
     with patch.object(scan.asyncio, "sleep", AsyncMock()):
         asyncio.run(scan.fb_details(con, Ok(), scan.pending_details(con, 10), errors, budget=b))
     assert con.execute("SELECT SUM(detail_fetched) FROM listings").fetchone()[0] == 0 and "budget" in errors[0], errors
+
+    # e2. ...but the sold pull waits for loads to age out (it holds the lock, so nobody else spends them)
+    ticks = []
+    async def aging(_s):                         # each minute of waiting, one old load drops out of the hour
+        ticks.append(1)
+        con.execute("DELETE FROM fb_loads WHERE rowid = (SELECT MIN(rowid) FROM fb_loads)"); con.commit()
+    errors = []
+    with patch.object(scan.asyncio, "sleep", aging):
+        asyncio.run(scan.fb_details(con, Ok(), scan.pending_details(con, 10), errors, budget=b,
+                                    wait_until=time.time() + 3600))
+    assert not errors and ticks, errors
+    assert con.execute("SELECT SUM(detail_fetched) FROM listings").fetchone()[0] == 3
+    b.record(); b.record()                       # spent again, and the deadline has already passed: give up
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        assert asyncio.run(scan.wait_for_budget(b, None, "home", time.time() - 1)) is False
 
     # f. the sold pull only sends watch alerts
     con = reset([{"score": 95, "price": 5000, "expected": 9000, "listed_at": now - 3 * 3600}])

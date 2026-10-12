@@ -6,6 +6,7 @@ A rule (settings.alert_rules[category]) holds:
   models    families to include ([] = any)
   min_year / max_price / max_miles / max_hours   '' = no limit
   within_mi how far he will drive ('' = the search radius + 10)
+  min_score this category's instant-alert score bar ('' = Setup's "Deal alert when score >=")
 Unknown values pass: a listing that doesn't state its miles isn't ruled out for it (the card says so).
 """
 from . import geo
@@ -18,6 +19,10 @@ def _num(rule, k):
         return int(float(rule.get(k))) if str(rule.get(k) or "").strip() else None
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def min_score(rule, default: int) -> int:
+    return _num(rule, "min_score") or default
 
 
 def reach(rule, radius: int) -> int:

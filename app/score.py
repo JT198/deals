@@ -10,9 +10,11 @@ import time
 
 from .categories import FAMILY_CATEGORY, cfg
 from . import db, usage
-from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, detect
+from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, TRIMS, detect
 
-EQUIP_VERSION = 3   # bump when equipment.detect learns something new: every listing is re-detected once
+TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
+
+EQUIP_VERSION = 4   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -297,7 +299,7 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
     slope = usage_slope(others, metric, cat) if metric else 0.0
     rate = _use_per_year(others, metric) if metric else None
     feats = _equip(listing)
-    eff = (effects or {}).get(cat, {})
+    eff = {**(effects or {}).get(cat, {}), **(effects or {}).get("_family", {}).get(fam, {})}
 
     def comp_use(x):
         u = getattr(x, metric) if metric else None
@@ -415,13 +417,17 @@ def equipment_effects(con) -> dict:
     with the feature ask above their pre-equipment typical price vs listings without; shrunk toward the prior.
     Plow / trailer use their dollar priors."""
     rows = con.execute(
-        """SELECT title, category, equipment, price, expected_pre FROM listings
+        """SELECT title, category, family, equipment, price, expected_pre FROM listings
            WHERE relevant = 1 AND parsed = 1 AND COALESCE(is_new, 0) = 0 AND price >= 300
              AND expected_pre IS NOT NULL AND category IN ('utv4', 'utv2', 'atv')""").fetchall()
     ratios: dict[str, list] = {}
+    by_family: dict[str, list] = {}
     for r in dedupe_cross_posts(rows):
         group = "utv" if r["category"] in ("utv4", "utv2") else r["category"]
-        ratios.setdefault(group, []).append((set(json.loads(r["equipment"] or "[]")), r["price"] / r["expected_pre"]))
+        pt = (set(json.loads(r["equipment"] or "[]")), r["price"] / r["expected_pre"])
+        ratios.setdefault(group, []).append(pt)
+        if r["family"] in TRIMS:
+            by_family.setdefault(r["family"], []).append(pt)
     out = {}
     for cat, feats in APPLIES.items():
         group = "utv" if cat in ("utv4", "utv2") else cat
@@ -440,6 +446,21 @@ def equipment_effects(con) -> dict:
             else:
                 eff[f] = DOLLAR_BY_CAT.get(cat, {}).get(f, DOLLAR_PRIOR[f])
         out[cat] = eff
+    # Trim is worth different amounts per family (10/12 check-in: top trim +8% on a RZR XP 4, +19-29% on a
+    # Commander; lower trim -10% on a 2-seat X3, -19% on an X3 MAX): learned per family vs that family's
+    # middle trims, shrunk toward the shared value above. _expected_one lays these over the category's.
+    fam_out: dict[str, dict] = {}
+    for fam, pts in by_family.items():
+        mid = [q for e, q in pts if not (e & set(TRIM_FEATS))]
+        for f in TRIM_FEATS:
+            has = [q for e, q in pts if f in e]
+            if len(has) < 3 or len(mid) < 5:
+                continue
+            shared = out["utv4"][f]
+            data = statistics.median(has) / statistics.median(mid) - 1
+            val = (len(has) * data + USAGE_SHRINK * shared) / (len(has) + USAGE_SHRINK)
+            fam_out.setdefault(fam, {})[f] = min(TRIM_CAP, max(0.0, val)) if shared > 0 else max(-TRIM_CAP, min(0.0, val))
+    out["_family"] = fam_out
     return out
 
 
@@ -481,13 +502,14 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
                        else "no price stated" if price is None else "not enough comps yet")
 
     was = max(x for x in (listing["strike_price"], listing["first_price"], 0) if x is not None)
+    # Price cut / below-sold / low use are shown but add no points (10/12 check-in): the discount already uses the
+    # cut price and the typical already prices use, and none of the three made a fresh private listing sell any
+    # faster within its discount band. Without them the bands rank by 3-day sales (18 / 15 / 12 / 11%).
     if price and was and was > price:
         drop = (was - price) / was
-        s += 3 + min(7, drop * 35)
         reasons.append(f"price cut ${was - price:,} ({drop:.0%})")
 
     if sold_typical and price and price <= 0.95 * sold_typical:
-        s += 4
         reasons.append(f"below what similar ones sold for (~${sold_typical:,})")
 
     if listing["motivated"]:
@@ -502,7 +524,6 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         hpy = (listing["hours"] or 0) / age
         c = cfg(listing["category"])
         if (listing["miles"] is not None and mpy < c.get("low_mpy", 800)) or (listing["hours"] is not None and hpy < c["low_hpy"]):
-            s += 3
             reasons.append("low use")
         elif mpy > c.get("high_mpy", 3000) or hpy > c["high_hpy"]:
             s -= 6
@@ -696,33 +717,37 @@ def days_to_sell(con) -> dict[str, float]:
 
 BUCKETS = (("75+ great", 75, 101), ("60-74 good", 60, 75), ("45-59 fair", 45, 60), ("under 45 overpriced", 0, 45))
 ENDED = ("sold", "pending", "gone")
+SOLD = ("sold", "pending")
 
 
-def scorecard(con, comps=None, min_exposure_days: int = 2) -> dict:
-    """Is the ranking any good? Private, used listings we saw for sale, up at least min_exposure_days:
-    what share of each score bucket has sold / gone pending / been removed. A score that means something
-    shows higher buckets going faster. Ended listings keep the score they had when they ended."""
+def scorecard(con, comps=None, window_days: int = 3) -> dict:
+    """Is the ranking any good? Private, used listings we caught within a day of being posted, posted at least
+    window_days ago: what share of each score band sold or went pending within window_days of posting.
+    (Until 10/12 this counted every listing ever seen, incl. the deep sweep's weeks-old backlog, and counted
+    removals - often scams - as successes; that flattened it.) Ended listings keep the score they ended with."""
     now = int(time.time())
+    win = window_days * 86400
     rows = con.execute(
-        """SELECT score, status, ended_at, COALESCE(listed_at, first_seen) t0 FROM listings
+        """SELECT score, status, ended_at, listed_at t0 FROM listings
            WHERE relevant = 1 AND seen_active = 1 AND COALESCE(is_new, 0) = 0 AND COALESCE(is_dealer, 0) = 0
              AND COALESCE(seller_type, '') != 'dealer' AND score IS NOT NULL AND COALESCE(user_gone, 0) = 0
-             AND first_seen < ? AND first_seen > ?""",
-        (now - min_exposure_days * 86400, now - 60 * 86400)).fetchall()
+             AND listed_at IS NOT NULL AND first_seen - listed_at < 86400
+             AND listed_at < ? AND listed_at > ?""",
+        (now - win, now - 60 * 86400)).fetchall()
     buckets = []
     for label, lo, hi in BUCKETS:
         v = [r for r in rows if lo <= r["score"] < hi]
-        gone = [r for r in v if r["status"] in ENDED]
-        days = [(r["ended_at"] - r["t0"]) / 86400 for r in gone if r["ended_at"] and r["ended_at"] > r["t0"]]
-        buckets.append({"label": label, "n": len(v), "ended": len(gone),
-                        "pct": round(100 * len(gone) / len(v), 1) if v else None,
-                        "days": round(statistics.median(days)) if days else None})
+        sold = [r for r in v if r["status"] in SOLD and r["ended_at"] and r["ended_at"] - r["t0"] <= win]
+        days = [(r["ended_at"] - r["t0"]) / 86400 for r in sold if r["ended_at"] > r["t0"]]
+        buckets.append({"label": label, "n": len(v), "ended": len(sold),
+                        "pct": round(100 * len(sold) / len(v), 1) if v else None,
+                        "days": round(statistics.median(days), 1) if days else None})
     top, bottom = buckets[0], buckets[-1]
     if top["n"] < 20 or bottom["n"] < 20 or top["pct"] is None or bottom["pct"] is None:
         verdict = "Not enough listings yet to judge - this needs a few weeks of data."
     elif top["pct"] >= 1.5 * bottom["pct"] and (buckets[1]["n"] < 10 or buckets[1]["pct"] >= bottom["pct"]):
-        verdict = (f"Working: listings scored 75+ are going {top['pct'] / max(bottom['pct'], 0.1):.1f}x as fast "
-                   "as ones scored under 45.")
+        verdict = (f"Working: listings scored 75+ are selling {top['pct'] / max(bottom['pct'], 0.1):.1f}x as often "
+                   f"within {window_days} days as ones scored under 45.")
     elif top["pct"] > bottom["pct"]:
         verdict = "Pointing the right way, but the gap between great and overpriced is small."
     else:
@@ -753,7 +778,7 @@ def scorecard(con, comps=None, min_exposure_days: int = 2) -> dict:
     learned.sort(key=lambda x: -x["n"])
     return {"buckets": buckets, "verdict": verdict, "alerts": alerts, "coverage": coverage,
             "coverage_pct": round(100 * sum(c["priced"] or 0 for c in coverage) / total),
-            "learned": learned[:8], "min_exposure_days": min_exposure_days, "listings": len(rows)}
+            "learned": learned[:8], "min_exposure_days": window_days, "listings": len(rows)}
 
 
 def snapshot_scorecard(con) -> None:

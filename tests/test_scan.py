@@ -649,26 +649,30 @@ def test_parse_pwc_and_sled_fields():
 def test_scorecard_buckets_and_snapshot():
     from app import score
     t = db.now()
-    old = {"first_seen": t - 5 * 86400, "listed_at": t - 10 * 86400}
+    old = {"first_seen": t - 5 * 86400 + 3600, "listed_at": t - 5 * 86400}     # caught an hour after posting
     rows = []
-    for i in range(30):   # great: 15 of 30 gone; overpriced: 3 of 30 gone
-        rows.append(dict(old, id=f"facebook:g{i}", ext_id=f"g{i}", score=80, status="gone" if i < 15 else "active",
-                         ended_at=t if i < 15 else None))
+    for i in range(30):   # great: 15 of 30 sold within 3 days; overpriced: 3 of 30
+        rows.append(dict(old, id=f"facebook:g{i}", ext_id=f"g{i}", score=80, status="sold" if i < 15 else "active",
+                         ended_at=t - 4 * 86400 if i < 15 else None))
         rows.append(dict(old, id=f"facebook:o{i}", ext_id=f"o{i}", score=30, status="sold" if i < 3 else "active",
-                         ended_at=t if i < 3 else None))
-    rows.append(dict(old, id="facebook:dealer", ext_id="dealer", score=90, is_dealer=1, status="gone", ended_at=t))
-    rows.append({"id": "facebook:fresh", "ext_id": "fresh", "score": 90, "status": "gone", "ended_at": t})   # < 2 days up
+                         ended_at=t - 4 * 86400 if i < 3 else None))
+    rows.append(dict(old, id="facebook:dealer", ext_id="dealer", score=90, is_dealer=1, status="sold", ended_at=t))
+    rows.append({"id": "facebook:fresh", "ext_id": "fresh", "score": 90, "status": "sold", "ended_at": t})   # posted < 3 days ago
     rows.append(dict(old, id="facebook:backlog", ext_id="backlog", score=90, status="sold", seen_active=0, ended_at=t))
+    rows.append(dict(old, id="facebook:old", ext_id="old", score=90, status="sold", ended_at=t,                 # found weeks late
+                     listed_at=t - 30 * 86400))
+    rows.append(dict(old, id="facebook:scam", ext_id="scam", score=30, status="gone", ended_at=t - 4 * 86400))  # removal: not a sale
+    rows.append(dict(old, id="facebook:slow", ext_id="slow", score=30, status="sold", ended_at=t))             # sold, but after day 3
     con = reset(rows)
     s = score.scorecard(con)
     top, bottom = s["buckets"][0], s["buckets"][-1]
-    assert (top["n"], top["ended"], top["pct"], top["days"]) == (30, 15, 50.0, 10), top
-    assert (bottom["n"], bottom["ended"], bottom["pct"]) == (30, 3, 10.0), bottom
-    assert s["verdict"].startswith("Working") and "5.0x" in s["verdict"], s["verdict"]
+    assert (top["n"], top["ended"], top["pct"], top["days"]) == (30, 15, 50.0, 1.0), top
+    assert (bottom["n"], bottom["ended"], bottom["pct"]) == (32, 3, 9.4), bottom
+    assert s["verdict"].startswith("Working") and "5.3x" in s["verdict"], s["verdict"]
     score.snapshot_scorecard(con); score.snapshot_scorecard(con)          # same day: one row
     assert con.execute("SELECT COUNT(*) FROM scorecard_log").fetchone()[0] == 1
     api = client().get("/api/scorecard").json()
-    assert api["history"][0]["buckets"][0]["pct"] == 50.0 and api["listings"] == 60, api["history"]
+    assert api["history"][0]["buckets"][0]["pct"] == 50.0 and api["listings"] == 62, api["history"]
 
 
 def test_usage_doubt():
@@ -813,6 +817,20 @@ def test_deal_alerts_need_enough_savings():
     assert SENT == ["facebook:0"], SENT
 
 
+def test_alert_bar_per_category():
+    import json as _j
+    old = {"listed_at": db.now() - 3 * 3600}
+    rules = {"utv4": {"enabled": True, "min_score": "75"}, "mower": {"enabled": True}}
+    con = reset([dict(old, score=77, price=12000, expected=16500),                                   # UTV at 77: its bar is 75
+                 dict(old, id="facebook:1", ext_id="1", title="mower", category="mower", family="Toro TimeCutter",
+                      score=77, price=1000, expected=3000)],                                         # mower at 77: global 80
+                alert_threshold="80", alert_rules=_j.dumps(rules))
+    asyncio.run(alerts(con))
+    assert SENT == ["facebook:0"], SENT
+    resp = client().put("/api/settings", json={"alert_rules": {"utv4": {"enabled": True, "min_score": "74.0"}}})
+    assert resp.status_code == 200 and resp.json()["alert_rules"]["utv4"]["min_score"] == "74", resp.text
+
+
 def test_listings_carry_map_points():
     con = reset([{"lat": 45.1, "lon": -93.4, "location": "Anoka, MN"},
                  {"id": "facebook:1", "ext_id": "1", "location": "Anoka, MN"},
@@ -868,7 +886,7 @@ def test_trim_levels():
     assert t("RZR Pro XP 4", "2024 Polaris RZR Pro XP 4 Sport") == "base_trim"
     assert t("RZR Pro XP 4", "2024 Polaris pro xp 4", trim="Sport") == "base_trim"
     assert t("Commander MAX", "2022 Commander MAX XT-P 1000R") == "top_trim"
-    assert t("Commander MAX", "2024 Commander MAX XT 1000R") == "base_trim"
+    assert t("Commander MAX", "2024 Commander MAX XT 1000R") is None                  # XT prices like the middle
     assert t("Ranger Crew 1000", "Ranger Crew NorthStar Ultimate") is None            # cab editions = equipment
 
 
@@ -1700,6 +1718,26 @@ def test_alert_opener_and_feedback():
     assert [c[1] for c in calls] == ["getUpdates", "answerCallbackQuery", "editMessageReplyMarkup", "answerCallbackQuery", "editMessageReplyMarkup"]
     assert client().get("/api/listings").json()[0]["feedback"] == "+"
     assert any(a["outcome"] == "feedback" for a in client().get("/api/alerts").json())
+
+
+def test_trim_values_learned_per_family():
+    import json as _j
+    from app import score
+    rows = []
+    for i in range(10):    # Commander MAX: middle at typical, top trims ask 25% more
+        rows.append({"id": f"facebook:m{i}", "ext_id": f"m{i}", "family": "Commander MAX", "price": 20000,
+                     "expected_pre": 20000, "equipment": "[]"})
+        rows.append({"id": f"facebook:t{i}", "ext_id": f"t{i}", "family": "Commander MAX", "price": 25000,
+                     "expected_pre": 20000, "equipment": _j.dumps(["top_trim"])})
+    con = reset(rows)
+    eff = score.equipment_effects(con)
+    fam = eff["_family"]["Commander MAX"]["top_trim"]
+    assert eff["utv4"]["top_trim"] < fam <= score.TRIM_CAP and fam > 0.15, (eff["utv4"]["top_trim"], fam)
+    row = {"id": "x", "year": 2023, "category": "utv4", "deck_in": None, "miles": None, "hours": None,
+           "equipment": _j.dumps(["top_trim"])}
+    comps = score._comps(con)
+    commander = score.expected_price(dict(row, family="Commander MAX"), comps, eff)
+    assert "top trim" in (commander[3] or ""), commander
 
 
 if __name__ == "__main__":

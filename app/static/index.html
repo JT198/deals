@@ -324,8 +324,9 @@ td.t { white-space: normal; min-width: 240px; }
         So a NorthStar isn't compared straight against open machines. The grey line shows these adjustments too.</li>
       <li><b>Adjusted for trim</b> in the families where trim moves the price on its own: Maverick X3 / X3 MAX (DS = lower,
         X ds / X rs / X rc / X mr = top, RS and Turbo RR in between), RZR Pro XP 4 (Sport = lower, Ultimate = top),
-        RZR XP (Turbo = top) and Commander (XT / DPS = lower, XT-P / X mr = top). Read from the title and the start of
-        the ad. Worth a percentage learned from the listings (currently about −9% for a lower trim, +7% for a top trim).
+        RZR XP (Turbo = top) and Commander (XT-P / X mr = top; XT and DPS price like the middle). Read from the title and
+        the start of the ad. Each family's value is learned from its own listings (since 10/12), e.g. a lower trim
+        about −10% to −19%, a top trim +8% to +29%, pulled toward the overall average when a family has few listings.
         Ads that don't say the trim are treated as the middle.</li>
       <li><b>Few same-year comps:</b> when only a handful of listings are within a model year, their median is blended
         with the model's overall price-by-year trend (the fewer comps, the more weight on the trend, never more than 12%),
@@ -345,8 +346,10 @@ td.t { white-space: normal; min-width: 240px; }
     <h3>Score (the number on each card)</h3>
     <ul>
       <li><b>50</b> is a normally priced listing. <b>60-74 "Good"</b>, <b>75+ "Great"</b>.</li>
-      <li>Goes up for being under typical, price cuts, and signs the seller is motivated (OBO, must sell).
-        Goes down for dealers, new stock, and being over typical.</li>
+      <li>Goes up for being under typical, and a little for signs the seller is motivated (OBO, must sell).
+        Goes down for dealers, new stock, and being over typical. A price cut, low use, or a price under what similar
+        ones sold for show as reasons but add no points: the % under typical already counts the cut price and the use,
+        and on the 10/12 check-in none of them made a listing sell any faster.</li>
       <li>Anything with red flags (needs work, title problems, scam signs) is capped at 70 - never "Great".</li>
       <li>Prices under $100 or under 20% of typical are treated as placeholders ("$1 - make an offer"), not deals.</li>
       <li>Few comps or no model year pull the score toward the middle, because the typical price is less certain.</li>
@@ -420,7 +423,7 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Search</b> looks through titles, the full ad text, the AI summary, add-ons and notes.</li>
       <li><b>Morning digest</b> at 7:00 on Telegram: the best new private listings per category from the last day,
         your watched listings with any price drops, and how the market is pricing.</li>
-      <li><b>Scorecard</b> (Market tab, bottom): whether high scores really sell faster than low ones, what the pricing has
+      <li><b>Scorecard</b> (Market tab, bottom): whether high scores really sell more often within 3 days of being posted, what the pricing has
         learned from the listings, and a day-by-day history so you can see if it's improving.</li>
       <li><b>Copy message</b> (inside Offer guidance): a ready opener for the seller with your offer - edit, copy, paste into Messenger.</li>
       <li><b>Sell mine</b> tab: describe your machine and get a list price, what to expect, a quick-sale price, the closest
@@ -1034,15 +1037,16 @@ function scorecardPanel(s) {
   const max = Math.max(1, ...s.buckets.map(b => b.pct || 0));
   const bars = s.buckets.map(b => `<div class="sc-row"><span>${esc(b.label)}</span>
     <div class="sc-track" title="${b.pct ?? 0}% of ${b.n}"><div class="sc-bar" style="width:${b.pct ? (b.pct / max * 100).toFixed(1) : 0}%"></div></div>
-    <span class="sc-val">${b.n ? `<b>${b.pct}%</b> gone · ${b.ended} of ${b.n}${b.days != null ? ` · ${b.days} days listed` : ""}` : "no listings yet"}</span></div>`).join("");
+    <span class="sc-val">${b.n ? `<b>${b.pct}%</b> sold · ${b.ended} of ${b.n}${b.days != null ? ` · in ${b.days} days` : ""}` : "no listings yet"}</span></div>`).join("");
   const al = Object.entries(s.alerts).map(([k, v]) =>
     `${v.sent} ${k === "deal" ? "deal" : "just-listed"} alert${v.sent === 1 ? "" : "s"}, ${v.ended} since sold / pending / removed`).join(" · ");
   const hist = s.history.filter(h => h.buckets && h.buckets[0].pct != null);
   return `<div class="panel"><h2>Scorecard: is the ranking working?</h2>
     <p class="verdict">${esc(s.verdict)}</p>
-    <p class="hint">Share of each score band that has sold, gone pending or been removed - private, used listings that were up at
-      least ${s.min_exposure_days} days (${s.listings} listings). If the score means something, the top bands go faster.
-      Higher scores are also re-checked more often, which flatters them a little.</p>
+    <p class="hint">Share of each score band that sold or went pending within ${s.min_exposure_days} days of being posted -
+      private, used listings the finder caught within a day of posting (${s.listings} listings). Removed listings don't count
+      (many are scams). If the score means something, the top bands sell more. Measured this way since 10/12; the history
+      before that counted every listing and removals, so it reads lower and flatter.</p>
     ${bars}
     ${al ? `<p class="hint" style="margin-top:10px">Telegram: ${esc(al)}.</p>` : ""}
     <h2 style="margin-top:18px">What the pricing has learned</h2>
@@ -1145,9 +1149,10 @@ async function renderSetup() {
   <h2 style="margin-top:16px">Buy box</h2>
   <p class="hint">What you'd actually buy, per category. <b>Instant</b> = a Telegram alert the moment a great deal inside the box shows up;
     otherwise it waits for the 7am <b>digest</b>. Blank = no limit. A listing that doesn't state its miles or hours isn't ruled out for it.
-    "Within" defaults to the search radius.</p>
+    "Within" defaults to the search radius. "Alert at score" overrides the deal-alert score for one category
+    (blank = the setting above); the % and $ savings floors still apply.</p>
   <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Instant</th><th>Just-listed</th><th>Digest</th>
-    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th></tr></thead><tbody>
+    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th><th>Alert at score</th></tr></thead><tbody>
     ${CATS.map(c => { const r = s.alert_rules[c.key] || {}, m = r.models || []; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
       <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
       <td><label><input type="checkbox" data-r="fresh" ${r.fresh ? "checked" : ""}> on</label></td>
@@ -1158,7 +1163,8 @@ async function renderSetup() {
       <td><input type="number" step="500" data-r="max_price" value="${esc(r.max_price)}" placeholder="any"></td>
       <td>${["mower", "trailer", "pwc"].includes(c.key) ? "" : `<input type="number" step="500" data-r="max_miles" value="${esc(r.max_miles)}" placeholder="any">`}</td>
       <td>${["trailer"].includes(c.key) ? "" : `<input type="number" step="50" data-r="max_hours" value="${esc(r.max_hours)}" placeholder="any">`}</td>
-      <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td></tr>`; }).join("")}
+      <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td>
+      <td><input type="number" min="0" max="100" data-r="min_score" value="${esc(r.min_score)}" placeholder="${esc(v.alert_threshold)}"></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
   <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 10 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>

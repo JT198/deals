@@ -11,16 +11,17 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       works off these; as of 10/10 there are 3 stars and nothing else.
 - [ ] Facebook app: saved-search notifications for the top 2-3 models (instant, free, within Facebook's rules).
 
-## 10/12 check-in (reminder fires Mon 2026-10-12 08:30 via the deals bot)
+## Photo-check pilot (decision held at the 10/12 check-in)
 
-Set on 10/4 so the scoring could be tuned once ~2 weeks of data existed. Now with the deep sweep, page-checked
-"gone" data and the feedback table, the pass is:
-- [ ] Tune the score weights against what actually sold / got a 👍 (Scorecard on the Market tab + `feedback`).
-- [ ] Learn trim values per family instead of one shared lower −9% / top +7%.
-- [ ] Re-check the year-trend blend (a newer model year priced below an older one).
-- [ ] Decide on the photo-check pilot (full-size photos at fetch time: dealer/promo graphics, cab/plow/trailer
-      visible, odometer reading; never score damage - the model hallucinated it).
-- [ ] Delete `deals-reminder-1012.timer/.service` and `/opt/deals/data/reminder_1012.py` on .82 after it fires.
+- [ ] Decide: full-size photos at fetch time, yes/no questions (dealer/promo graphic, cab/doors, plow, trailer,
+      odometer/hour-meter reading), tags only, never score damage (the model hallucinated "collision damage" twice).
+
+## Next scoring check (~10/26)
+
+- [ ] Re-run the outcome study (fresh private listings, sold/pending within 3 days by score band) on two more weeks.
+- [ ] Mowers: off-season in October, so cheap ones sit; re-check in spring before trusting mower scores.
+- [ ] Sea-Doo touring (GTX / Explorer / FishPro in one family) and 2026 Ski-Doo price newer-below-older; split families?
+- [ ] Toro LX500 (a lawn tractor) was filed as a TimeCutter zero-turn - check mower family rules.
 
 ## Build ideas (ordered)
 
@@ -43,6 +44,12 @@ Set on 10/4 so the scoring could be tuned once ~2 weeks of data existed. Now wit
 
 ## Done
 
+- 10/12 Check-in: score bonuses for price cut / below-sold / low use dropped (shown, no points; none predicted a
+  3-day sale within its discount band) -> 75+ / 60-74 / 45-59 / <45 sell 18 / 15 / 12 / 11% in 3 days; Great 1,273 -> 708.
+  Scorecard = fresh private listings, sold/pending within 3 days (was every listing incl. backlog, removals counted).
+  Trim values learned per family (cap 30%); Commander XT no longer "lower trim". Per-category alert bar
+  (buy box "Alert at score"): 4-seat UTVs 75, rest 80. Year trend re-checked: 7 of 323 modern adjacent years inverted.
+  Reminder timer deleted.
 - 10/12 Sold pull waits out the hourly Facebook budget (holding the lock, fast lane still first, 3 h cap)
   instead of quitting - on 10/12 the overnight sweep had spent the hour and the 04:30 pull got 0.
 - 10/11 Facebook blocked at the 300/h cap (back-off worked) -> hourly budget 300 -> 220.

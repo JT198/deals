@@ -31,7 +31,7 @@ LABEL = {"cab": "cab", "heat": "heat", "ac": "A/C", "plow": "plow", "trailer": "
 # like NorthStar or Defender Limited are already priced as equipment). First match wins, so top trims go first.
 # Read from the title, the parsed trim and the start of the description only: "upgraded to RR" deep in an ad
 # isn't the trim. Measured 2026-10-04 (asking, year-adjusted): X3 DS ~13% under the family, Pro XP Sport ~12%
-# under / Ultimate ~4% over, Commander XT ~12% under / X mr + XT-P ~12% over, RZR XP Turbo ~5-9% over.
+# under / Ultimate ~4% over, Commander X mr + XT-P ~12% over (XT is the middle), RZR XP Turbo ~5-9% over.
 _X3 = (("top_trim", r"\bx\s?-?(rs|ds|rc|mr)\b"),
        (None, r"\brs\b|\brr\b|turbo\s*r\b"),           # RS / Turbo R / Turbo RR: the middle
        ("base_trim", r"\bds\b"))
@@ -43,8 +43,9 @@ TRIMS = {
                      ("base_trim", r"(xp\s?-?4?|pro)\s+sport\b|^sport$")),
     "RZR XP 4": (("top_trim", r"\bturbo\b"),),
     "RZR XP 1000/Turbo (2-seat)": (("top_trim", r"\bturbo\b"),),
-    "Commander MAX": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"), ("base_trim", r"\bxt\b|\bdps\b")),
-    "Commander (2-seat)": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"), ("base_trim", r"\bxt\b|\bdps\b")),
+    # Commander: XT / DPS price like the middle (10/12 check-in), so only the top trims are marked
+    "Commander MAX": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"),),
+    "Commander (2-seat)": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"),),
 }
 
 

@@ -658,9 +658,12 @@ async def send_alerts(con, http, st, quiet=False, watch_only=False) -> int:
 
 async def _send_alerts(con, http, st, quiet) -> int:
     threshold = int(st.get("alert_threshold") or 75)
+    rules = db.alert_rules(st)
+    # a category can set its own bar (10/12: 75 for 4-seat UTVs, the global 80 for the rest)
+    bar = {c: buybox.min_score(rules.get(c) or {}, threshold) for c in rules}
+    floor = min([threshold, *bar.values()])
     private = ("AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'"
                if st.get("alert_private_only") == "1" else "")
-    rules = db.alert_rules(st)
     radius = int(st.get("radius_mi") or 100)
     dist = buybox.distance_fn(con, st)
 
@@ -743,7 +746,9 @@ async def _send_alerts(con, http, st, quiet) -> int:
                   AND score >= ? AND (alerted_score IS NULL
                                       OR price <= alerted_price * (1 - ?)                 -- a real price cut
                                       OR (score >= alerted_score + 10 AND price < alerted_price)) {private}
-                ORDER BY score DESC""", (threshold, REALERT_CUT)).fetchall():
+                ORDER BY score DESC""", (floor, REALERT_CUT)).fetchall():
+        if r["score"] < bar.get(r["category"], threshold):
+            continue        # under this category's own bar: not a candidate at all
         reason = why_not(r)
         if reason is None:
             deals.append(r)

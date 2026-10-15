@@ -44,6 +44,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 10/15 Best-deal order breaks score ties by comps (confidence), then distance, then newest (was newest only).
+
 - 10/12 Per-category "Min $ saved" (buy box; blank = global $1,500): mowers/trailers/ATVs $500, PWC/sleds $750, trikes $300.
 - 10/12 Check-in: score bonuses for price cut / below-sold / low use dropped (shown, no points; none predicted a
   3-day sale within its discount band) -> 75+ / 60-74 / 45-59 / <45 sell 18 / 15 / 12 / 11% in 3 days; Great 1,273 -> 708.

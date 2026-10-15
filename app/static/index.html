@@ -388,6 +388,9 @@ td.t { white-space: normal; min-width: 240px; }
         Stars are shared, so Alex's stars notify you too. A starred card has a stage menu - Contacted, Viewing
         scheduled, Offer made, Purchased, Passed - so you both know where each one stands; Purchased and Passed stop
         the watching. The "Starred / shortlist" filter shows everything with a star or a stage.</li>
+      <li><b>Best deal order</b>: by score; listings with the same score are ordered by how many comps back the
+        price (more = more trustworthy), then nearest first, then newest. Discounts past 40% all score the same,
+        so that tie-break matters at the top of the list.</li>
       <li><b>Why $X?</b> on a card opens the comparable listings behind its typical price, each lined up to this
         machine's year, use and equipment, and the sold listings behind "typically sells around".</li>
       <li><b>Fix</b> on a card corrects what the model read - model, year, miles, hours, dealer, red flags, equipment,
@@ -832,7 +835,9 @@ document.addEventListener("click", e => {
   Object.assign(F, DEFAULTS, { fams: [] }); bindFilters(); famChips(); save();
 });
 function renderDeals() {
-  const by = { score: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (b.score ?? -1) - (a.score ?? -1) || (listedAt(b) - listedAt(a)),
+  // equal scores (the 40%+ discount cap makes many 85s): more comps = more trustworthy first, then nearest, then newest
+  const by = { score: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (b.score ?? -1) - (a.score ?? -1)
+      || (b.comps ?? 0) - (a.comps ?? 0) || (a.distance ?? 1e6) - (b.distance ?? 1e6) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);

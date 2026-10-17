@@ -30,7 +30,7 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 - [ ] Typical price from private sellers only (or dealer asks down-weighted); the buy box is private-only.
 - [ ] Ask the model for the price written in the ad text, to recover "$1" / "$123" placeholder listings.
 - [ ] Dealer websites as a new-price source for trailers (Marketplace only shows dealers who post there).
-- [ ] Lazy-load offer notes on the card (20% of the listings feed).
+- [ ] A proper "trip" switch in Setup (search area + auto-return) instead of hand-set settings; Craigslist site per area.
 - [ ] Cap starred page re-checks (every full scan today) once the shortlist grows.
 
 ## Known small issues (from the 10/9 review, not fixed)
@@ -43,6 +43,12 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 10/17 Offer notes load when the Offer box opens; dashboard hides listings past 250 mi (Setup "Show listings within",
+  starred always shown; still used as comps). Feed 11.3 -> 8.75 MB. Trip mode for Appleton, WI: search area moved
+  to Appleton (FB slug `appleton`), auto-restore to Plymouth Sun 10/18 06:00 (`deals-trip-restore.timer`,
+  `/opt/deals/data/restore_home.py` + `home_settings.json` on .82 - delete after it fires). Craigslist stays on the
+  Minneapolis site during the trip.
 
 - 10/15 Best-deal order breaks score ties by comps (confidence), then distance, then newest (was newest only).
 

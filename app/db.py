@@ -119,6 +119,7 @@ DEFAULT_SETTINGS = {
     "home_lat": "45.0400",
     "home_lon": "-93.4900",
     "radius_mi": "100",
+    "feed_max_mi": "250",          # the dashboard leaves out listings farther than this (0 = no limit); comps keep them
     "fb_location": "plymouth-mn",  # FB marketplace city slug; radius is applied around it
     "fb_proxy": "",                # http://user:pass@host:port - a VPN provider's proxy, used for Facebook only
     "fb_route": "auto",            # home | proxy | auto (home first, proxy while home is blocked)

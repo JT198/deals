@@ -1748,6 +1748,21 @@ def test_trim_values_learned_per_family():
     assert "top trim" in (commander[3] or ""), commander
 
 
+def test_feed_distance_cap_and_offer_notes_on_demand():
+    con = reset([{"location": "Ames, IA", "offer_notes": json.dumps(["open low"])},
+                 {"id": "facebook:1", "ext_id": "1", "location": "Ames, IA", "starred": 1},
+                 {"id": "facebook:2", "ext_id": "2", "location": None, "offer_notes": json.dumps(["walk at 9k"])}],
+                feed_max_mi="100")
+    con.execute("INSERT OR REPLACE INTO geocache VALUES ('Ames, IA', 42.03, -93.62)"); con.commit()
+    c = client()
+    ids = sorted(d["id"] for d in c.get("/api/listings").json())
+    assert ids == ["facebook:1", "facebook:2"], ids          # far one out; starred and unknown-distance stay
+    assert all("offer_notes" not in d for d in c.get("/api/listings").json())
+    assert c.get("/api/listing/facebook:2/offer").json() == {"notes": ["walk at 9k"]}
+    assert c.put("/api/settings", json={"feed_max_mi": "0"}).status_code == 200
+    assert len(c.get("/api/listings").json()) == 3
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -630,6 +630,14 @@ function whyBox(d) {
   return `<details class="offer why" data-why="${esc(d.id)}"><summary>Why ${money(d.expected)}? <span class="hint">${d.comps || 0} comps</span></summary>
     <div id="${id}" class="whybody"><span class="hint">Loading…</span></div></details>`;
 }
+document.addEventListener("toggle", async e => {     // offer notes load when the Offer box opens
+  const det = e.target; if (!det.matches || !det.matches("details.offer") || det.matches("details.why") || !det.open) return;
+  const ul = det.querySelector("[data-offer]"); if (!ul || ul.dataset.loaded) return;
+  try {
+    const o = await api("/api/listing/" + encodeURIComponent(ul.dataset.offer) + "/offer");
+    ul.innerHTML = o.notes.map(n => `<li>${esc(n)}</li>`).join(""); ul.dataset.loaded = 1;
+  } catch (err) { ul.innerHTML = `<li class="err">Couldn't load the notes (${esc(err.message)})</li>`; }
+}, true);
 document.addEventListener("toggle", async e => {
   const det = e.target; if (!det.matches || !det.matches("details.why") || !det.open) return;
   const box = det.querySelector(".whybody"); if (!box || box.dataset.loaded) return;
@@ -667,7 +675,7 @@ function offerBox(d) {
     : `<div><b>${money(d.offer_open)}</b><span>offer</span></div>`;
   return `<details class="offer"><summary>Offer guidance${d.offer_rough ? ' <span class="rough">rough - few comps</span>' : ""}</summary>
     <div class="nums" style="margin-top:6px">${nums}<div><b>${money(d.offer_walk)}</b><span>walk away above</span></div></div>
-    <ul>${(d.offer_notes || []).map(n => `<li>${esc(n)}</li>`).join("")}</ul>
+    <ul class="offernotes" data-offer="${esc(d.id)}"><li class="hint">Loading…</li></ul>
     <div class="msg"><textarea id="${mid}" aria-label="Message to the seller">${esc(sellerMessage(d))}</textarea>
       <div class="row"><button class="btn primary" data-copy="${mid}">Copy message</button>
       <span class="hint">edit if you like, then paste into Messenger / Craigslist reply</span></div></div></details>`;
@@ -1133,6 +1141,7 @@ async function renderSetup() {
     <label>Home ZIP (Craigslist)<input name="home_zip" value="${esc(v.home_zip)}"></label>
     <label>Home lat, lon (distances)<input name="home_latlon" value="${esc(v.home_lat)}, ${esc(v.home_lon)}"></label>
     <label>Radius (miles)<input name="radius_mi" type="number" value="${esc(v.radius_mi)}"><span class="hint">Used by the next scan</span></label>
+    <label>Show listings within (miles)<input name="feed_max_mi" type="number" value="${esc(v.feed_max_mi ?? 250)}"><span class="hint">Farther ones are hidden from the dashboard (starred ones always show) but still price the nearby ones. 0 = no limit</span></label>
     <label>Facebook city<input name="fb_location" value="${esc(v.fb_location)}"><span class="hint">Marketplace URL slug, e.g. minneapolis</span></label>
     <label>Deal alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
     <label>...and at least this % under typical<input name="alert_min_pct" type="number" value="${esc(v.alert_min_pct)}"><span class="hint">0 = no floor. Against typical asking, or what similar ones sell for if lower</span></label>

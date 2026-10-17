@@ -93,7 +93,7 @@ def _geo(con):
 LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_price, strike_price, location, image, seller_type,
   listed_at, first_seen, last_seen, status, relevant, year, make, model, family, trim, seats, hours,
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
-  reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_notes, offer_rough, equipment, usage_doubt, lat, lon, new_price, new_comps, expected_sold, sold_comps, sold_basis,
+  reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_rough, equipment, usage_doubt, lat, lon, new_price, new_comps, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit,
   units, track_in, cc, stage, stage_ts, alerted_score,
   (SELECT 1 FROM corrections c WHERE c.listing_id = listings.id) corrected,
@@ -115,8 +115,9 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
     # listings_rev is bumped by every writer (scans, rescoring, the edit endpoint); the counts are a backstop
     version = tuple(con.execute(f"SELECT COUNT(*), MAX(last_seen) FROM listings WHERE {where_sql}").fetchone())
     st = db.settings(con)
+    max_mi = int(st.get("feed_max_mi") or 0)
     key = (where_sql, version, tuple(con.execute("SELECT COUNT(*), TOTAL(lat) FROM geocache").fetchone()),
-           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"))
+           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"), max_mi)
     with _LISTINGS_BUILD:       # two tabs refreshing after a scan build it once, not twice in parallel
         hit = _LISTINGS_CACHE.get(where_sql)
         if not hit or hit["key"] != key:
@@ -127,6 +128,8 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
                 d["distance"] = dist(d)
                 d["lat"], d["lon"], d["approx"] = dist.point(d)
                 d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
+                if max_mi and d["distance"] is not None and d["distance"] > max_mi and not d["starred"]:
+                    continue        # too far to drive for; still a comp for pricing nearby ones
                 # empty fields are most of the bytes; the page treats missing like null / empty
                 out.append({k: v for k, v in d.items() if v is not None and v != "" and v != []})
             body = json.dumps(out, separators=(",", ":")).encode()
@@ -303,6 +306,15 @@ def _market_inputs(con, sold: bool = False):
             _MARKET_CACHE["sold"] = score._comps(con, sold=True)
         return _MARKET_CACHE["sold"], _MARKET_CACHE["effects"]
     return _MARKET_CACHE["comps"], _MARKET_CACHE["effects"]
+
+
+@app.get("/api/listing/{lid:path}/offer")
+def offer_notes(lid: str):
+    """The offer-guidance notes, loaded when a card's Offer box is opened (a third of the feed otherwise)."""
+    r = db.connect().execute("SELECT offer_notes FROM listings WHERE id = ?", (lid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "no such listing")
+    return {"notes": json.loads(r["offer_notes"] or "[]")}
 
 
 @app.get("/api/listing/{lid:path}/why")
@@ -537,12 +549,12 @@ def get_settings():
 
 
 # key -> (min, max, blank allowed)
-NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "tow_capacity_lb": (0, 40000, True),
+NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "feed_max_mi": (0, 2000, False), "tow_capacity_lb": (0, 40000, True),
            "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
            "home_lat": (-90, 90, False), "home_lon": (-180, 180, False)}
 EDITABLE = {"alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
-            "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location"}
+            "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location", "feed_max_mi"}
 
 
 @app.put("/api/settings")

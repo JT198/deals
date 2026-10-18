@@ -9,6 +9,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       Instant alerts are only as good as the box.
 - [ ] **Use the signals**: Star / Fix / Hide on the dashboard, 👍 / 👎 under Telegram alerts. The 10/12 tuning
       works off these; as of 10/10 there are 3 stars and nothing else.
+- [ ] Cloudflare Access: deals app Session Duration 24 h -> 1 month (and Global session timeout); optionally add
+      Google login so it's one tap instead of an emailed code.
 - [ ] Facebook app: saved-search notifications for the top 2-3 models (instant, free, within Facebook's rules).
 
 ## Photo-check pilot (decision held at the 10/12 check-in)
@@ -46,9 +48,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 - 10/17 Offer notes load when the Offer box opens; dashboard hides listings past 250 mi (Setup "Show listings within",
   starred always shown; still used as comps). Feed 11.3 -> 8.75 MB. Trip mode for Appleton, WI: search area moved
-  to Appleton (FB slug `appleton`), auto-restore to Plymouth Sun 10/18 06:00 (`deals-trip-restore.timer`,
-  `/opt/deals/data/restore_home.py` + `home_settings.json` on .82 - delete after it fires). Craigslist stays on the
-  Minneapolis site during the trip.
+  to Appleton (FB slug `appleton`; Craigslist followed via the ZIP), restored to Plymouth 10/18 06:00 as planned,
+  one-off timer + files removed.
 
 - 10/15 Best-deal order breaks score ties by comps (confidence), then distance, then newest (was newest only).
 

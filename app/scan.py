@@ -49,6 +49,7 @@ CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
 PARSE_CONCURRENCY = 3           # parallel requests to Ollama on .76
 STALE_AFTER = 5 * 86400
+CL_STALE_AFTER = 3 * 86400
 MAX_STALE = 14 * 86400
 
 
@@ -611,9 +612,9 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         # ads that aren't machines, which nobody re-checks.
         if not (quick or sold):
             cutoff = db.now() - stale_after(db.settings(con))
-            if cl_found > 0:
+            if cl_found > 0:      # every scan runs every Craigslist search, so 3 days unseen is gone
                 con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
-                               AND source = 'craigslist' AND last_seen < ?""", (cutoff,))
+                               AND source = 'craigslist' AND last_seen < ?""", (db.now() - CL_STALE_AFTER,))
             con.execute("""UPDATE listings SET status='gone' WHERE status IN ('active','pending')
                            AND source = 'facebook' AND COALESCE(relevant, 0) = 0 AND parsed = 1 AND last_seen < ?""", (cutoff,))
             con.commit()

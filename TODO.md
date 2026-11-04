@@ -46,6 +46,10 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/03 Dashboard hides Facebook listings unseen by any search/sweep/page check for a sweep cycle (~8.6 d; 14.8k were
+  unseen 7 d+ while page checks run ~1,600/day over 35.6k live) - records unchanged, page check still decides
+  "ended". Craigslist gone after 3 days unseen (was the sweep-based 8.6 d).
+
 - 11/03 Photos saved on our own disk (Facebook links expire in days; 16k of 30k had gone blank): images.py caches
   each photo while its link works (every full scan + one-off backfill), served at /img/...; item pages supply a
   fresh og:image; 6 top-scoring listings with expired photos get their page re-read per full scan (+10 at night).

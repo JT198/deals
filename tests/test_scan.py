@@ -1809,6 +1809,17 @@ def test_slim_feed_cards_and_saved_photos():
     assert not os.path.exists(os.path.join(images.IMG_DIR, name))
 
 
+def test_unseen_facebook_listings_are_hidden():
+    old = db.now() - 20 * 86400
+    con = reset([{"last_seen": old},
+                 {"id": "facebook:1", "ext_id": "1", "last_seen": old, "starred": 1},
+                 {"id": "craigslist:2", "ext_id": "2", "source": "craigslist", "last_seen": db.now() - 86400},
+                 {"id": "facebook:3", "ext_id": "3"}])
+    ids = sorted(d["id"] for d in client().get("/api/listings").json())
+    assert ids == ["craigslist:2", "facebook:1", "facebook:3"], ids
+    assert con.execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] == "active"   # records untouched
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

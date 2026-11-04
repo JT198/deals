@@ -116,8 +116,12 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
     version = tuple(con.execute(f"SELECT COUNT(*), MAX(last_seen) FROM listings WHERE {where_sql}").fetchone())
     st = db.settings(con)
     max_mi = int(st.get("feed_max_mi") or 0)
+    # a Facebook listing no search, sweep or page check has seen in a full sweep cycle is almost always
+    # deleted - its page check (which can be weeks away with 35k listings) decides for the records, but
+    # the dashboard stops showing it now. Starred ones always show.
+    unseen_before = db.now() - scan.stale_after(st)
     key = (where_sql, version, tuple(con.execute("SELECT COUNT(*), TOTAL(lat) FROM geocache").fetchone()),
-           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"), max_mi)
+           st.get("home_lat"), st.get("home_lon"), st.get("listings_rev"), max_mi, db.now() // 3600)
     with _LISTINGS_BUILD:       # two tabs refreshing after a scan build it once, not twice in parallel
         hit = _LISTINGS_CACHE.get(where_sql)
         if not hit or hit["key"] != key:
@@ -127,6 +131,8 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
                 d = _card(r, dist)
                 if max_mi and d.get("distance") is not None and d["distance"] > max_mi and not d.get("starred"):
                     continue        # too far to drive for; still a comp for pricing nearby ones
+                if d.get("source") == "facebook" and (d.get("last_seen") or 0) < unseen_before and not d.get("starred"):
+                    continue        # probably deleted (see above)
                 # only what the filters, table and map need; a card's details come from /api/cards when shown
                 out.append({k: d[k] for k in LIGHT if k in d})
             body = json.dumps(out, separators=(",", ":")).encode()

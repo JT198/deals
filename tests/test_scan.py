@@ -1820,6 +1820,38 @@ def test_unseen_facebook_listings_are_hidden():
     assert con.execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] == "active"   # records untouched
 
 
+def test_photo_cache_reaches_past_expired_links_and_fading_rechecks():
+    import tempfile
+    from app import images
+    stale = lambda i: f"https://scontent.x/{i}.jpg?oe=" + format(db.now() - 86400, "X")
+    fresh = "https://scontent.x/ok.jpg?oe=" + format(db.now() + 86400, "X")
+    # 30 top scores with expired links, one low score with a working one: the working one gets saved
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "score": 90, "image": stale(i)} for i in range(30)]
+                + [{"id": "facebook:99", "ext_id": "99", "score": 10, "image": fresh}])
+    images.IMG_DIR = tempfile.mkdtemp()
+
+    class Resp:
+        status_code = 200
+        headers = {"content-type": "image/jpeg"}
+        content = b"jpg"
+
+    class HTTP:
+        async def get(self, url):
+            return Resp()
+    assert asyncio.run(images.cache(con, HTTP(), limit=5)) == 1
+    assert con.execute("SELECT img_file FROM listings WHERE id = 'facebook:99'").fetchone()[0]
+
+    # fading rechecks: shown listings unseen 2+ days, instant-alert categories first
+    now = db.now()
+    con = reset([{"id": "facebook:a", "ext_id": "a", "category": "sled", "score": 99, "last_seen": now - 3 * 86400, "detail_fetched": 1},
+                 {"id": "facebook:b", "ext_id": "b", "category": "utv4", "score": 60, "last_seen": now - 3 * 86400, "detail_fetched": 1},
+                 {"id": "facebook:c", "ext_id": "c", "category": "utv4", "score": 90, "last_seen": now - 3600, "detail_fetched": 1},
+                 {"id": "facebook:d", "ext_id": "d", "category": "utv4", "score": 90, "last_seen": now - 30 * 86400, "detail_fetched": 1}])
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'",
+                (json.dumps({"utv4": {"enabled": True}, "sled": {"enabled": False}}),)); con.commit()
+    assert [r["id"] for r in scan.fading_candidates(con, 5)] == ["facebook:b", "facebook:a"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

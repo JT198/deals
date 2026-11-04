@@ -17,7 +17,7 @@ import httpx
 from . import db
 
 IMG_DIR = os.path.join(os.path.dirname(db.DB_PATH), "img")
-PER_RUN = 300
+PER_RUN = 1000          # ~20 KB each from Facebook's photo CDN (not Marketplace pages; no page budget)
 MAX_BYTES = 2_000_000
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 
@@ -43,11 +43,14 @@ async def cache(con, http: httpx.AsyncClient, limit: int | None = PER_RUN, concu
     """Download photos for live listings that don't have a copy yet and whose link still works.
     Highest scores first, so the cards you see get theirs first."""
     os.makedirs(IMG_DIR, exist_ok=True)
+    # every candidate, filtered here: a SQL LIMIT on the top scores used to fill up with already-expired
+    # links, so working links further down were never reached (4.5k shown cards had no photo on 11/4)
     rows = con.execute(
         """SELECT id, image FROM listings WHERE img_file IS NULL AND image IS NOT NULL AND image != ''
              AND status IN ('active', 'pending') AND COALESCE(relevant, 1) != 0
-           ORDER BY COALESCE(score, 0) DESC""" + (" LIMIT ?" if limit else ""), (limit * 3,) if limit else ()).fetchall()
-    todo = [r for r in rows if not expired(r["image"])][:limit] if limit else [r for r in rows if not expired(r["image"])]
+           ORDER BY COALESCE(score, 0) DESC""").fetchall()
+    todo = [r for r in rows if not expired(r["image"])]
+    todo = todo[:limit] if limit else todo
     gate = asyncio.Semaphore(concurrency)
     saved = 0
 

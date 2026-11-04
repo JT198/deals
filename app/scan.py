@@ -41,7 +41,8 @@ SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the fir
 SOLD_MAX_SECS = 3 * 3600      # the sold pull (~190 loads) waits out the hourly budget instead of quitting, up to this long
 FB_RECHECKS_PER_RUN = 6
 PHOTO_RECHECKS_PER_RUN = 6    # best-scoring listings whose photo link expired before we saved a copy
-STALE_RECHECKS_PER_RUN = 12   # listings nobody has seen in a while: their page decides, not the calendar
+FADING_RECHECKS_PER_RUN = 14  # still on the dashboard but unseen for 2+ days: catch deletions before Jon does
+STALE_RECHECKS_PER_RUN = 4    # long unseen (already hidden from the dashboard): only the records care
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
 FB_BUDGET_RESERVE = 45        # ...of which the long lanes leave this many for the fast lane
 QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
@@ -140,8 +141,10 @@ def recheck_candidates(con) -> list:
       1. suspects - failed to load last time; retried every scan so a removed listing is confirmed in ~an hour
       2. starred listings, every scan (watch alerts)
       3. listings scoring HOT_SCORE+ not checked in HOT_RECHECK_SECS (the ones Jon actually looks at)
-      4. stale - not seen by any search or sweep in stale_after(): the page says whether it is gone
-      5. a round-robin of everything else relevant, least recently seen first"""
+      4. fading - still on the dashboard, unseen 2+ days (instant-alert categories first)
+      5. photos - top scores whose photo link expired before we saved a copy
+      6. stale - not seen by any search or sweep in stale_after() (already hidden): the page says if it's gone
+      7. a round-robin of everything else relevant, least recently seen first"""
     live = "source='facebook' AND detail_fetched=1 AND status IN ('active','pending')"
     now = db.now()
     groups = [
@@ -151,8 +154,9 @@ def recheck_candidates(con) -> list:
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1 AND score >= ?
                         AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
                     (HOT_SCORE, now - HOT_RECHECK_SECS, HOT_RECHECKS_PER_RUN)).fetchall(),
-        stale_candidates(con, STALE_RECHECKS_PER_RUN),
+        fading_candidates(con, FADING_RECHECKS_PER_RUN),
         photo_candidates(con, PHOTO_RECHECKS_PER_RUN),
+        stale_candidates(con, STALE_RECHECKS_PER_RUN),
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1
                         ORDER BY last_seen ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall(),
     ]
@@ -163,6 +167,23 @@ def recheck_candidates(con) -> list:
                 seen.add(r["id"])
                 out.append(r)
     return out
+
+
+def fading_candidates(con, limit: int) -> list:
+    """Facebook listings the dashboard still shows that no search has seen for 2+ days - the ones that turn
+    out deleted when Jon clicks them (3 of 30 random 4-seat UTVs on 11/4). Categories with instant alerts
+    on come first, then the best scores, then the longest unseen."""
+    st = db.settings(con)
+    rules = db.alert_rules(st)
+    instant = [c for c, r in rules.items() if r.get("enabled")] or ["utv4"]
+    now = db.now()
+    return con.execute(
+        f"""SELECT id, ext_id, price FROM listings
+            WHERE source='facebook' AND detail_fetched=1 AND status IN ('active','pending') AND relevant = 1
+              AND hidden = 0 AND last_seen BETWEEN ? AND ? AND COALESCE(last_checked, 0) < ?
+            ORDER BY (category IN ({",".join("?" * len(instant))})) DESC, COALESCE(score, 0) DESC, last_seen ASC
+            LIMIT ?""",
+        (now - stale_after(st), now - 2 * 86400, now - 2 * 86400, *instant, limit)).fetchall()
 
 
 def stale_candidates(con, limit: int) -> list:

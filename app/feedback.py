@@ -87,7 +87,13 @@ def main():
 
     async def go():
         async with httpx.AsyncClient(timeout=20) as http:
-            n = await poll(con, http)
+            try:
+                n = await poll(con, http)
+            except httpx.HTTPError as e:
+                # Telegram 5xx / timeouts happen; the next poll (2 min) catches up. Never log the URL: it holds the token.
+                code = getattr(getattr(e, "response", None), "status_code", None)
+                print(f"feedback: Telegram unavailable ({code or type(e).__name__}), will retry")
+                return
             if n:
                 print(f"feedback: {n} verdict(s) recorded")
     asyncio.run(go())

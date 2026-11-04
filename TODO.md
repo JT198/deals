@@ -46,6 +46,15 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/04 Review of the recurring issues. Measured: top 30 dashboard listings 29 active + 1 pending (none deleted);
+  random 30 shown 4-seat UTVs: 25 active, 2 pending, 3 deleted (10%). Fixes: page checks re-aimed at listings
+  still shown but unseen 2+ days, instant-alert categories first (`fading_candidates`, 14/full scan + 10/night;
+  long-hidden "stale" checks 12 -> 4). Photo saver bug: a SQL LIMIT over top scores filled with expired links so
+  working links further down were never saved - now filters all candidates, 1,000/full scan. Facebook photo
+  links die ~4.4 d after a sighting; the 4.5k photo-less shown cards were all last seen 5-8 d ago and will clear
+  as they are re-seen or age out. Feedback poller: Telegram 5xx/timeouts no longer dump tracebacks (153 in the
+  log, with the bot token in the URL - token redacted from all deals logs). Cards say "last confirmed up Nd ago".
+
 - 11/03 Dashboard hides Facebook listings unseen by any search/sweep/page check for a sweep cycle (~8.6 d; 14.8k were
   unseen 7 d+ while page checks run ~1,600/day over 35.6k live) - records unchanged, page check still decides
   "ended". Craigslist gone after 3 days unseen (was the sweep-based 8.6 d).

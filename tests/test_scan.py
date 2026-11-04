@@ -1624,7 +1624,7 @@ def test_why_corrections_stages_and_alert_activity():
     row = con.execute("SELECT miles, red_flags, equipment, expected, corrected FROM listings, (SELECT 1 corrected) WHERE id = 'facebook:0'").fetchone()
     assert row["miles"] == 9000 and json.loads(row["red_flags"]) == ["needs engine work"] and json.loads(row["equipment"]) == ["cab", "heat"]
     assert row["expected"] != before
-    assert c.get("/api/listings").json()[0]["corrected"] == 1
+    assert c.post("/api/cards", json={"ids": ["facebook:0"]}).json()[0]["corrected"] == 1
 
     class Resp:
         def raise_for_status(self):
@@ -1761,6 +1761,52 @@ def test_feed_distance_cap_and_offer_notes_on_demand():
     assert c.get("/api/listing/facebook:2/offer").json() == {"notes": ["walk at 9k"]}
     assert c.put("/api/settings", json={"feed_max_mi": "0"}).status_code == 200
     assert len(c.get("/api/listings").json()) == 3
+
+
+def test_slim_feed_cards_and_saved_photos():
+    import tempfile
+    from app import images, web
+    fresh = "https://scontent.x.fbcdn.net/a.jpg?stp=x&oe=" + format(db.now() + 86400, "X") + "&_nc=1"
+    stale = "https://scontent.x.fbcdn.net/b.jpg?stp=x&oe=" + format(db.now() - 86400, "X") + "&_nc=1"
+    assert not images.expired(fresh) and images.expired(stale) and not images.expired("https://images.craigslist.org/c.jpg")
+    con = reset([{"image": fresh, "summary": "clean unit", "reasons": json.dumps(["30% under"])},
+                 {"id": "facebook:1", "ext_id": "1", "image": stale}])
+    c = client()
+    feed = c.get("/api/listings").json()
+    assert all("image" not in d and "summary" not in d and "reasons" not in d for d in feed)
+    assert {"id", "title", "price", "score", "url", "category"} <= set(feed[0])
+    full = {d["id"]: d for d in c.post("/api/cards", json={"ids": ["facebook:0", "facebook:1"]}).json()}
+    assert full["facebook:0"]["image"] == fresh and full["facebook:0"]["summary"] == "clean unit"
+    assert "image" not in full["facebook:1"]                                   # an expired link isn't sent at all
+    assert c.post("/api/cards", json={"ids": []}).json() == []
+
+    # the photo cache: fresh links are downloaded once and served from our disk; expired ones are skipped
+    images.IMG_DIR = tempfile.mkdtemp()
+
+    class Resp:
+        status_code = 200
+        headers = {"content-type": "image/jpeg"}
+        content = b"\xff\xd8jpegbytes"
+
+    class HTTP:
+        calls = []
+
+        async def get(self, url):
+            HTTP.calls.append(url)
+            return Resp()
+    assert asyncio.run(images.cache(con, HTTP())) == 1 and HTTP.calls == [fresh]
+    name = con.execute("SELECT img_file FROM listings WHERE id = 'facebook:0'").fetchone()[0]
+    assert name == images.file_name("facebook:0")
+    card = c.post("/api/cards", json={"ids": ["facebook:0"]}).json()[0]
+    assert card["image"] == "/img/" + name
+    r = c.get(card["image"])
+    assert r.status_code == 200 and r.content == b"\xff\xd8jpegbytes" and "max-age" in r.headers["cache-control"]
+    assert c.get("/img/..%2F..%2Fetc%2Fpasswd").status_code == 404 and c.get("/img/" + "0" * 20 + ".jpg").status_code == 404
+    assert asyncio.run(images.cache(con, HTTP())) == 0                          # nothing left to fetch
+    con.execute("UPDATE listings SET detail_fetched = 1, relevant = 1, score = 90 WHERE id = 'facebook:1'"); con.commit()
+    assert [r["id"] for r in scan.photo_candidates(con, 5)] == ["facebook:1"]   # expired link: its page gets re-read
+    images.forget(["facebook:0"])
+    assert not os.path.exists(os.path.join(images.IMG_DIR, name))
 
 
 if __name__ == "__main__":

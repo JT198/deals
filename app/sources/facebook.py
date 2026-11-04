@@ -6,6 +6,7 @@ so there is nothing to get banned - the worst case is FB showing a login wall,
 which shows up as zero results in the run log.
 """
 import asyncio
+import html as html_lib
 import json
 import random
 import re
@@ -174,6 +175,10 @@ class Facebook:
                     _walk(json.loads(m.group(1)), "redacted_description", hits)
                 except ValueError:
                     pass
+            # a fresh photo link (the one from the search expires after a few days)
+            og = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html) \
+                or re.search(r'<meta[^>]+content="([^"]+)"[^>]+property="og:image"', html)
+            photo = html_lib.unescape(og.group(1)) if og and "scontent" in og.group(1) else None
         finally:
             await page.close()
         for o in hits:
@@ -189,6 +194,7 @@ class Facebook:
                 "seller_type": _seller(seller),
                 "status": status,
                 "price": _money(o.get("listing_price")),
+                "image": photo,
             }
         return None
 

@@ -46,6 +46,12 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/03 Photos saved on our own disk (Facebook links expire in days; 16k of 30k had gone blank): images.py caches
+  each photo while its link works (every full scan + one-off backfill), served at /img/...; item pages supply a
+  fresh og:image; 6 top-scoring listings with expired photos get their page re-read per full scan (+10 at night).
+  Slim feed: /api/listings carries only filter/table/map fields (13.1 -> 3.1 MB); cards fetch details for the
+  ~120 on screen from /api/cards. Live listings 38.6k.
+
 - 10/17 Offer notes load when the Offer box opens; dashboard hides listings past 250 mi (Setup "Show listings within",
   starred always shown; still used as comps). Feed 11.3 -> 8.75 MB. Trip mode for Appleton, WI: search area moved
   to Appleton (FB slug `appleton`; Craigslist followed via the ZIP), restored to Plymouth 10/18 06:00 as planned,

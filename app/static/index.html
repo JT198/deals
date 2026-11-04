@@ -86,6 +86,7 @@ details.offer summary { cursor: pointer; font-weight: 600; list-style: none; }
 details.offer summary::-webkit-details-marker { display: none; }
 details.offer summary::after { content: " ▸"; color: var(--muted); font-weight: 400; }
 details.why { margin-top: 6px; }
+.card .img .nophoto { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
 .fixbox { margin-top: 8px; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
 select.stage { max-width: 160px; }
 details.why h4 { margin: 8px 0 2px; font-size: 13px; }
@@ -531,7 +532,7 @@ function filteredRaw() {
     (!F.fams.length || F.fams.includes(d.family)) &&
     (!F.age || (F.age === "visit" ? isNew(d) : listedAt(d) >= Date.now() / 1000 - parseInt(F.age) * 3600)) &&
     (!F.cond || (F.cond === "new" ? d.is_new === 1 : d.is_new !== 1)) &&
-    (!q || (d.title + " " + (d.summary || "") + " " + (d.location || "") + " " + (d.notes || "")).toLowerCase().includes(q)
+    (!q || (d.title + " " + (d.location || "") + " " + (d.notes || "")).toLowerCase().includes(q)
       || (SEARCH.q === q && SEARCH.ids.has(d.id))));
 }
 
@@ -708,7 +709,7 @@ function card(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
   const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
   return `<article class="card">
-    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^https?:\/\/[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">
+    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 photo not saved yet - Open shows it</span>' : ""}
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
         : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold/removed</span>'
         : isNew(d) ? '<span class="ribbon new">NEW</span>'
@@ -851,9 +852,28 @@ function renderDeals() {
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
   $("#view-cards").classList.toggle("on", VIEW === "cards"); $("#view-map").classList.toggle("on", VIEW === "map");
   if (VIEW === "map") { renderMap(rows); return; }
-  $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${rows.slice(0, 120).map(card).join("")}</div>`
+  const shown = rows.slice(0, 120);
+  $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${shown.map(card).join("")}</div>`
     : `<div class="empty">No listings match these filters yet.</div>`);
+  withDetails(shown);
 }
+// The feed carries only what filtering needs; a card's photo, facts, tags and summary come from /api/cards
+// for the ~120 cards on screen, then the cards are drawn again.
+const CARDS_PENDING = new Set();
+async function withDetails(rows) {
+  const need = rows.filter(d => !d._full && !CARDS_PENDING.has(d.id)).map(d => d.id);
+  if (!need.length) return;
+  need.forEach(id => CARDS_PENDING.add(id));
+  try {
+    for (let i = 0; i < need.length; i += 150) {
+      const full = await api("/api/cards", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: need.slice(i, i + 150) }) });
+      for (const f of full) { const d = BYID.get(f.id); if (d) Object.assign(d, f, { _full: 1 }); }
+    }
+  } catch (err) { problem(`Couldn't load the card details (${err.message})`); return; }
+  finally { need.forEach(id => CARDS_PENDING.delete(id)); }
+  if (TAB === "deals" && VIEW !== "map") renderDeals();
+}
+let BYID = new Map();
 
 // ---------- Map view: the same filtered listings, colored by score ----------
 let VIEW = store.get("view", "cards"), MAP = null, SETTINGS_RADIUS = null;
@@ -1395,7 +1415,7 @@ async function load() {
   if (DATA.length && etag && etag === LAST_ETAG) { status(); return; }
   LAST_ETAG = etag;
   HOME = (resp.headers.get("X-Home") || "").split(",").map(Number); if (HOME.length !== 2 || HOME.some(isNaN)) HOME = null;
-  DATA = await resp.json(); catBar(); famChips(); render(); status(); markSeen(); }
+  DATA = await resp.json(); BYID = new Map(DATA.map(d => [d.id, d])); catBar(); famChips(); render(); status(); markSeen(); }
 let HOME = null;
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);

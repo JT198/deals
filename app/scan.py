@@ -23,7 +23,7 @@ import traceback
 import httpx
 from playwright.async_api import async_playwright
 
-from . import buybox, db, geo, notify, parse, score
+from . import buybox, db, geo, images, notify, parse, score
 from .categories import cfg
 from .sources import craigslist
 from .sources.facebook import Facebook, pause
@@ -40,6 +40,7 @@ FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
 SOLD_MAX_SECS = 3 * 3600      # the sold pull (~190 loads) waits out the hourly budget instead of quitting, up to this long
 FB_RECHECKS_PER_RUN = 6
+PHOTO_RECHECKS_PER_RUN = 6    # best-scoring listings whose photo link expired before we saved a copy
 STALE_RECHECKS_PER_RUN = 12   # listings nobody has seen in a while: their page decides, not the calendar
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
 FB_BUDGET_RESERVE = 45        # ...of which the long lanes leave this many for the fast lane
@@ -150,6 +151,7 @@ def recheck_candidates(con) -> list:
                         AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
                     (HOT_SCORE, now - HOT_RECHECK_SECS, HOT_RECHECKS_PER_RUN)).fetchall(),
         stale_candidates(con, STALE_RECHECKS_PER_RUN),
+        photo_candidates(con, PHOTO_RECHECKS_PER_RUN),
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1
                         ORDER BY last_seen ASC LIMIT ?""", (FB_RECHECKS_PER_RUN,)).fetchall(),
     ]
@@ -169,6 +171,16 @@ def stale_candidates(con, limit: int) -> list:
                           WHERE source='facebook' AND detail_fetched=1 AND status IN ('active','pending')
                             AND relevant = 1 AND last_seen < ? ORDER BY last_seen ASC LIMIT ?""",
                        (db.now() - stale_after(db.settings(con)), limit)).fetchall()
+
+
+def photo_candidates(con, limit: int) -> list:
+    """Top-scoring live Facebook listings with no saved photo and an expired link: their page has a fresh one."""
+    from . import images
+    rows = con.execute("""SELECT id, ext_id, price, image FROM listings
+                          WHERE source='facebook' AND status IN ('active','pending') AND relevant = 1
+                            AND img_file IS NULL AND image IS NOT NULL AND COALESCE(last_checked, 0) < ?
+                          ORDER BY score DESC LIMIT ?""", (db.now() - 6 * 3600, limit * 5)).fetchall()
+    return [r for r in rows if images.expired(r["image"])][:limit]
 
 
 def title_only_candidates(con, limit: int) -> list:
@@ -620,6 +632,11 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
 
         # the 04:30 sold pull only reports on watched listings; deals wait for the morning's first scan
         alerts = await send_alerts(con, http, st, quiet=backfill or quiet, watch_only=sold)
+        if not (quick or sold):       # keep a copy of new photos before Facebook's links expire
+            try:
+                await images.cache(con, http)
+            except Exception as e:
+                errors.append(f"images: {e}")
 
     con.execute("UPDATE runs SET finished=?, found=?, new=?, alerts=?, errors=? WHERE id=?",
                 (db.now(), found, new, alerts, json.dumps(errors[:30]) if errors else None, run_id))

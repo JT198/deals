@@ -211,6 +211,7 @@ async def run() -> None:
                     # the idle window: pages for new finds first, then listings nobody has seen in a while,
                     # then ads dismissed from their title alone
                     todo = scan.pending_details(con, NIGHT_DETAILS)
+                    todo += scan.photo_candidates(con, 10)
                     todo += scan.stale_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
                     todo += scan.title_only_candidates(con, NIGHT_DETAILS - len(todo)) if len(todo) < NIGHT_DETAILS else []
                     await scan.fb_details(con, fb, todo, errors, lock=lock, budget=budget, route=route)

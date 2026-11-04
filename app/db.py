@@ -181,6 +181,7 @@ def init() -> None:
         "notes": "TEXT",                                         # Jon's / Alex's own note on a listing (shared)
         "backlog": "INTEGER NOT NULL DEFAULT 0",                 # old listing dug up by the first deep sweep: no alert
         "title_only": "INTEGER NOT NULL DEFAULT 0",              # parsed without its page (re-read when there is time)
+        "img_file": "TEXT",                                      # our copy of the photo in data/img (images.py)
         "stage": "TEXT", "stage_ts": "INTEGER",                  # buying workflow: contacted | viewing | offer | purchased | passed
         "new_price": "INTEGER", "new_comps": "INTEGER",          # what new ones list for at dealers (trailers)
         "expected_sold": "INTEGER", "sold_comps": "INTEGER",     # "typically sells around" and what it's based on
@@ -228,6 +229,8 @@ def prune(con) -> None:
     if old:
         con.executemany("DELETE FROM price_history WHERE listing_id = ?", [(i,) for i in old])
         con.executemany("DELETE FROM listings WHERE id = ?", [(i,) for i in old])
+        from . import images
+        images.forget(old)
     con.commit()
 
 

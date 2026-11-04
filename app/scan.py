@@ -470,14 +470,19 @@ def in_active_hours(st) -> bool:
 async def run(force=False, backfill=False, search=True, quick=False, quiet=False, sold=False) -> None:
     db.init()
     con = db.connect()
+    if db.end_trip_if_due(con):
+        print("trip over: search area back home")
     st = db.settings(con)
     if not (force or backfill or in_active_hours(st)):
         print("outside active hours, skipping")
         return
     radius = int(st.get("radius_mi") or 100)
+    every = db.scan_every(st)
     boost = 5 if backfill else 1   # catch-up runs take bigger bites
     searches = [dict(r) for r in con.execute(
         "SELECT * FROM searches WHERE enabled = 1" + (" AND quick = 1" if quick else ""))]
+    if quick:       # a category scanned once a day doesn't need minute-by-minute news
+        searches = [x for x in searches if every[x["category"]] < db.DAILY]
     random.shuffle(searches)
     t0 = db.now()
     fb_route, fb_until = fb_pick_route(st, t0)
@@ -489,8 +494,8 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     else:
         # Facebook: each search runs on its category's cadence (4-seat UTVs + mowers every run, others hourly)
         due = [s for s in searches if backfill or not s["last_run"]
-               or s["last_run"] <= t0 - cfg(s["category"])["every_min"] * 60 + 180]
-        due.sort(key=lambda s: (s["last_run"] or 0) + cfg(s["category"])["every_min"] * 60)   # most overdue first
+               or s["last_run"] <= t0 - every[s["category"]] * 60 + 180]
+        due.sort(key=lambda s: (s["last_run"] or 0) + every[s["category"]] * 60)   # most overdue first
         if not backfill:
             due = due[:FB_SEARCHES_PER_RUN]
     # the fast lane and the sold pull only follow up on what they found themselves

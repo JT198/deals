@@ -27,12 +27,9 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Build ideas (ordered)
 
-- [ ] Compare layout for the shortlist (today: the "Starred / shortlist" filter + the All-listings table).
-- [ ] Digest: include listings whose price dropped into deal territory yesterday, not only new ones.
 - [ ] Typical price from private sellers only (or dealer asks down-weighted); the buy box is private-only.
 - [ ] Ask the model for the price written in the ad text, to recover "$1" / "$123" placeholder listings.
 - [ ] Dealer websites as a new-price source for trailers (Marketplace only shows dealers who post there).
-- [ ] A proper "trip" switch in Setup (search area + auto-return) instead of hand-set settings; Craigslist site per area.
 - [ ] Cap starred page re-checks (every full scan today) once the shortlist grows.
 
 ## Known small issues (from the 10/9 review, not fixed)
@@ -45,6 +42,14 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/04 Enhancement round (Jon's picks): "🎯 My buy box" view is the default (instant-alert categories within their
+  limits, same rules as alerts); per-category Scan speed in Setup (`scan_every`; daily = no fast lane, swept only at
+  night) - mowers, jet skis, 2-seat UTVs, 3-wheelers set to daily; card buttons wrap on narrow screens; ranking
+  tapers past 40% under ("too good to be true?" flag) and discounts no lower than the sold price count 30% less;
+  digest "Price cuts into deal range"; opened listings fade + "Hide ones I've opened"; Compare shortlist table;
+  Trip panel in Setup (POST/DELETE /api/trip, auto-return at the next scan after the date); Min $ and Max year
+  filters; API errors show the server's reason.
 
 - 11/04 Review of the recurring issues. Measured: top 30 dashboard listings 29 active + 1 pending (none deleted);
   random 30 shown 4-seat UTVs: 25 active, 2 pending, 3 deleted (10%). Fixes: page checks re-aimed at listings

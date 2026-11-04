@@ -243,6 +243,46 @@ def title_key(title: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (title or "").lower())
 
 
+SCAN_CHOICES = (20, 60, 120, 180, 360, 720, 1440)     # minutes; Setup offers these
+
+
+def scan_every(st: dict) -> dict:
+    """category -> minutes between its Facebook searches (Setup -> Buy box "Scan"). Defaults from categories.py.
+    A category at 1440 (daily) also stays out of the fast lane, and the deep sweep does it only at night."""
+    try:
+        chosen = json.loads(st.get("scan_every") or "{}")
+    except ValueError:
+        chosen = {}
+    return {c: int(chosen.get(c) or cfg_["every_min"]) for c, cfg_ in CATEGORIES.items()}
+
+
+DAILY = 1440
+
+
+def trip(st: dict) -> dict | None:
+    try:
+        t = json.loads(st.get("trip") or "null")
+    except ValueError:
+        return None
+    return t if isinstance(t, dict) else None
+
+
+HOME_KEYS = ("home_label", "home_zip", "home_lat", "home_lon", "fb_location")
+
+
+def end_trip_if_due(con, force: bool = False) -> bool:
+    """Put the saved home search area back when the trip's return date has passed (or now, if forced)."""
+    t = trip(settings(con))
+    if not t or (not force and now() < int(t.get("until") or 0)):
+        return False
+    con.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                    [(k, str(v)) for k, v in (t.get("home") or {}).items() if k in HOME_KEYS])
+    con.execute("DELETE FROM settings WHERE key = 'trip'")
+    bump_rev(con)
+    con.commit()
+    return True
+
+
 def alert_rules(st: dict) -> dict:
     try:
         rules = json.loads(st.get("alert_rules") or "{}")

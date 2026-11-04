@@ -178,7 +178,11 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
 .tag { font-size: 12px; background: var(--surface-2); color: var(--text-2); border-radius: 6px; padding: 1px 7px; }
 .tag.flag { background: var(--bad-bg); color: var(--bad); }
 .tag.plus { background: var(--good-bg); color: var(--good); }
-.actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 6px; }
+.actions .btn { flex: 1 1 auto; min-width: 56px; text-align: center; }
+.card.seen { opacity: .62; }
+.card.seen:hover { opacity: 1; }
+table.compare td { vertical-align: top; } table.compare .thumb { width: 96px; height: 60px; background: var(--surface-2) center/cover no-repeat; border-radius: 6px; }
 .actions .btn { padding: 4px 9px; font-size: 13px; }
 .empty { color: var(--text-2); padding: 40px 0; text-align: center; }
 table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
@@ -232,8 +236,10 @@ td.t { white-space: normal; min-width: 240px; }
   <section id="filtersec">
     <div class="filters">
       <input id="f-q" type="search" placeholder="Search ads and notes" style="width:200px">
+      <label>Min $ <input id="f-min" type="number" step="1000" min="0"></label>
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
       <label>Min year <input id="f-year" type="number" min="1965" max="2030"></label>
+      <label>Max year <input id="f-ymax" type="number" min="1965" max="2030"></label>
       <label>Within <input id="f-dist" type="number" step="10" min="0" style="width:80px"> mi</label>
       <label>Listed <select id="f-age"><option value="">any time</option><option value="visit">new since my last visit</option>
         <option value="1h">last hour</option><option value="6h">last 6 hours</option><option value="24h">last 24 hours</option>
@@ -246,6 +252,8 @@ td.t { white-space: normal; min-width: 240px; }
       <label><input id="f-private" type="checkbox"> Private only</label>
       <label><input id="f-star" type="checkbox"> Starred / shortlist</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
+      <label title="Listings you've opened from here are faded; tick to leave them out"><input id="f-unseen" type="checkbox"> Hide ones I've opened</label>
+      <button class="btn" id="comparebtn" hidden>Compare shortlist</button>
       <span class="viewtoggle"><button class="btn" id="view-cards">Cards</button> <button class="btn" id="view-map">Map</button></span>
     </div>
     <div class="chips" id="f-fams" style="margin:-4px 0 14px"></div>
@@ -294,6 +302,10 @@ td.t { white-space: normal; min-width: 240px; }
         or going via the proxy.</li>
       <li><b>⚡ Fast lane</b> every 10 minutes: only the searches marked ⚡ in Setup, newest first, so a new listing
         usually shows up 10-20 minutes after it's posted.</li>
+      <li><b>Scan speed per category</b> (Setup → Buy box → Scan): how often Facebook is searched for it. Daily
+        categories also skip the 10-minute fast lane and are deep-swept only at night, which leaves more of the hourly
+        Facebook page budget for the categories you're buying in. <b>Trip</b> (Setup) moves the whole search area
+        somewhere for a few days and switches back on its own.</li>
       <li><b>🔎 Deep sweep</b> every 10 minutes, day and night, a few searches at a time: Facebook only shows a
         search's first couple dozen listings, so the scans above mostly see what was posted recently. The sweep
         re-runs every search one price range at a time (splitting a range while it keeps turning up listings we
@@ -393,6 +405,15 @@ td.t { white-space: normal; min-width: 240px; }
         deep-sweep cycle) is hidden - it's almost always been deleted. Its own page check later confirms it for the
         records, which keep sold and removed listings for 200 days for the trends. Craigslist listings drop off after
         3 days unseen. Starred listings always stay visible.</li>
+      <li><b>🎯 My buy box</b> (first tab, the default): only the categories with instant alerts on, inside their buy-box
+        limits - the same rules the alerts use. Everything else is one click away.</li>
+      <li><b>Filters</b>: min and max price, min and max year, distance, how recently listed. <b>Hide ones I've opened</b>
+        leaves out listings you've clicked through to (they're faded otherwise; remembered in this browser).
+        With <b>Starred / shortlist</b> ticked, <b>Compare shortlist</b> puts them side by side.</li>
+      <li><b>Way under typical</b>: up to 40% under, the bigger the discount the higher the score. Past 40% the score
+        tapers back down and the card says "too good to be true? check the model and price" - that's usually a misread
+        model, a partial price or a parts machine. A listing under typical asking but no cheaper than similar ones
+        actually sell for also counts for less.</li>
       <li><b>Best deal order</b>: by score; listings with the same score are ordered by how many comps back the
         price (more = more trustworthy), then nearest first, then newest. Discounts past 40% all score the same,
         so that tie-break matters at the top of the list.</li>
@@ -456,16 +477,19 @@ const money = n => n == null ? "—" : "$" + Math.round(n).toLocaleString();
 const ago = t => { if (!t) return ""; const s = Date.now()/1000 - t;
   if (s < 3600) return Math.max(1, Math.round(s/60)) + "m ago"; if (s < 86400) return Math.round(s/3600) + "h ago";
   return Math.round(s/86400) + "d ago"; };
-const api = async (url, opt) => { const r = await fetch(url, opt); if (!r.ok) throw new Error(r.status); return r.json(); };
+const api = async (url, opt) => { const r = await fetch(url, opt);
+  if (!r.ok) { let why = r.status; try { const j = await r.json(); if (j.detail || j.error) why = j.detail || j.error; } catch {} throw new Error(why); }
+  return r.json(); };
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("deals." + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem("deals." + k, JSON.stringify(v)); } catch {} } };
 
-let CATS = [], CAT = store.get("cat", "utv4");
+let CATS = [], CAT = store.get("cat", "box");
+if (!store.get("boxdefault", false)) { CAT = "box"; store.set("cat", CAT); store.set("boxdefault", true); }   // 11/04: buy box is the new default
 const SEARCH = { q: "", ids: new Set(), t: null };   // description matches come from the server
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
 if (!Array.isArray(SORT) || SORT.length !== 2) SORT = ["score", -1];
 if (!["deals", "all", "market", "setup", "sell"].includes(TAB)) TAB = "deals";
-const F = Object.assign({ fit: false, q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
+const F = Object.assign({ fit: false, q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
   store.get("filters", {}) || {});
 if (!Array.isArray(F.fams)) F.fams = [];
 const listedAt = d => d.listed_at || d.first_seen;
@@ -485,11 +509,11 @@ const markSeen = () => { if (document.visibilityState !== "visible") return; try
 const isNew = d => PREV_VISIT > 1 && d.first_seen > PREV_VISIT;
 
 function bindFilters() {
-  const map = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
+  const map = { "f-q": "q", "f-min": "min", "f-max": "max", "f-year": "year", "f-ymax": "ymax", "f-dist": "dist", "f-age": "age", "f-cond": "cond", "f-sort": "sort" };
   let typing;
   for (const [id, k] of Object.entries(map)) { $("#" + id).value = F[k]; $("#" + id).oninput = e => { F[k] = e.target.value;
     if (k === "q") { clearTimeout(typing); typing = setTimeout(save, 150); } else save(); }; }
-  const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden", "f-fit": "fit" };
+  const cb = { "f-private": "priv", "f-star": "star", "f-hidden": "hidden", "f-fit": "fit", "f-unseen": "unseen" };
   for (const [id, k] of Object.entries(cb)) { $("#" + id).checked = F[k]; $("#" + id).onchange = e => { F[k] = e.target.checked; save(); }; }
 }
 function save() { store.set("filters", F); render(); }
@@ -525,7 +549,10 @@ function filteredRaw() {
   if (q.length >= 2 && SEARCH.q !== q) { SEARCH.q = q; clearTimeout(SEARCH.t);
     SEARCH.t = setTimeout(async () => { try { SEARCH.ids = new Set(await api("/api/search?q=" + encodeURIComponent(q))); render(); } catch {} }, 300); }
   return DATA.filter(d =>
-    (CAT === "all" || d.category === CAT) &&
+    inCat(d) &&
+    (!F.unseen || !SEEN.has(d.id)) &&
+    (!F.min || (d.price && d.price >= +F.min)) &&
+    (!F.ymax || (d.year && d.year <= +F.ymax)) &&
     (!F.fit || CAT !== "trailer" || d.utv_fit === "yes") &&
     (F.hidden || !d.hidden) &&
     (!F.star || d.starred || d.stage) &&
@@ -542,8 +569,8 @@ function filteredRaw() {
 
 function famChips() {
   const counts = {};
-  DATA.forEach(d => { if (d.family && (CAT === "all" || d.category === CAT)) counts[d.family] = (counts[d.family] || 0) + 1; });
-  const fams = CAT === "all" ? [] : Object.keys(counts).sort((a, b) => counts[b] - counts[a]);   // too many to be useful across all categories
+  DATA.forEach(d => { if (d.family && inCat(d)) counts[d.family] = (counts[d.family] || 0) + 1; });
+  const fams = CAT === "all" || CAT === "box" ? [] : Object.keys(counts).sort((a, b) => counts[b] - counts[a]);   // too many to be useful across categories
   $("#f-fams").innerHTML = fams.map(f =>
     `<button class="chip ${F.fams.includes(f) ? "on" : ""}" data-f="${esc(f)}">${esc(f)} · ${counts[f]}</button>`).join("");
   $("#f-fams").onclick = e => { const f = e.target.dataset.f; if (!f) return;
@@ -552,7 +579,8 @@ function famChips() {
 
 function catBar() {
   const n = {}; DATA.forEach(d => n[d.category] = (n[d.category] || 0) + 1);
-  const items = [...CATS.map(c => [c.key, `${c.emoji} ${c.label}`, n[c.key] || 0]), ["all", "All", DATA.length]];
+  const box = DATA.filter(d => !d.hidden && inBox(d)).length;
+  const items = [["box", "🎯 My buy box", box], ...CATS.map(c => [c.key, `${c.emoji} ${c.label}`, n[c.key] || 0]), ["all", "All", DATA.length]];
   $("#cats").innerHTML = items.map(([k, label, c]) =>
     `<button data-cat="${k}" class="${k === CAT ? "on" : ""}">${esc(label)}<span>${c}</span></button>`).join("");
 }
@@ -701,7 +729,7 @@ function fitTag(d) {
   return (t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "") + over;
 }
 function facts(d) {
-  return [CAT === "all" ? catOf(d.category).label : null, d.year, trailerSize(d),
+  return [CAT === "all" || CAT === "box" ? catOf(d.category).label : null, d.year, trailerSize(d),
     d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 && d.price ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
     d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt && d.category !== "trailer" ? d.miles.toLocaleString() + " mi" : null,
     d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
@@ -712,9 +740,14 @@ function facts(d) {
 }
 function card(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
+  if (SEEN.has(d.id)) return cardHtml(d).replace('<article class="card">', '<article class="card seen" title="You opened this one">');
+  return cardHtml(d);
+}
+function cardHtml(d) {
+  const was = Math.max(d.strike_price || 0, d.first_price || 0);
   const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
   return `<article class="card">
-    <a class="img" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 photo not saved yet - Open shows it</span>' : ""}
+    <a class="img" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 photo not saved yet - Open shows it</span>' : ""}
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
         : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold/removed</span>'
         : isNew(d) ? '<span class="ribbon new">NEW</span>'
@@ -734,7 +767,7 @@ function card(d) {
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">
-        <a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
+        <a class="btn primary" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
         ${d.starred || d.stage ? `<select class="btn stage" data-stage="${esc(d.id)}" title="Where you are with this one">${[["", "★ Watching"], ...STAGES].map(([v, l]) =>
             `<option value="${v}" ${(d.stage || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`
           : `<button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">☆ Star</button>`}
@@ -816,13 +849,16 @@ function quickBar(n) {
     <button class="btn" id="quickoff">✕ Show everything</button></div>` : "";
 }
 // What's narrowing the results right now (besides the category), so a remembered filter is never invisible
-const DEFAULTS = { q: "", max: "", year: "", dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fit: false };
+const DEFAULTS = { q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fit: false };
 const AGE_LABEL = { visit: "new since my last visit", "1h": "last hour", "6h": "last 6 hours", "24h": "last 24 hours", "72h": "last 3 days", "168h": "last 7 days" };
 function activeFilters() {
   const a = [];
   if (F.q.trim()) a.push(`search "${F.q.trim()}"`);
+  if (F.min) a.push(`min $${(+F.min).toLocaleString()}`);
   if (F.max) a.push(`max $${(+F.max).toLocaleString()}`);
   if (F.year) a.push(`${F.year}+`);
+  if (F.ymax) a.push(`${F.ymax} or older`);
+  if (F.unseen) a.push("not opened yet");
   if (F.dist) a.push(`within ${F.dist} mi`);
   if (F.age) a.push(`listed: ${AGE_LABEL[F.age] || F.age}`);
   if (F.cond) a.push(F.cond === "new" ? "new only" : "used only");
@@ -836,11 +872,11 @@ function filterBar(n) {
   if (QUICK) return "";
   const a = activeFilters();
   document.querySelectorAll("#filtersec [id^=f-]").forEach(el => {
-    const k = { "f-q": "q", "f-max": "max", "f-year": "year", "f-dist": "dist", "f-age": "age", "f-cond": "cond" }[el.id];
+    const k = { "f-q": "q", "f-min": "min", "f-max": "max", "f-year": "year", "f-ymax": "ymax", "f-dist": "dist", "f-age": "age", "f-cond": "cond" }[el.id];
     if (k) el.classList.toggle("changed", !!F[k]);
   });
   if (!a.length) return "";
-  const total = DATA.filter(d => (CAT === "all" || d.category === CAT) && (F.hidden || !d.hidden)).length;
+  const total = DATA.filter(d => inCat(d) && (F.hidden || !d.hidden)).length;
   return `<div class="filterbar"><span>Showing <b>${n}</b> of ${total} · ${a.map(esc).join(" · ")}</span>
     <button class="btn" id="clearfilters">✕ Clear filters</button></div>`;
 }
@@ -858,10 +894,62 @@ function renderDeals() {
   $("#view-cards").classList.toggle("on", VIEW === "cards"); $("#view-map").classList.toggle("on", VIEW === "map");
   if (VIEW === "map") { renderMap(rows); return; }
   const shown = rows.slice(0, 120);
+  const cmp = $("#comparebtn"); cmp.hidden = !F.star; cmp.textContent = COMPARE && F.star ? "Back to cards" : "Compare shortlist";
+  if (COMPARE && F.star) {
+    $("#tab-deals").innerHTML = filterBar(rows.length) + (rows.length ? compareHtml(rows) : `<div class="empty">Nothing starred yet.</div>`);
+    withDetails(rows.slice(0, 40));
+    return;
+  }
+  const emptyBox = CAT === "box" && !rows.length
+    ? `<div class="empty">Nothing in your buy box right now. Widen it in Setup → Buy box, or pick a category above.</div>` : null;
   $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${shown.map(card).join("")}</div>`
-    : `<div class="empty">No listings match these filters yet.</div>`);
+    : emptyBox || `<div class="empty">No listings match these filters yet.</div>`);
   withDetails(shown);
 }
+
+// ---- "My buy box": the categories with instant alerts on, inside their limits (same rules as alerts) ----
+let SETS = null;
+const inCat = d => CAT === "all" ? true : CAT === "box" ? inBox(d) : d.category === CAT;
+function inBox(d) {
+  const r = SETS && SETS.alert_rules && SETS.alert_rules[d.category];
+  if (!r || !r.enabled) return false;
+  if (SETS.settings.alert_private_only === "1" && d.dealer) return false;
+  if (d.is_new === 1) return false;
+  if (d.category === "trailer" && d.utv_fit && d.utv_fit !== "yes" && d.utv_fit !== "maybe") return false;
+  const num = k => (r[k] === "" || r[k] == null) ? null : +r[k];
+  if ((r.models || []).length && !r.models.includes(d.family)) return false;
+  const reach = num("within_mi") || ((+SETS.settings.radius_mi || 100) + 10);
+  if (d.distance != null && d.distance > reach) return false;
+  if (num("min_year") != null && d.year && d.year < num("min_year")) return false;
+  if (num("max_price") != null && d.price && d.price > num("max_price")) return false;
+  if (num("max_miles") != null && d.miles != null && d.miles > num("max_miles")) return false;
+  if (num("max_hours") != null && d.hours != null && d.hours > num("max_hours")) return false;
+  return true;
+}
+// ---- listings you've opened from here fade (this browser only) ----
+const SEEN = new Set(store.get("seen", []));
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-seen]"); if (!a) return;
+  SEEN.add(a.dataset.seen); store.set("seen", [...SEEN].slice(-5000));
+  const card = a.closest(".card"); if (card) card.classList.add("seen");
+});
+// ---- compare the shortlist side by side ----
+let COMPARE = false;
+function compareHtml(rows) {
+  const L = rows.slice(0, 40);
+  const use = d => d.miles != null ? d.miles.toLocaleString() + " mi" : d.hours != null ? d.hours.toLocaleString() + " hrs" : "—";
+  return `<div class="tablewrap"><table class="compare"><thead><tr><th></th><th>Listing</th><th>Price</th><th>Typical</th><th>Score</th>
+      <th>Year</th><th>Use</th><th>Distance</th><th>Seller</th><th>Stage</th><th>Aim to pay / walk</th><th>Notes</th></tr></thead><tbody>
+    ${L.map(d => `<tr><td><div class="thumb" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}"></div></td>
+      <td class="t"><a data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a><div class="hint">${esc(d.location || "")}</div></td>
+      <td>${money(d.price)}</td><td>${money(d.expected)}${d.deal_pct != null ? `<div class="hint">${Math.round(d.deal_pct * 100)}% ${d.deal_pct >= 0 ? "under" : "over"}</div>` : ""}</td>
+      <td>${d.score ?? "–"}</td><td>${d.year ?? "—"}</td><td>${use(d)}</td><td>${d.distance != null ? d.distance + " mi" : "—"}</td>
+      <td>${d.dealer ? "dealer" : "private"}</td><td>${esc(STAGE_LABEL[d.stage] || (d.starred ? "watching" : ""))}</td>
+      <td>${d.offer_aim ? money(d.offer_aim) + (d.offer_walk ? " / " + money(d.offer_walk) : "") : "—"}</td>
+      <td class="t">${esc(d.notes || "")}</td></tr>`).join("")}</tbody></table></div>
+    ${rows.length > L.length ? `<p class="hint">First ${L.length} of ${rows.length}.</p>` : ""}`;
+}
+document.addEventListener("click", e => { if (e.target.id !== "comparebtn") return; COMPARE = !COMPARE; render(); });
 // The feed carries only what filtering needs; a card's photo, facts, tags and summary come from /api/cards
 // for the ~120 cards on screen, then the cards are drawn again.
 const CARDS_PENDING = new Set();
@@ -1192,7 +1280,7 @@ async function renderSetup() {
     $-under floor for one category (blank = the settings above) - $1,500 matters on a UTV, not on a $3,000 mower.
     The % floor applies everywhere.</p>
   <div class="tablewrap"><table class="rules"><thead><tr><th>Category</th><th>Instant</th><th>Just-listed</th><th>Digest</th>
-    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th><th>Alert at score</th><th>Min $ saved</th></tr></thead><tbody>
+    <th>Models</th><th>Min year</th><th>Max price</th><th>Max miles</th><th>Max hours</th><th>Within mi</th><th>Alert at score</th><th>Min $ saved</th><th title="How often Facebook is searched for this category. Daily = once a day, also skips the 10-minute fast lane; frees the hourly page budget for the rest">Scan</th></tr></thead><tbody>
     ${CATS.map(c => { const r = s.alert_rules[c.key] || {}, m = r.models || []; return `<tr data-rule="${c.key}"><td>${c.emoji} ${esc(c.label)}</td>
       <td><label><input type="checkbox" data-r="enabled" ${r.enabled ? "checked" : ""}> on</label></td>
       <td><label><input type="checkbox" data-r="fresh" ${r.fresh ? "checked" : ""}> on</label></td>
@@ -1205,9 +1293,22 @@ async function renderSetup() {
       <td>${["trailer"].includes(c.key) ? "" : `<input type="number" step="50" data-r="max_hours" value="${esc(r.max_hours)}" placeholder="any">`}</td>
       <td><input type="number" step="10" data-r="within_mi" value="${esc(r.within_mi)}" placeholder="${(+v.radius_mi || 100) + 10}"></td>
       <td><input type="number" min="0" max="100" data-r="min_score" value="${esc(r.min_score)}" placeholder="${esc(v.alert_threshold)}"></td>
-      <td><input type="number" min="0" step="100" data-r="min_usd" value="${esc(r.min_usd)}" placeholder="${esc(v.alert_min_usd)}"></td></tr>`; }).join("")}
+      <td><input type="number" min="0" step="100" data-r="min_usd" value="${esc(r.min_usd)}" placeholder="${esc(v.alert_min_usd)}"></td>
+      <td><select data-scan="${c.key}">${[[20, "every 20 min"], [60, "hourly"], [120, "every 2 h"], [180, "every 3 h"], [360, "every 6 h"], [720, "twice a day"], [1440, "daily"]].map(([m, l]) =>
+        `<option value="${m}" ${(s.scan_every || {})[c.key] == m ? "selected" : ""}>${l}</option>`).join("")}</select></td></tr>`; }).join("")}
   </tbody></table></div>
   <p><button class="btn primary" id="savebtn">Save</button> <span class="hint" id="savemsg"></span></p></div>
+  <div class="panel"><h2>Trip</h2>
+    ${s.trip ? `<p>Searching around <b>${esc(s.trip.place)}</b> until ${new Date(s.trip.until * 1000).toLocaleDateString()} - then back to ${esc((s.trip.home || {}).home_label || "home")} automatically.
+        <button class="btn" id="tripend">End trip now</button></p>`
+      : `<p class="hint">Going somewhere? Move the search area there for a few days; distances, the buy box and alerts follow it, and it switches back on its own.</p>
+    <div class="sellform" id="tripform">
+      <label>Place<input name="place" placeholder="Appleton, WI"></label>
+      <label>ZIP (Craigslist)<input name="zip" placeholder="54911"></label>
+      <label>Facebook city name<input name="fb_location" placeholder="appleton"><span class="hint">as in facebook.com/marketplace/<b>appleton</b>/ - usually the city in lower case; Setup → Test home checks it</span></label>
+      <label>Back home after<input name="until" type="date"></label>
+    </div><p><button class="btn primary" id="tripstart">Start trip</button></p>`}
+    <span class="hint" id="tripmsg"></span></div>
   <div class="panel"><h2>Searches</h2><p class="hint">⚡ fast = also checked every 10 minutes (newest first) so you can be first to message. Craigslist runs every search each scan. Facebook runs 4-seat UTV, mower and trailer searches about every 40 minutes, jet skis and snowmobiles every 90, the rest hourly. Broad terms find more; the model sorts each ad into its category and drops parts and wanted ads.</p>
     ${CATS.map(c => { const qs = s.searches.filter(q => q.category === c.key); return `<h3 style="font-size:13px;margin:14px 0 6px">${c.emoji} ${esc(c.label)}</h3>
     <div class="searchlist">${qs.map(q => `<div class="searchrow"><input type="checkbox" data-sid="${q.id}" ${q.enabled ? "checked" : ""}>
@@ -1225,6 +1326,22 @@ async function renderSetup() {
   <div class="panel"><h2>Recent scans</h2><div class="tablewrap"><table class="runs"><thead><tr><th>Started</th><th>Type</th><th>Took</th><th>Found</th><th>New</th><th>Alerts</th><th>Problems</th></tr></thead><tbody>
     ${st.runs.map(r => `<tr><td>${new Date(r.started * 1000).toLocaleString()}</td><td>${r.source === "quick" ? "⚡ fast" : "full"}</td><td>${r.finished ? Math.round((r.finished - r.started) / 60) + " min" : "running"}</td>
       <td>${r.found ?? ""}</td><td>${r.new ?? ""}</td><td>${r.alerts ?? ""}</td><td class="err">${r.errors.map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div></div>`;
+  const tripMsg = m => $("#tripmsg").textContent = m;
+  if ($("#tripform")) {
+    const f = $("#tripform"), place = f.querySelector("[name=place]"), slug = f.querySelector("[name=fb_location]");
+    place.oninput = () => { if (!slug.dataset.touched) slug.value = place.value.split(",")[0].trim().toLowerCase().replace(/[^a-z0-9]+/g, ""); };
+    slug.oninput = () => slug.dataset.touched = 1;
+    $("#tripstart").onclick = async () => {
+      const body = Object.fromEntries([...f.querySelectorAll("[name]")].map(i => [i.name, i.value.trim()]));
+      try { await api("/api/trip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        LAST_ETAG = null; await load(); renderSetup(); }
+      catch (err) { tripMsg("Couldn't start the trip: " + err.message + " - check the place, ZIP and date"); }
+    };
+  }
+  if ($("#tripend")) $("#tripend").onclick = async () => {
+    try { await api("/api/trip", { method: "DELETE", headers: { "content-type": "application/json" } }); LAST_ETAG = null; await load(); renderSetup(); }
+    catch (err) { tripMsg("Couldn't end it: " + err.message); }
+  };
   for (const r of ["home", "proxy"]) $("#fbtest-" + r).onclick = async () => {
     $("#fbtest-msg").textContent = `Testing Facebook via ${r === "home" ? "home IP" : "proxy"}… (30-60 s; save the proxy first)`;
     try { const t = await api("/api/fbtest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ route: r }) });
@@ -1244,6 +1361,8 @@ async function renderSetup() {
       tr.querySelectorAll("[data-r]").forEach(i => r[i.dataset.r] = i.type === "checkbox" ? i.checked : i.value);
       r.models = [...tr.querySelectorAll("[data-model]:checked")].map(i => i.dataset.model);
       body.alert_rules[tr.dataset.rule] = r; });
+    body.scan_every = {};
+    document.querySelectorAll("[data-scan]").forEach(sel => body.scan_every[sel.dataset.scan] = +sel.value);
     try { await api("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       $("#savemsg").textContent = "Saved."; } catch (e) { $("#savemsg").textContent = "Save failed: " + e.message; }
   };
@@ -1412,8 +1531,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 let LAST_ETAG = null;
 async function load() {
   if (!CATS.length) CATS = await api("/api/categories");
-  if (!CATS.some(c => c.key === CAT) && CAT !== "all") { CAT = "all"; store.set("cat", CAT); }
-  try { TOW = +(await api("/api/settings")).settings.tow_capacity_lb || 0; } catch {}
+  if (!CATS.some(c => c.key === CAT) && CAT !== "all" && CAT !== "box") { CAT = "box"; store.set("cat", CAT); }
+  try { SETS = await api("/api/settings"); TOW = +SETS.settings.tow_capacity_lb || 0; } catch {}
   const resp = await fetch("/api/listings"); if (!resp.ok) throw new Error(resp.status);
   // unchanged on the server (the browser got a 304 and replayed its copy): nothing to re-parse or redraw
   const etag = resp.headers.get("ETag");

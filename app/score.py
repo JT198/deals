@@ -14,6 +14,7 @@ from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, 
 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
 
+TOO_GOOD = 0.40         # discount past which a listing is flagged and the score tapers (11/04)
 EQUIP_VERSION = 4   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
@@ -487,6 +488,15 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
     if expected and price:
         deal_pct = (expected - price) / expected
         s = 45 + 100 * max(-0.4, min(0.4, deal_pct))
+        if deal_pct > TOO_GOOD:
+            # far under typical is more often a misread (wrong model, partial price, parts machine) than a
+            # steal: past 40% the score tapers instead of topping out, and the card asks for a sanity check
+            s = max(70.0, 85 - (deal_pct - TOO_GOOD) * 66.7)
+            reasons.append("too good to be true? check the model and price")
+        if sold_typical and price >= sold_typical and deal_pct >= 0.05:
+            # under typical asking, but no cheaper than these actually sell for: less of a deal than it looks
+            s = 45 + (s - 45) * 0.7
+            reasons.append(f"about what similar ones actually sell for (~${sold_typical:,})")
         if comps < 8:   # thin comps: trust the discount less
             s = 45 + (s - 45) * (0.5 + comps / 16)
         if not listing["year"]:   # compared against every year of the family

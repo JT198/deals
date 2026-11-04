@@ -61,6 +61,25 @@ def build(con) -> str:
     if not any_deal:
         lines.append("\nNo new private listings scored 60+ yesterday.")
 
+    # listings already on the market that got cut into deal range yesterday, inside the buy box
+    cuts = []
+    for r in con.execute(
+            """SELECT l.*, (SELECT MAX(p.price) FROM price_history p WHERE p.listing_id = l.id AND p.ts < ?) before
+               FROM listings l WHERE l.relevant = 1 AND l.status = 'active' AND l.hidden = 0 AND l.backlog = 0
+                 AND l.first_seen < ? AND COALESCE(l.is_dealer, 0) = 0 AND COALESCE(l.seller_type, '') != 'dealer'
+                 AND EXISTS (SELECT 1 FROM price_history p WHERE p.listing_id = l.id AND p.ts >= ?)
+               ORDER BY l.score DESC""", (since, since, since)).fetchall():
+        rule = rules.get(r["category"], {})
+        if (r["before"] and r["price"] and r["price"] < r["before"] and (r["score"] or 0) >= MIN_SCORE
+                and rule.get("digest", True) and buybox.fits(rule, r, dist(r), radius)):
+            cuts.append(r)
+    if cuts:
+        lines.append("\n📉 <b>Price cuts into deal range</b>")
+        for r in cuts[:6]:
+            where = f" · {e(r['location'])}" if r["location"] else ""
+            lines.append(f"• <a href=\"{e(r['url'])}\">{e(r['title'][:55])}</a> - <b>${r['price']:,}</b> (was ${r['before']:,})"
+                         f"{where} · score {r['score']}")
+
     watched = con.execute(
         """SELECT title, url, price, first_price, status, score FROM listings WHERE starred = 1
            ORDER BY score DESC""").fetchall()

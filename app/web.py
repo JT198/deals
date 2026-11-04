@@ -4,6 +4,7 @@ Requests arriving through the Cloudflare tunnel (CF-Gateway, 10.10.10.5) must
 carry a Cloudflare Access identity from ALLOWED_EMAILS; LAN requests are trusted.
 """
 import asyncio
+import datetime
 import gzip
 import hashlib
 import ipaddress
@@ -302,6 +303,49 @@ def correct(lid: str, body: dict = Body(...)):
     return {"ok": True, "correction": c}
 
 
+@app.post("/api/trip")
+def start_trip(body: dict = Body(...)):
+    """Move the search area somewhere for a while: {"place": "Appleton, WI", "zip": "54911",
+    "fb_location": "appleton", "until": "2026-11-08"}. The home area is saved and comes back at the
+    first scan after 'until' (end of that day), or right away with DELETE /api/trip."""
+    place, zipc = str(body.get("place") or "").strip(), str(body.get("zip") or "").strip()
+    slug = re.sub(r"[^a-z0-9-]", "", str(body.get("fb_location") or "").strip().lower())
+    if not place or not re.fullmatch(r"\d{5}", zipc) or not slug:
+        raise HTTPException(400, "need the place (City, ST), a 5-digit ZIP and Facebook's city name")
+    try:
+        end = datetime.date.fromisoformat(str(body.get("until") or ""))
+    except ValueError:
+        raise HTTPException(400, "until must be a date like 2026-11-08")
+    until = int(datetime.datetime.combine(end, datetime.time(23, 59)).timestamp())
+    if until <= db.now() or until > db.now() + 60 * 86400:
+        raise HTTPException(400, "the return date must be in the next 60 days")
+    try:
+        r = httpx.get("https://nominatim.openstreetmap.org/search", timeout=15, headers={"User-Agent": geo.UA},
+                      params={"q": place, "format": "json", "limit": 1, "countrycodes": "us", "featureType": "settlement"})
+        hit = r.json()[:1] if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError):
+        hit = []
+    if not hit:
+        raise HTTPException(400, f"couldn't find {place} on the map - try 'City, ST'")
+    con = db.connect()
+    st = db.settings(con)
+    home = (db.trip(st) or {}).get("home") or {k: st.get(k) for k in db.HOME_KEYS}   # a trip from a trip keeps the real home
+    con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('trip', ?)",
+                (json.dumps({"place": place, "until": until, "home": home}),))
+    con.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                    [("home_label", f"{place} (trip)"), ("home_zip", zipc), ("fb_location", slug),
+                     ("home_lat", f"{float(hit[0]['lat']):.4f}"), ("home_lon", f"{float(hit[0]['lon']):.4f}")])
+    db.bump_rev(con)
+    con.commit()
+    return {"ok": True, "trip": db.trip(db.settings(con))}
+
+
+@app.delete("/api/trip")
+def end_trip():
+    con = db.connect()
+    return {"ok": True, "ended": db.end_trip_if_due(con, force=True)}
+
+
 @app.get("/api/alerts")
 def alert_activity(limit: int = 80):
     """Why recent candidates alerted or didn't, newest first."""
@@ -592,7 +636,7 @@ def get_settings():
     con = db.connect()
     st = db.settings(con)
     st["fb_proxy"] = _mask_proxy(st.get("fb_proxy") or "")
-    return {"settings": st, "alert_rules": db.alert_rules(st),
+    return {"settings": st, "alert_rules": db.alert_rules(st), "scan_every": db.scan_every(st), "trip": db.trip(st),
             "searches": [dict(r) for r in con.execute("SELECT * FROM searches ORDER BY category, id")]}
 
 
@@ -601,7 +645,7 @@ NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "fe
            "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
            "home_lat": (-90, 90, False), "home_lon": (-180, 180, False)}
-EDITABLE = {"alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
+EDITABLE = {"scan_every", "alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location", "feed_max_mi"}
 
 
@@ -643,6 +687,16 @@ def put_settings(body: dict = Body(...)):
             if not re.fullmatch(r"\d{5}", str(v).strip()):
                 raise HTTPException(400, "home_zip must be 5 digits")
             v = str(v).strip()
+        if k == "scan_every":
+            if not isinstance(v, dict) or any(c not in CATEGORIES for c in v):
+                raise HTTPException(400, "scan_every must map categories to minutes")
+            try:
+                v = {c: int(m) for c, m in v.items()}
+            except (TypeError, ValueError):
+                raise HTTPException(400, "scan_every minutes must be whole numbers")
+            if any(m not in db.SCAN_CHOICES for m in v.values()):
+                raise HTTPException(400, f"scan_every minutes must be one of {db.SCAN_CHOICES}")
+            v = json.dumps(v)
         if k == "alert_rules":
             if not isinstance(v, dict) or not all(isinstance(r, dict) for r in v.values()):
                 raise HTTPException(400, "alert_rules must be an object of objects")
@@ -720,7 +774,7 @@ def status():
           "pauses": {r: int(st.get(f"fb_backoff_until:{r}") or 0) for r in ("home", "proxy")
                      if int(st.get(f"fb_backoff_until:{r}") or 0) > now}}
     return {"runs": runs, "counts": dict(c), "scanning": running, "facebook": fb, "sweep": sweep.status(con),
-            "release": RELEASE}
+            "release": RELEASE, "trip": db.trip(st)}
 
 
 MASK = "********"

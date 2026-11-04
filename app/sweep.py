@@ -120,6 +120,7 @@ async def maybe_summary(con, http) -> None:
 async def run() -> None:
     db.init()
     con = db.connect()
+    db.end_trip_if_due(con)
     st = db.settings(con)
     rnd = int(st.get("sweep_round") or 0)
     con.execute("DELETE FROM sweep_queue WHERE query NOT IN (SELECT query FROM searches)")
@@ -151,9 +152,12 @@ async def run() -> None:
             lock.close()
             print("sweep: facebook was paused while waiting, skipping")
             return
-        jobs = con.execute(f"""SELECT * FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}
+        # categories set to daily in Setup are swept only at night, when the budget is otherwise idle
+        daily = [c for c, m in db.scan_every(st).items() if m >= db.DAILY]
+        skip = "" if night or not daily else f" AND category NOT IN ({','.join('?' * len(daily))})"
+        jobs = con.execute(f"""SELECT * FROM sweep_queue WHERE round = ? AND state = 'todo' AND {LIVE}{skip}
                                ORDER BY {PRIORITY}, id LIMIT ?""",
-                           (rnd, NIGHT_SEARCHES if night else DAY_SEARCHES)).fetchall()
+                           (rnd, *([] if night or not daily else daily), NIGHT_SEARCHES if night else DAY_SEARCHES)).fetchall()
         loc, radius = st.get("fb_location", "plymouth-mn"), int(st.get("radius_mi") or 100)
         home = (float(st["home_lat"]), float(st["home_lon"]))
         places = {r["place"]: (r["lat"], r["lon"]) for r in con.execute("SELECT * FROM geocache")}

@@ -1852,6 +1852,61 @@ def test_photo_cache_reaches_past_expired_links_and_fading_rechecks():
     assert [r["id"] for r in scan.fading_candidates(con, 5)] == ["facebook:b", "facebook:a"]
 
 
+def test_scan_cadence_ranking_digest_cuts_and_trips():
+    from unittest.mock import patch
+    from app import digest, score, web
+    now = db.now()
+    # cadence: a daily category isn't due an hour after its last run, and stays out of the fast lane
+    con = reset([])
+    c = client()
+    assert c.put("/api/settings", json={"scan_every": {"mower": 1440, "utv2": 1440}}).status_code == 200
+    assert c.put("/api/settings", json={"scan_every": {"mower": 7}}).status_code == 400
+    assert c.put("/api/settings", json={"scan_every": {"boats": 60}}).status_code == 400
+    every = db.scan_every(db.settings(con))
+    assert every["mower"] == 1440 and every["utv4"] == 60 and c.get("/api/settings").json()["scan_every"]["utv2"] == 1440
+
+    # ranking: past 40% under the score tapers and asks for a check; at-or-above sold price counts for less
+    row = {"price": 5000, "is_new": 0, "year": 2022, "strike_price": None, "first_price": 5000, "motivated": 0,
+           "miles": None, "hours": None, "category": "utv4", "is_dealer": 0, "seller_type": None, "red_flags": "[]"}
+    s40, _, _ = score.score(row, 8333, comps=20)            # 40% under
+    s60, _, why60 = score.score(row, 12500, comps=20)       # 60% under
+    assert s40 == 85 and s60 < s40 and any("too good" in w for w in why60), (s40, s60)
+    s_sold, _, why = score.score(dict(row, price=8000), 10000, comps=20, sold_typical=7800)
+    s_plain, _, _ = score.score(dict(row, price=8000), 10000, comps=20)
+    assert s_sold < s_plain and any("actually sell for" in w for w in why)
+
+    # digest: a listing cut into deal range yesterday shows under price cuts
+    con = reset([{"title": "cut one", "price": 9000, "score": 80, "first_seen": now - 5 * 86400, "listed_at": now - 5 * 86400}])
+    con.execute("INSERT INTO price_history VALUES ('facebook:0', ?, 11000)", (now - 5 * 86400,))
+    con.execute("INSERT INTO price_history VALUES ('facebook:0', ?, 9000)", (now - 3600,)); con.commit()
+    text = digest.build(con)
+    assert "Price cuts into deal range" in text and ">cut one<" in text and "was $11,000" in text, text
+
+    # trip: home saved, area moved, back on its own after the date
+    con = reset([])
+
+    class Geo:
+        status_code = 200
+
+        def json(self):
+            return [{"lat": "44.2619", "lon": "-88.4154"}]
+    with patch.object(web.httpx, "get", return_value=Geo()):
+        bad = client().post("/api/trip", json={"place": "Appleton, WI", "zip": "549", "fb_location": "appleton", "until": "2099-01-01"})
+        assert bad.status_code == 400
+        tomorrow = __import__("datetime").date.fromtimestamp(now + 86400).isoformat()
+        r = client().post("/api/trip", json={"place": "Appleton, WI", "zip": "54911", "fb_location": "Appleton", "until": tomorrow})
+        assert r.status_code == 200, r.text
+    st = db.settings(con)
+    assert (st["fb_location"], st["home_zip"], st["home_lat"]) == ("appleton", "54911", "44.2619")
+    assert client().get("/api/status").json()["trip"]["place"] == "Appleton, WI"
+    assert not db.end_trip_if_due(con)                                       # not due yet
+    t = db.trip(db.settings(con)); t["until"] = now - 1
+    con.execute("UPDATE settings SET value = ? WHERE key = 'trip'", (json.dumps(t),)); con.commit()
+    assert db.end_trip_if_due(con)
+    st = db.settings(con)
+    assert st["fb_location"] == "plymouth-mn" and st["home_zip"] == "55446" and "trip" not in st
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

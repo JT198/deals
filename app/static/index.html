@@ -177,6 +177,7 @@ textarea.draft { width: 100%; min-height: 220px; background: var(--surface); col
 .tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .tag { font-size: 12px; background: var(--surface-2); color: var(--text-2); border-radius: 6px; padding: 1px 7px; }
 .tag.flag { background: var(--bad-bg); color: var(--bad); }
+.tag.warn { background: rgba(214, 160, 40, .16); color: #d6a028; }
 .tag.plus { background: var(--good-bg); color: var(--good); }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 6px; }
 .actions .btn { flex: 1 1 auto; min-width: 56px; text-align: center; }
@@ -745,7 +746,9 @@ function card(d) {
 }
 function cardHtml(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
-  const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r));
+  // cautions first: "too good to be true?" and "about what similar ones actually sell for" (11/04 ranking)
+  const caution = (d.reasons || []).filter(r => /too good|actually sell for/.test(r));
+  const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r) && !/too good|actually sell for/.test(r));
   return `<article class="card">
     <a class="img" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 photo not saved yet - Open shows it</span>' : ""}
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
@@ -763,7 +766,7 @@ function cardHtml(d) {
       ${noteBox(d)}
       ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
         `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
-      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.feedback ? `<span class="tag ${d.feedback === "+" ? "plus" : "flag"}" title="Your thumbs on the Telegram alert">${d.feedback === "+" ? "👍 good one" : "👎 not for me"}</span>` : d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
+      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.feedback ? `<span class="tag ${d.feedback === "+" ? "plus" : "flag"}" title="Your thumbs on the Telegram alert">${d.feedback === "+" ? "👍 good one" : "👎 not for me"}</span>` : d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${caution.map(r => `<span class="tag warn" title="${/too good/.test(r) ? "More than 40% under typical - often a misread model, a partial price or a parts machine. Worth a quick look before you get excited." : "Under typical asking, but no cheaper than what similar ones have actually sold for."}">⚠ ${esc(r)}</span>`).join("")}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
         ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
         ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
       <div class="actions">

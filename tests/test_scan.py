@@ -1907,6 +1907,33 @@ def test_scan_cadence_ranking_digest_cuts_and_trips():
     assert st["fb_location"] == "plymouth-mn" and st["home_zip"] == "55446" and "trip" not in st
 
 
+def test_deleted_listings_are_not_a_facebook_wall():
+    from unittest.mock import AsyncMock, patch
+    now = db.now()
+    # a batch of long-unseen listings (deleted: their pages redirect like a block) + one seen just now
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now - 10 * 86400} for i in range(5)]
+                + [{"id": "facebook:live", "ext_id": "live", "detail_fetched": 1, "last_seen": now - 600}])
+
+    class FB:
+        def __init__(self, wall):
+            self.wall = wall
+
+        async def detail(self, ext_id):
+            if ext_id == "live" and not self.wall:
+                return {"status": "active"}
+            return None
+    batch = con.execute("SELECT id, ext_id, price FROM listings WHERE id != 'facebook:live'").fetchall()
+    errors = []
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, FB(wall=False), batch, errors))
+    assert not any("login wall" in e for e in errors), errors          # control loaded: these were removals
+    assert con.execute("SELECT SUM(detail_misses) FROM listings WHERE id != 'facebook:live'").fetchone()[0] == 5
+    errors = []
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, FB(wall=True), batch, errors))
+    assert any("login wall" in e for e in errors), errors              # the control failed too: a real wall
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

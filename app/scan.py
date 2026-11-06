@@ -371,6 +371,25 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
+async def control_readable(con, fb, skip: set) -> bool:
+    """Is Facebook actually walling item pages, or were the failures deleted listings? A deleted listing's
+    page redirects to the login screen, exactly like a block - and the re-checks deliberately go after
+    listings nobody has seen in days, many of which are deleted (11/06: 6 of 6 long-unseen pages failed
+    while listings seen within the hour loaded fine; the old check paused Facebook most mornings).
+    Load one listing a search showed in the last 3 hours: if it reads, the failures were removals."""
+    rows = con.execute("""SELECT id, ext_id FROM listings WHERE source = 'facebook' AND status = 'active'
+                          AND relevant = 1 AND detail_fetched = 1 AND last_seen > ?
+                          ORDER BY last_seen DESC LIMIT 5""", (db.now() - 3 * 3600,)).fetchall()
+    for r in rows:
+        if r["id"] in skip:
+            continue
+        try:
+            return await fb.detail(r["ext_id"]) is not None
+        except Exception:
+            return False
+    return False        # nothing to compare against: keep the cautious reading
+
+
 async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home", wait_until=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
@@ -398,7 +417,8 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
             failures += 1
             errors.append(f"fb detail {r['ext_id']}: {e}")
         await asyncio.sleep(random.uniform(3, 6))
-    if len(missed) >= 3 and len(missed) > ok:      # more pages fail than load: a wall, not removals
+    if len(missed) >= 3 and len(missed) > ok and not await control_readable(con, fb, {r["id"] for r in todo}):
+        # more pages failed than loaded AND a listing we know is up won't load either: a real wall
         errors.append(f"facebook item pages unreadable ({len(missed)}/{ok + len(missed)}) - login wall?")
     else:
         for lid in missed:

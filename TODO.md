@@ -43,6 +43,12 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/06 Morning "Facebook blocked, pausing 2 h" alerts were false: every one came from the item-page wall check
+  (searches in the same run worked). Deleted listings redirect to login exactly like a block, and the re-checks
+  target long-unseen listings (live test: 6/6 long-unseen pages failed, 3/3 listings seen within the hour loaded).
+  The check now loads one listing a search showed in the last 3 h before calling it a wall
+  (`scan.control_readable`); if that loads, the failures are recorded as removals. 5 false pauses 11/01-11/06.
+
 - 11/04 Enhancement round (Jon's picks): "🎯 My buy box" view is the default (instant-alert categories within their
   limits, same rules as alerts); per-category Scan speed in Setup (`scan_every`; daily = no fast lane, swept only at
   night) - mowers, jet skis, 2-seat UTVs, 3-wheelers set to daily; card buttons wrap on narrow screens; ranking

@@ -80,8 +80,11 @@ def build(con) -> str:
             lines.append(f"• <a href=\"{e(r['url'])}\">{e(r['title'][:55])}</a> - <b>${r['price']:,}</b> (was ${r['before']:,})"
                          f"{where} · score {r['score']}")
 
+    # a watched listing that sold / was removed drops off once its watch alert has gone out (watch_status
+    # catches up with status on delivery); the star stays, so "back on the market" still works
     watched = con.execute(
         """SELECT title, url, price, first_price, status, score FROM listings WHERE starred = 1
+             AND NOT (status IN ('sold', 'gone') AND COALESCE(watch_status, status) = status)
            ORDER BY score DESC""").fetchall()
     if watched:
         lines.append(f"\n⭐ <b>Watching ({len(watched)})</b>")

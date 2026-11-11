@@ -583,10 +583,16 @@ def test_digest_builds():
     t = db.now()
     con = reset([{"score": 82, "price": 12000, "expected": 16000, "first_seen": t - 3600, "location": "Anoka, MN"},
                  {"id": "facebook:w", "ext_id": "w", "starred": 1, "price": 9000, "first_price": 10000, "status": "pending"},
-                 {"id": "facebook:d", "ext_id": "d", "score": 90, "price": 5000, "first_seen": t - 3600, "is_dealer": 1}])
+                 {"id": "facebook:d", "ext_id": "d", "score": 90, "price": 5000, "first_seen": t - 3600, "is_dealer": 1},
+                 # sold and already told about: off the list; removed but the watch alert hasn't gone out yet: still on
+                 {"id": "facebook:s", "ext_id": "s", "starred": 1, "title": "Told Sold Sled", "price": 4000,
+                  "status": "sold", "watch_status": "sold"},
+                 {"id": "facebook:g", "ext_id": "g", "starred": 1, "title": "Untold Gone Quad", "price": 3000,
+                  "status": "gone", "watch_status": "active"}])
     text = digest.build(con)
+    assert "Told Sold Sled" not in text and "Untold Gone Quad" in text and "removed" in text, text
     assert "4-seat UTVs" in text and "$12,000" in text and "typical $16,000" in text, text
-    assert "Watching (1)" in text and "(was $10,000)" in text and "PENDING" in text, text
+    assert "Watching (2)" in text and "(was $10,000)" in text and "PENDING" in text, text
     assert "facebook:d" not in text and "$5,000" not in text            # dealers don't make the digest
 
 

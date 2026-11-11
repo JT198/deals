@@ -43,6 +43,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/11 Morning digest: starred listings that sold / were removed drop off the "Watching" list once their
+  watch alert has gone out (they are not shown on the site, so the star could not be taken off).
 - 11/06 Morning "Facebook blocked, pausing 2 h" alerts were false: every one came from the item-page wall check
   (searches in the same run worked). Deleted listings redirect to login exactly like a block, and the re-checks
   target long-unseen listings (live test: 6/6 long-unseen pages failed, 3/3 listings seen within the hour loaded).

@@ -2050,6 +2050,35 @@ def test_deleted_listings_are_not_a_facebook_wall():
         asyncio.run(scan.fb_details(con, FB(wall=True), batch, errors))
     assert any("login wall" in e for e in errors), errors              # the control failed too: a real wall
 
+    # 11/12 false pause: 28 of 52 pages failed with loads mixed in between, and the one control page had just sold
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now - 10 * 86400} for i in range(8)]
+                + [{"id": f"facebook:live{i}", "ext_id": f"live{i}", "detail_fetched": 1, "last_seen": now - 600 - i} for i in range(3)])
+
+    class Mixed:
+        def __init__(self, up, dead_controls=()):
+            self.up, self.dead, self.asked = up, dead_controls, []
+
+        async def detail(self, ext_id):
+            self.asked.append(ext_id)
+            return {"status": "active"} if ext_id in self.up or (ext_id.startswith("live") and ext_id not in self.dead) else None
+    batch = con.execute("SELECT id, ext_id, price FROM listings WHERE id NOT LIKE 'facebook:live%' ORDER BY ext_id").fetchall()
+    errors, fb = [], Mixed(up={"7"})                 # seven removed, then the last page loads: no wall, no control needed
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert not errors and not any(x.startswith("live") for x in fb.asked), (errors, fb.asked)
+    assert con.execute("SELECT SUM(detail_misses) FROM listings").fetchone()[0] == 7
+    errors, fb = [], Mixed(up={"0"}, dead_controls={"live0"})      # ends on 7 failures, first control just sold, second loads
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert not errors and fb.asked[-2:] == ["live0", "live1"], (errors, fb.asked)
+    errors, fb = [], Mixed(up={"0", "1"}, dead_controls={"live0", "live1", "live2"})     # a real wall after two pages
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        tail = "SELECT SUM(detail_misses) FROM listings WHERE ext_id IN ('2', '3', '4', '5', '6', '7')"
+        before = con.execute(tail).fetchone()[0]
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert any("login wall" in e for e in errors), errors
+    assert con.execute(tail).fetchone()[0] == before      # walled pages are not counted as removals
+
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):

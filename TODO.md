@@ -53,6 +53,12 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/12 False "Facebook blocked" pause 08:20-10:19 (the 11/06 fix did not cover it): a full scan's item-page batch
+  had 28 of 52 pages fail, the single control page failed too, and Facebook was paused 2 h - while the fast lane's
+  searches at 08:10 worked and everything loaded the moment the pause ended. Now a wall needs an unbroken run of
+  3+ failures to the end of the batch (a page that loads after failures proves those were removals) AND three
+  known-live listings failing (was one). Walled pages are no longer counted toward "removed". Tests 81.
+
 - 11/11 21:21 outage ("database is locked", every scan lane crashing, ~15 min): clearing a buying stage wrote NULL
   into `starred` (NOT NULL), the request failed mid-write and the dashboard process kept SQLite's write lock until
   it was restarted. Fixed both: clearing a stage keeps the star, and every connection a dashboard request opens is

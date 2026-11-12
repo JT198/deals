@@ -371,29 +371,40 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
 
+CONTROL_TRIES = 3
+
+
 async def control_readable(con, fb, skip: set) -> bool:
     """Is Facebook actually walling item pages, or were the failures deleted listings? A deleted listing's
     page redirects to the login screen, exactly like a block - and the re-checks deliberately go after
     listings nobody has seen in days, many of which are deleted (11/06: 6 of 6 long-unseen pages failed
     while listings seen within the hour loaded fine; the old check paused Facebook most mornings).
-    Load one listing a search showed in the last 3 hours: if it reads, the failures were removals."""
+    Load listings a search showed in the last 3 hours: if one reads, the failures were removals. Up to 3 are
+    tried - a single control can itself have just sold (11/12: one unlucky control paused Facebook for 2 h
+    while the fast lane's searches were working)."""
     rows = con.execute("""SELECT id, ext_id FROM listings WHERE source = 'facebook' AND status = 'active'
                           AND relevant = 1 AND detail_fetched = 1 AND last_seen > ?
-                          ORDER BY last_seen DESC LIMIT 5""", (db.now() - 3 * 3600,)).fetchall()
+                          ORDER BY last_seen DESC LIMIT 12""", (db.now() - 3 * 3600,)).fetchall()
+    tried = 0
     for r in rows:
         if r["id"] in skip:
             continue
+        if tried == CONTROL_TRIES:
+            break
+        tried += 1
         try:
-            return await fb.detail(r["ext_id"]) is not None
+            if await fb.detail(r["ext_id"]) is not None:
+                return True
         except Exception:
-            return False
-    return False        # nothing to compare against: keep the cautious reading
+            pass
+        await asyncio.sleep(random.uniform(3, 6))
+    return False        # none loaded, or nothing to compare against: keep the cautious reading
 
 
 async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home", wait_until=None) -> None:
     """Open each listing's page and store what it says. Pages that won't load are counted as misses,
     unless most of a batch fails - that is Facebook walling us, not a batch of removed listings."""
-    ok, missed, failures = 0, [], 0
+    ok, missed, failures, tail = 0, [], 0, 0       # tail = pages that failed since the last one that loaded
     for r in todo:
         if failures >= 3:        # the browser is gone, not three pages in a row
             errors.append("facebook: item pages keep failing - browser dead? (rest of the batch skipped)")
@@ -407,8 +418,10 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
             failures = 0
             if d is None:
                 missed.append(r["id"])
+                tail += 1
             else:
                 ok += 1
+                tail = 0
                 apply_detail(con, r["id"], d, r["price"])
                 con.commit()
         except SkipFacebook:
@@ -417,13 +430,15 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
             failures += 1
             errors.append(f"fb detail {r['ext_id']}: {e}")
         await asyncio.sleep(random.uniform(3, 6))
-    if len(missed) >= 3 and len(missed) > ok and not await control_readable(con, fb, {r["id"] for r in todo}):
-        # more pages failed than loaded AND a listing we know is up won't load either: a real wall
-        errors.append(f"facebook item pages unreadable ({len(missed)}/{ok + len(missed)}) - login wall?")
-    else:
-        for lid in missed:
-            record_miss(con, lid)
-        con.commit()
+    # A wall is a run of failures to the end of the batch: once Facebook blocks, nothing loads. A page that loaded
+    # after earlier failures proves those were removals, however many there were (11/12: 28 of 52 failed with
+    # loads mixed in between). Only the unbroken tail is suspect, and only if known-live listings fail too.
+    walled = tail >= 3 and not await control_readable(con, fb, {r["id"] for r in todo})
+    if walled:
+        errors.append(f"facebook item pages unreadable (the last {tail} of {ok + len(missed)}) - login wall?")
+    for lid in (missed[:len(missed) - tail] if walled else missed):
+        record_miss(con, lid)
+    con.commit()
 
 
 async def parse_pending(con, http, limit: int, errors: list, concurrency: int = PARSE_CONCURRENCY,

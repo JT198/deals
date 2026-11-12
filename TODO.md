@@ -5,9 +5,6 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Needs Jon
 
-- [ ] **Open the site once through deals.alerolabs.ai**, then tell Claude: the login-token check is in log-only mode
-      until the app's audience tag has been seen in a real request (`journalctl -u deals-web | grep access-token`),
-      then add `CF_ACCESS_AUD=<tag>` and `CF_ACCESS_VERIFY=enforce` to /opt/deals/.env and restart deals-web.
 - [ ] One-off Telegram reminders on .82: `deals-reminder-1119` (what a bar of 70 sent that week) and
       `deals-reminder-1126` (scoring check due). Delete each timer, service and /opt/deals/data/reminder_*.py after it fires.
 - [ ] **Buy box**: set a max price for 4-seat UTVs and zero-turns (Setup -> Buy box); pick models once decided.
@@ -51,6 +48,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/12 15:17 Login-token check switched to blocking: Jon's real request verified, audience tag pinned
+  (`CF_ACCESS_AUD` + `CF_ACCESS_VERIFY=enforce` in /opt/deals/.env; previous file kept as .env.bak-20261112).
+  A request from the tunnel with only the e-mail header now gets 403. If the Access app is ever re-created in
+  Cloudflare its tag changes: set `CF_ACCESS_VERIFY=log`, restart deals-web, read the new tag from the log.
 
 - 11/12 14:27 second Facebook pause of the day, also not an address block: the last 8 item pages of an 85-page scan
   and three known-live listings all failed, yet a new browser read just-seen listings four minutes later (and the

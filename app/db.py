@@ -140,9 +140,10 @@ DEFAULT_SETTINGS = {
 
 SEED_VERSION = 6   # bump when categories.py gains default searches
 
-def connect() -> sqlite3.Connection:
+def connect(shared: bool = False) -> sqlite3.Connection:
+    """shared=True: the connection may be closed from another thread (the dashboard cleans up after each request)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    con = sqlite3.connect(DB_PATH, timeout=30)
+    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=not shared)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=30000")

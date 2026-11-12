@@ -53,6 +53,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/11 21:21 outage ("database is locked", every scan lane crashing, ~15 min): clearing a buying stage wrote NULL
+  into `starred` (NOT NULL), the request failed mid-write and the dashboard process kept SQLite's write lock until
+  it was restarted. Fixed both: clearing a stage keeps the star, and every connection a dashboard request opens is
+  rolled back and closed when the request ends, however it ends (`web.connect` + the gate middleware). Tests 81.
+
 - 11/11 Scoring round 2 (Jon: "fix the others, get it production ready"). Reposts (same year + exact miles + town)
   count once at the latest price and never price themselves (~750 UTV/ATV comps removed). Defender Limited = cab +
   heat + A/C even when unstated, A/C implies a cab, Lone Star = top trim (Limited went from +20% to +2% vs typical).

@@ -15,6 +15,7 @@ import time
 import os
 import subprocess
 import sys
+import contextvars
 import threading
 from pathlib import Path
 
@@ -43,6 +44,29 @@ STATIC = Path(__file__).parent / "static"
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 db.init()
 
+# Every connection a request opens is rolled back and closed when the request ends, however it ends. 11/11: a
+# handler raised in the middle of a write; its connection lingered with the transaction open and held SQLite's
+# write lock, so every scan lane crashed with "database is locked" until the dashboard was restarted.
+_REQUEST_CONS: contextvars.ContextVar = contextvars.ContextVar("request_cons", default=None)
+
+
+def connect():
+    con = db.connect(shared=True)
+    cons = _REQUEST_CONS.get()
+    if cons is not None:
+        cons.append(con)
+    return con
+
+
+def _release(cons) -> None:
+    for con in cons:
+        try:
+            if con.in_transaction:
+                con.rollback()
+            con.close()
+        except Exception:      # already closed, or mid-use by a response still streaming: nothing to release
+            pass
+
 
 @app.middleware("http")
 async def gate(request: Request, call_next):
@@ -56,7 +80,12 @@ async def gate(request: Request, call_next):
     if request.method != "GET" and (request.headers.get("sec-fetch-site") == "cross-site"
                                     or not (request.headers.get("content-type") or "").startswith("application/json")):
         return JSONResponse({"error": "cross-site request"}, status_code=403)      # JSON bodies need a CORS preflight
-    resp = await call_next(request)
+    cons: list = []
+    _REQUEST_CONS.set(cons)
+    try:
+        resp = await call_next(request)
+    finally:
+        _release(cons)
     # private data: never kept by Cloudflare; /api/listings may be kept by the browser and revalidated (ETag)
     resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -106,7 +135,7 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
     """Every live listing, for the dashboard (14k+ rows once the deep sweep ran: ~35 MB of JSON).
     Built once per change of the data, gzipped (~6 MB), and answered with 304 when the browser's
     copy is current - the 2-minute refresh usually downloads nothing."""
-    con = db.connect()
+    con = connect()
     where = ["parsed = 1"]
     if not include_irrelevant:
         where.append("relevant = 1")
@@ -173,7 +202,7 @@ def cards(body: dict = Body(...)):
     ids = [str(i) for i in (body.get("ids") or [])][:300]
     if not ids:
         return []
-    con = db.connect()
+    con = connect()
     dist = _geo(con)
     return [_card(r, dist) for r in con.execute(
         f"SELECT {LIST_COLS} FROM listings WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()]
@@ -208,7 +237,7 @@ def search(q: str):
     q = q.strip()
     if len(q) < 2:
         return []
-    con = db.connect()
+    con = connect()
     like = f"%{q}%"
     return [r["id"] for r in con.execute(
         """SELECT id FROM listings WHERE status IN ('active', 'pending') AND relevant = 1 AND (
@@ -218,14 +247,14 @@ def search(q: str):
 
 @app.get("/api/listing/{lid:path}/history")
 def history(lid: str):
-    con = db.connect()
+    con = connect()
     return [dict(r) for r in con.execute(
         "SELECT ts, price FROM price_history WHERE listing_id = ? ORDER BY ts", (lid,))]
 
 
 @app.post("/api/listing/{lid:path}")
 def mark(lid: str, body: dict = Body(...)):
-    con = db.connect()
+    con = connect()
     if not con.execute("SELECT 1 FROM listings WHERE id = ?", (lid,)).fetchone():
         raise HTTPException(404, "no such listing")
     for k in ("starred", "hidden"):
@@ -241,10 +270,12 @@ def mark(lid: str, body: dict = Body(...)):
         stage = body["stage"] or None
         if stage is not None and stage not in db.STAGES:
             raise HTTPException(400, f"stage must be one of {', '.join(db.STAGES)}")
-        con.execute("UPDATE listings SET stage = ?, stage_ts = ?, starred = ? WHERE id = ?",
-                    (stage, db.now() if stage else None, 0 if stage in ("purchased", "passed") else 1 if stage else None, lid))
-        con.execute("UPDATE listings SET starred = COALESCE(starred, 0) WHERE id = ?", (lid,))
-        body.setdefault("starred", stage not in (None, "purchased", "passed"))
+        # clearing the stage leaves the star as it is (it used to write NULL into a NOT NULL column and fail)
+        star = None if stage is None else 0 if stage in ("purchased", "passed") else 1
+        con.execute("UPDATE listings SET stage = ?, stage_ts = ?, starred = COALESCE(?, starred, 0) WHERE id = ?",
+                    (stage, db.now() if stage else None, star, lid))
+        if stage is not None:
+            body.setdefault("starred", bool(star))
     if "starred" in body:   # watching starts from the current price/status
         con.execute("""UPDATE listings SET watch_price = CASE WHEN starred = 1 THEN price END,
                          watch_status = CASE WHEN starred = 1 THEN status END WHERE id = ?""", (lid,))
@@ -257,7 +288,7 @@ def mark(lid: str, body: dict = Body(...)):
 def correct(lid: str, body: dict = Body(...)):
     """Jon overrides what the model read. Fields: family, year, miles, hours, is_dealer, red_flags (list),
     equipment (list), relevant. A null clears that field's correction; {} clears them all."""
-    con = db.connect()
+    con = connect()
     r = con.execute("SELECT category FROM listings WHERE id = ?", (lid,)).fetchone()
     if not r:
         raise HTTPException(404, "no such listing")
@@ -327,7 +358,7 @@ def start_trip(body: dict = Body(...)):
         hit = []
     if not hit:
         raise HTTPException(400, f"couldn't find {place} on the map - try 'City, ST'")
-    con = db.connect()
+    con = connect()
     st = db.settings(con)
     home = (db.trip(st) or {}).get("home") or {k: st.get(k) for k in db.HOME_KEYS}   # a trip from a trip keeps the real home
     con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('trip', ?)",
@@ -342,14 +373,14 @@ def start_trip(body: dict = Body(...)):
 
 @app.delete("/api/trip")
 def end_trip():
-    con = db.connect()
+    con = connect()
     return {"ok": True, "ended": db.end_trip_if_due(con, force=True)}
 
 
 @app.get("/api/alerts")
 def alert_activity(limit: int = 80):
     """Why recent candidates alerted or didn't, newest first."""
-    con = db.connect()
+    con = connect()
     return [dict(r) for r in con.execute(
         """SELECT a.ts, a.listing_id, a.outcome, a.reason, l.title, l.url, l.price, l.score, l.category
            FROM alert_activity a LEFT JOIN listings l ON l.id = a.listing_id
@@ -359,7 +390,7 @@ def alert_activity(limit: int = 80):
 @app.get("/api/market")
 def market(family: str):
     """Asking prices by year for one family, plus the expected-price curve."""
-    con = db.connect()
+    con = connect()
     rows = [dict(r) for r in con.execute(
         """SELECT id, title, year, price, status, is_dealer, seller_type, url, miles, hours, location,
                   deck_in, is_new
@@ -403,7 +434,7 @@ def _market_inputs(con, sold: bool = False):
 @app.get("/api/listing/{lid:path}/offer")
 def offer_notes(lid: str):
     """The offer-guidance notes, loaded when a card's Offer box is opened (a third of the feed otherwise)."""
-    r = db.connect().execute("SELECT offer_notes FROM listings WHERE id = ?", (lid,)).fetchone()
+    r = connect().execute("SELECT offer_notes FROM listings WHERE id = ?", (lid,)).fetchone()
     if not r:
         raise HTTPException(404, "no such listing")
     return {"notes": json.loads(r["offer_notes"] or "[]")}
@@ -413,7 +444,7 @@ def offer_notes(lid: str):
 def why(lid: str):
     """How this listing's typical price was reached: the comps that went into it, each lined up to this
     machine, plus the sold comps behind "typically sells around"."""
-    con = db.connect()
+    con = connect()
     r = con.execute("SELECT * FROM listings WHERE id = ?", (lid,)).fetchone()
     if not r:
         raise HTTPException(404, "no such listing")
@@ -451,7 +482,7 @@ def why(lid: str):
 @app.get("/api/trends")
 def trends(category: str):
     """Weekly market pulse for a category: supply, pricing vs typical, and how fast things go."""
-    con = db.connect()
+    con = connect()
     wk = "strftime('%Y-%W', {col}, 'unixepoch', 'localtime')"
     new = {r["w"]: dict(r) for r in con.execute(
         f"""SELECT {wk.format(col='COALESCE(listed_at, first_seen)')} w, COUNT(*) n, MIN(COALESCE(listed_at, first_seen)) t
@@ -491,7 +522,7 @@ def trends(category: str):
 @app.get("/api/scorecard")
 def scorecard():
     """How well the score has predicted what sells, what the pricing has learned, and the daily history."""
-    con = db.connect()
+    con = connect()
     comps, _ = _market_inputs(con)
     out = score.scorecard(con, comps)
     out["history"] = [dict(json.loads(r["data"]), day=r["day"]) for r in con.execute(
@@ -502,7 +533,7 @@ def scorecard():
 @app.get("/api/ended")
 def ended(family: str):
     """Recently sold or removed listings of one family - last asking price is the closest thing to a sold price."""
-    con = db.connect()
+    con = connect()
     return [dict(r) for r in con.execute(
         """SELECT title, url, source, year, miles, hours, deck_in, len_ft, width_ft, first_price, end_price, status,
                   ended_at, (ended_at - COALESCE(listed_at, first_seen)) / 86400 days
@@ -514,7 +545,7 @@ CONDITION = {"excellent": 1.05, "good": 1.0, "fair": 0.9, "needs work": 0.75}
 
 
 def _appraisal(body: dict) -> dict:
-    con = db.connect()
+    con = connect()
     cat = body.get("category")
     if cat not in CATEGORIES:
         raise HTTPException(400, "unknown category")
@@ -618,7 +649,7 @@ async def appraise_draft(body: dict = Body(...)):
 
 @app.get("/api/families")
 def families():
-    con = db.connect()
+    con = connect()
     counts = {r["family"]: r["n"] for r in con.execute(
         "SELECT family, COUNT(*) n FROM listings WHERE relevant = 1 AND family IS NOT NULL GROUP BY family")}
     return [{"family": f, "category": c, "count": counts[f]}
@@ -633,7 +664,7 @@ def categories():
 
 @app.get("/api/settings")
 def get_settings():
-    con = db.connect()
+    con = connect()
     st = db.settings(con)
     st["fb_proxy"] = _mask_proxy(st.get("fb_proxy") or "")
     return {"settings": st, "alert_rules": db.alert_rules(st), "scan_every": db.scan_every(st), "trip": db.trip(st),
@@ -651,7 +682,7 @@ EDITABLE = {"scan_every", "alert_min_pct", "alert_min_usd", "fb_proxy", "fb_rout
 
 @app.put("/api/settings")
 def put_settings(body: dict = Body(...)):
-    con = db.connect()
+    con = connect()
     for k, v in body.items():
         if k not in EDITABLE:
             raise HTTPException(400, f"unknown setting {k}")
@@ -728,7 +759,7 @@ def add_search(body: dict = Body(...)):
     q = (body.get("query") or "").strip().lower()
     if not q:
         raise HTTPException(400, "query required")
-    con = db.connect()
+    con = connect()
     cat = body.get("category") if body.get("category") in CATEGORIES else "utv4"
     have = con.execute("SELECT category FROM searches WHERE query = ?", (q,)).fetchone()
     if have:
@@ -740,7 +771,7 @@ def add_search(body: dict = Body(...)):
 
 @app.patch("/api/searches/{sid}")
 def toggle_search(sid: int, body: dict = Body(...)):
-    con = db.connect()
+    con = connect()
     for k in ("enabled", "quick"):
         if k in body:
             con.execute(f"UPDATE searches SET {k} = ? WHERE id = ?", (1 if body[k] else 0, sid))
@@ -750,7 +781,7 @@ def toggle_search(sid: int, body: dict = Body(...)):
 
 @app.delete("/api/searches/{sid}")
 def del_search(sid: int):
-    con = db.connect()
+    con = connect()
     con.execute("DELETE FROM searches WHERE id = ?", (sid,))
     con.commit()
     return get_settings()
@@ -758,7 +789,7 @@ def del_search(sid: int):
 
 @app.get("/api/status")
 def status():
-    con = db.connect()
+    con = connect()
     runs = [dict(r) for r in con.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 8")]
     for r in runs:
         r["errors"] = json.loads(r["errors"]) if r["errors"] else []
@@ -797,7 +828,7 @@ def fbtest(body: dict = Body(...)):
                            timeout=150, cwd=str(Path(__file__).resolve().parent.parent))
         out = json.loads(r.stdout.strip().splitlines()[-1])
         if out.get("ok"):      # Facebook is answering on this route again: no reason to keep waiting
-            con = db.connect()
+            con = connect()
             con.execute("DELETE FROM settings WHERE key = ?", (f"fb_backoff_until:{route}",))
             con.commit()
             out["pause_lifted"] = True

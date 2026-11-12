@@ -720,6 +720,31 @@ def test_round2_reposts_trims_families_series():
     assert got[0] is None and "size" in tr["method"], (got, tr)
 
 
+def test_failed_request_never_keeps_the_database_locked():
+    """11/11: clearing a stage raised mid-write and the dashboard kept SQLite's write lock until it was restarted."""
+    import sqlite3
+    from fastapi.testclient import TestClient
+    from app import web, score
+    reset([{"id": "facebook:0", "ext_id": "0", "category": "utv4", "price": 10000}])
+    c = TestClient(web.app, headers={"x-real-ip": "10.10.10.50"}, raise_server_exceptions=False)
+    # clearing a stage works and keeps the star
+    assert c.post("/api/listing/facebook:0", json={"stage": "contacted"}).status_code == 200
+    assert c.post("/api/listing/facebook:0", json={"stage": None}).status_code == 200
+    r = db.connect().execute("SELECT stage, starred FROM listings WHERE id = 'facebook:0'").fetchone()
+    assert (r["stage"], r["starred"]) == (None, 1), tuple(r)
+    # a handler that blows up after writing: the request's connection is rolled back and closed
+    real = score.mark_ended
+    score.mark_ended = lambda con: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        assert c.post("/api/listing/facebook:0", json={"gone": True}).status_code == 500
+    finally:
+        score.mark_ended = real
+    other = sqlite3.connect(db.DB_PATH, timeout=1)
+    other.execute("UPDATE listings SET notes = 'still writable' WHERE id = 'facebook:0'")      # raises if locked
+    other.commit()
+    assert db.connect().execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] != "gone"
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:

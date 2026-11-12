@@ -5,6 +5,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Needs Jon
 
+- [ ] **Open the site once through deals.alerolabs.ai**, then tell Claude: the login-token check is in log-only mode
+      until the app's audience tag has been seen in a real request (`journalctl -u deals-web | grep access-token`),
+      then add `CF_ACCESS_AUD=<tag>` and `CF_ACCESS_VERIFY=enforce` to /opt/deals/.env and restart deals-web.
+- [ ] One-off Telegram reminders on .82: `deals-reminder-1119` (what a bar of 70 sent that week) and
+      `deals-reminder-1126` (scoring check due). Delete each timer, service and /opt/deals/data/reminder_*.py after it fires.
 - [ ] **Buy box**: set a max price for 4-seat UTVs and zero-turns (Setup -> Buy box); pick models once decided.
       Instant alerts are only as good as the box.
 - [ ] **Use the signals**: Star / Fix / Hide on the dashboard, 👍 / 👎 under Telegram alerts. The 10/12 tuning
@@ -27,14 +32,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Build ideas (ordered)
 
-- [ ] Trailers are still the weakest numbers (middle half of listings spans ~60 points around typical; UTVs ~21):
-      most ads give no GVWR and no year, and condition / home-built can't be read. Comparing within one trailer
-      type did not help (tested 11/11). Needs better inputs: GVWR inferred from axle count + length, a photo read,
-      or dealer websites as the new-price source.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
-- [ ] Score scale: "Great" (75) = 30% under typical. With tighter typicals that is rare for 4-seat UTVs (about
-      1 in 120 private listings); consider an alert bar of 70 (25% under) for utv4 once a week of new scores is in.
 - [ ] RZR Pro S 4 sits in the Turbo R 4 family (4 same-age comps); give it its own family once ~15 are listed.
 - [ ] Newly promoted listings (bigger engines that used to look overpriced) showed no faster selling in the
       11/11 outcome check (n=28) - re-check with the next scoring review.
@@ -52,6 +51,18 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/12 Hardening + follow-ups. Every service runs as the unprivileged `deals` user (read-only system, writes only
+  under /opt/deals/data, cannot read .env, Chromium sandbox on; browsers in /opt/deals/pw-browsers; installer sets
+  it up and re-owns data on every deploy). **Manual commands on .82: `runuser -u deals -- ...`** (a root run can
+  leave root-owned database files; the units re-own them at start). Cloudflare Access token verified in the gate
+  (signature, issuer, expiry, e-mail; `CF_ACCESS_TEAM=systemgo`, log-only until the audience tag is pinned; needs
+  PyJWT[crypto] in the venv - installed by hand, in requirements.txt). Nightly backup can run twice a day.
+  4-seat UTV alert bar 75 -> 70: the week before had 0 at 75+ and 3 at 70-74, one of them (2022 RZR XP 4 Ultimate,
+  $11,500 vs $15,705) already sold. Checked and left alone: database backups (whole container to PBS nightly at
+  04:00 + live DB in the OneDrive offsite set); trailer weight-class guessing (made the affected trailers worse:
+  middle-half spread 61 -> 70 pts) - and trailer discounts already predict sales (30%+ under sells 18.3% in 3 days
+  vs 6.8% over typical), so trailer pricing stays as is. Tests 82.
 
 - 11/12 False "Facebook blocked" pause 08:20-10:19 (the 11/06 fix did not cover it): a full scan's item-page batch
   had 28 of 52 pages fail, the single control page failed too, and Facebook was paused 2 h - while the fast lane's

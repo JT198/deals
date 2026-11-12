@@ -27,13 +27,17 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Build ideas (ordered)
 
-- [ ] From the 11/11 scoring review, still open: Defender Limited / cab models sit 10-13% over typical after the
-      cab adjustment (needs a trim tier); misfiled models (RZR Pro S 4 under Pro R 4, Maverick R under X3 MAX,
-      Vitacci / Odes / Landmaster in "Other 4-seat UTV"); reposts counted twice as comps (~950 of 8,000 UTV comps
-      share family + year + exact miles); "Why $X?" lists every year when the trend line is used; "Ranger Crew 1000"
-      holds Crew 900 / 800 / 700 (now separated by engine class, family name still misleading).
-- [ ] Re-score takes ~28 s on 38k listings (was ~5 s on 16k): `usage.doubt` compiles its patterns per listing.
-- [ ] Typical price from private sellers only (or dealer asks down-weighted); the buy box is private-only.
+- [ ] Trailers are still the weakest numbers (middle half of listings spans ~60 points around typical; UTVs ~21):
+      most ads give no GVWR and no year, and condition / home-built can't be read. Comparing within one trailer
+      type did not help (tested 11/11). Needs better inputs: GVWR inferred from axle count + length, a photo read,
+      or dealer websites as the new-price source.
+- [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
+      Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
+- [ ] Score scale: "Great" (75) = 30% under typical. With tighter typicals that is rare for 4-seat UTVs (about
+      1 in 120 private listings); consider an alert bar of 70 (25% under) for utv4 once a week of new scores is in.
+- [ ] RZR Pro S 4 sits in the Turbo R 4 family (4 same-age comps); give it its own family once ~15 are listed.
+- [ ] Newly promoted listings (bigger engines that used to look overpriced) showed no faster selling in the
+      11/11 outcome check (n=28) - re-check with the next scoring review.
 - [ ] Ask the model for the price written in the ad text, to recover "$1" / "$123" placeholder listings.
 - [ ] Dealer websites as a new-price source for trailers (Marketplace only shows dealers who post there).
 - [ ] Cap starred page re-checks (every full scan today) once the shortlist grows.
@@ -48,6 +52,19 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/11 Scoring round 2 (Jon: "fix the others, get it production ready"). Reposts (same year + exact miles + town)
+  count once at the latest price and never price themselves (~750 UTV/ATV comps removed). Defender Limited = cab +
+  heat + A/C even when unstated, A/C implies a cab, Lone Star = top trim (Limited went from +20% to +2% vs typical).
+  Sub-model matching extended to jet skis (engine class), mowers (series: Scag Liberty vs Cheetah, Bad Boy MZ vs
+  Rogue...) and off-brand machines in the "Other" families. `categories.fix_family`: Maverick R families, Pro S 4,
+  pre-2022 "Turbo" 4-seaters, families the model year rules out get no typical (one-off pass over old listings via
+  `family_fix_version`). Trailers with no size in the ad get no typical. "Why $X?" shows lined-up values for
+  trend-line comps. Re-score 28 s -> 20 s (`usage.doubt` patterns compiled once, comps as namedtuples).
+  Checked and dropped: "typical from private sellers only" (dealer +1% vs private +2% for UTVs - no difference).
+  Outcome check (2,661 fresh private listings): 15-25% under now sells 12.0% in 3 days (was 9.6%); the 65 listings
+  that dropped out of "20%+ under" sold 3.1% (average 7.6%) - they were not deals. "Great" counts start of day ->
+  now: utv4 30 -> 18, utv2 128 -> 84, ATV 133 -> 62, jet skis 47 -> 25, mowers 61 -> 32. Tests 80.
 
 - 11/11 Scoring review (Jon: comps looked off on older models, miles, trims). Year and miles were fine on average;
   the cause was sub-models pooled in one family (Defender MAX HD9 -19% vs "typical", Ranger 1000 non-XP -14 to -20%,

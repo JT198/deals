@@ -13,9 +13,12 @@ SINCE = re.compile(r"\s+(?:ago|since)\b|\s+on\s+(?:the\s+|a\s+|its\s+|it's\s+)?(
                    r"(?:new|rebuilt|fresh|replacement|top\s+end|rebuild)")
 # clear statements of total use
 TOTAL = (r"(?:only|just|has|with|original|actual|total|odometer|showing|shows|reads)\s+(?:about\s+|around\s+|under\s+|~\s*)?"
-         r"{v}\s*{u}|{v}\s*{u}\s+(?:on\s+(?:it|her|the\s+(?:machine|unit|odometer|clock|sled|ski|engine|motor))|total|original)")
+         r"(?<![\d.])(\d+)\s*{u}|(?<![\d.])(\d+)\s*{u}\s+(?:on\s+(?:it|her|the\s+(?:machine|unit|odometer|clock|sled|ski|engine|motor))|total|original)")
 LOW = {"miles": 150, "hours": 10}        # below this on a 2+ year old machine is worth a second look
 VEHICLES = ("utv4", "utv2", "atv", "sled", "pwc")
+# compiled once: every "<number> miles" / "<number> hours" in an ad, and the clear statements of total use
+NUM = {f: re.compile(rf"(?<![\d.])(\d{{1,7}})\s*{u}") for f, u in UNIT.items()}
+TOTAL_RX = {f: re.compile(TOTAL.format(u=u)) for f, u in UNIT.items()}
 
 
 def _get(row, key):
@@ -32,19 +35,20 @@ def doubt(row) -> str | None:
         v = _get(row, field)
         if v is None:
             continue
-        hits = list(re.finditer(rf"(?<![\d.]){v}\s*{UNIT[field]}", text))
+        hits = [m for m in NUM[field].finditer(text) if int(m.group(1)) == v]
         since = [m for m in hits if SINCE.match(text, m.end())]
         if hits and len(since) == len(hits):
             return (f"the ad only mentions {v:,} {field} since a repair or replacement - "
                     f"the machine's total {field} aren't stated")
         year = _get(row, "year")
-        stated = any(not SINCE.match(text, m.end()) for m in re.finditer(TOTAL.format(v=v, u=UNIT[field]), text))
+        stated = any(not SINCE.match(text, m.end()) for m in TOTAL_RX[field].finditer(text)
+                     if int(m.group(1) or m.group(2)) == v)
         if (_get(row, "category") in VEHICLES and _get(row, "is_new") != 1 and year
                 and year <= time.localtime().tm_year - 2 and v < LOW[field] and not stated):
             return f"{v:,} {field} is unusually low for a {year} - confirm it with the seller"
     if _get(row, "miles") is None and _get(row, "hours") is None and _get(row, "category") in VEHICLES:
         for field in ("miles", "hours"):   # nothing recorded, but the ad gives a since-repair number
-            for m in re.finditer(rf"(?<![\d.])(\d{{1,6}})\s*{UNIT[field]}", text):
+            for m in NUM[field].finditer(text):
                 if SINCE.match(text, m.end()):
                     return (f"the ad only mentions {int(m.group(1)):,} {field} since a repair or replacement - "
                             f"the machine's total {field} aren't stated")

@@ -647,7 +647,7 @@ def test_sub_models_compared_with_their_own():
     assert v(title="Polaris Ranger Crew, 900 miles, $1000 off", cc=None) is None      # miles / dollars are not engine sizes
     assert variant(dict(category="utv4", family="Defender MAX", title="2024 Defender MAX XT HD9", cc=976)) == "HD9"
     assert variant(dict(category="utv2", family="Defender (2-seat)", title="Defender hd 7", cc=None)) == "HD5-HD8"
-    assert variant(dict(category="utv4", family="Defender MAX", title="Defender MAX Limited", cc=976)) is None
+    assert variant(dict(category="utv4", family="Defender MAX", title="Defender MAX XT", cc=976)) is None
     assert variant(dict(category="atv", family="Polaris Sportsman", title="Sportsman", cc=570)) == "570 class"
     assert variant(dict(category="sled", family="x", title="Indy 850", cc=850)) is None
 
@@ -671,6 +671,53 @@ def test_sub_models_compared_with_their_own():
     plain = score.score(dict(row, year=2023), 24000, 23)
     mixed = score.score(dict(row, year=2023), 24000, 23, mixed=True)
     assert mixed[0] < plain[0] and any("exact model" in x for x in mixed[2]), (plain, mixed)
+
+
+def test_round2_reposts_trims_families_series():
+    from app import score, equipment
+    from app.categories import fix_family
+    from app.variant import variant
+    # one machine posted three times (new titles, a price cut) is one comp - the latest - and never prices itself
+    con = reset([])
+    fam, t = "Defender MAX", db.now()
+    same = dict(category="utv4", family=fam, year=2021, miles=7100, location="Parnell, IA")
+    _insert(con, [dict(same, price=22500, title="2021 CanAm defender max", last_seen=t - 9000),
+                  dict(same, price=21000, title="2021 CAN-AM DEFENDER MAX - price drop", last_seen=t),
+                  dict(same, price=21500, title="CAN-AM DEFENDER MAX", last_seen=t - 5000),
+                  dict(category="utv4", family=fam, year=2021, miles=7100, location="Ely, MN", price=19000, title="another one")])
+    comps = score._comps(con)[fam]
+    assert sorted(c.price for c in comps) == [19000, 21000], comps
+    me = dict(same, id="facebook:new", title="2021 defender max reposted again", price=20500, equipment="[]", hours=None)
+    tr = {}
+    score.expected_price(me, {fam: comps * 3}, None, tr)
+    assert all(c["price"] == 19000 for c in tr["comps"]), tr["comps"]
+    # Defender Limited = factory cab, heat and A/C even when the ad doesn't say so; A/C alone implies the cab
+    row = lambda **k: dict(dict(category="utv4", family=fam, title="", description="", extras="[]", summary="", trim=None), **k)
+    assert equipment.detect(row(title="2021 Can-Am Defender MAX Limited")) == ["cab", "heat", "ac"]
+    assert equipment.detect(row(title="2022 Defender MAX XT", description="ice cold a/c")) == ["cab", "heat", "ac"]
+    assert equipment.detect(row(title="2022 Defender MAX Lone Star")) == ["top_trim"]
+    assert equipment.detect(row(family="Ranger Crew 1000", title="Ranger Crew limited edition")) == []
+    assert variant(row(title="Defender MAX Limited")) == "HD10"
+    # families the title or the year rule out
+    assert fix_family("Maverick X3 MAX", 2024, "2024 Can am maverick r 4 max") == "Maverick R MAX"
+    assert fix_family("Maverick X3 MAX", 2021, "Maverick X3 X RS Turbo RR") == "Maverick X3 MAX"
+    assert fix_family("RZR Pro R 4", 2025, "2025 Polaris rzr pro s 4") == "RZR Turbo R 4"
+    assert fix_family("RZR Turbo R 4", 2019, "2019 rzr turbo s 4") == "RZR XP 4"
+    assert fix_family("Maverick MAX (2014-2016, pre-X3)", 2023, "2023 Can Am Max Hd 7") is None
+    assert fix_family("Ranger Crew 1000", 2012, "ranger crew 800") == "Ranger Crew 1000"
+    # mower series, jet ski engine class, budget brands
+    assert variant(dict(category="mower", family="Scag", title="Scag Cheetah 61")) == "Cheetah"
+    assert variant(dict(category="mower", family="Bad Boy", title="Bad Boy MZ Magnum 54")) == "MZ"
+    assert variant(dict(category="mower", family="Scag", title="Scag 52 zero turn")) is None
+    assert variant(dict(category="pwc", family="Yamaha VX", title="VX 110 Deluxe", cc=1052)) == "1000-1100cc"
+    assert variant(dict(category="pwc", family="Yamaha VX", title="VX 110 Deluxe", cc=None)) is None
+    assert variant(dict(category="utv4", family="Other 4-seat UTV", title="2021 Vitacci Predator 400 XL", cc=400)) == "budget brand"
+    # a trailer with no size in the ad gets no typical price
+    con = reset([])
+    _insert(con, [dict(category="trailer", family="Enclosed cargo", price=5000 + 100 * i, len_ft=12 + i, title=f"t{i}") for i in range(8)])
+    tr = {}
+    got = score.expected_price({"id": "x", "category": "trailer", "family": "Enclosed cargo", "len_ft": None, "year": None}, score._comps(con), None, tr)
+    assert got[0] is None and "size" in tr["method"], (got, tr)
 
 
 def test_parse_pwc_and_sled_fields():

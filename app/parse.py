@@ -9,7 +9,7 @@ import time
 
 import httpx
 
-from .categories import CATEGORIES, FAMILY_CATEGORY
+from .categories import CATEGORIES, FAMILY_CATEGORY, fix_family
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://10.10.10.76:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:27b-64k")
@@ -33,7 +33,9 @@ Seat hints: "MAX", "Crew", "XP 4", "4-seat", "Teryx4", "KRX4", "X4", "RMAX4", "G
 Jet skis are often sold as a PAIR on a double trailer ("two Sea-Doos", "his and hers", "2 skis") - that is one pwc listing with units 2,
 but ONLY when the one listed price buys both. "$3,500 each" / "price is per ski" means the price is for ONE machine: units 1.
 Today is {today}; the current model year is {model_year}. A used machine of the current or next model year is still used.
-Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family.
+Can-Am Maverick X3 started with model year 2017; an earlier "Maverick MAX 1000R" is the pre-X3 family. The Maverick R (2024+) is its own family, not an X3.
+Polaris: a "RZR Pro S" / "Pro S 4" (2025+) goes in the Turbo R family; a 4-seat "Turbo" or "Turbo S" from before 2022 is an RZR XP 4; "Pro R" only when the ad says Pro R.
+Off-brand machines (Vitacci, Odes, Landmaster, Coleman, Massimo, Hisun, Tracker and the like) go in the "Other ..." family of their category.
 
 Return ONLY a JSON object with these keys:
 - category: one of "utv4", "utv2", "atv", "trike", "mower", "trailer", "pwc", "sled", or "none" (anything else: dirt bikes, golf carts, lawn tractors, campers, boats, cars)
@@ -133,6 +135,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
     if fam and cat != FAMILY_CATEGORY[fam]:
         cat = FAMILY_CATEGORY[fam]    # the family is the more specific answer
     year = num(d.get("year"))
+    if fam:      # families the title or the model year rule out (categories.fix_family)
+        fam = fix_family(fam, year if year and 1965 <= year <= 2030 else None, listing.get("title"))
+        cat = FAMILY_CATEGORY[fam] if fam else cat
     deck = num(d.get("deck_in"))
     units = num(d.get("units"))
     track = num(d.get("track_in")) if cat == "sled" else None

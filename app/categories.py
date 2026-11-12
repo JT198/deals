@@ -12,6 +12,7 @@ every_min  how often each search in this category runs on Facebook
 quick      searches the 5-minute fast lane also runs (newest first), to be first to message a seller
 bands      asking-price edges the deep sweep starts from (sweep.py); a band that comes back full is split further
 """
+import re
 
 CATEGORIES = {
     "utv4": {
@@ -24,7 +25,7 @@ CATEGORIES = {
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
             "Ranger Crew 1000", "Ranger Crew 570", "General 4",
-            "Defender MAX", "Maverick MAX (2014-2016, pre-X3)", "Maverick X3 MAX", "Maverick Sport MAX",
+            "Defender MAX", "Maverick MAX (2014-2016, pre-X3)", "Maverick X3 MAX", "Maverick R MAX", "Maverick Sport MAX",
             "Maverick Trail/Sport MAX", "Commander MAX",
             "Pioneer 1000-5/6", "Pioneer 700-4", "Talon 4",
             "Teryx4", "Teryx KRX4", "Mule Pro-FXT",
@@ -47,7 +48,7 @@ CATEGORIES = {
         "families": [
             "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP/Pro R (2-seat)", "RZR 900/570/Trail (2-seat)",
             "Ranger XP 1000/1500 (2-seat)", "Ranger 570/500 (2-seat)", "General 1000 (2-seat)",
-            "Defender (2-seat)", "Maverick X3 (2-seat)", "Maverick Sport/Trail (2-seat)", "Commander (2-seat)",
+            "Defender (2-seat)", "Maverick X3 (2-seat)", "Maverick R (2-seat)", "Maverick Sport/Trail (2-seat)", "Commander (2-seat)",
             "Pioneer 1000/700/520 (2-seat)", "Talon 1000 (2-seat)", "Teryx/KRX 1000 (2-seat)",
             "Mule (2-seat)", "Wolverine X2/RMAX2", "Viking (3-seat)", "Gator XUV/HPX",
             "Kubota RTV", "CFMoto ZForce/UForce (2-seat)", "Other 2-seat UTV",
@@ -172,6 +173,34 @@ CATEGORIES = {
 }
 
 FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"]}
+
+# The model files some ads under a family the machine can't belong to (11/11 review: a $21k RZR Pro S 4 priced as a
+# $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
+# 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
+# comp) when the model year rules it out.
+FAMILY_FIX_VERSION = 1        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+_FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
+               "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
+               "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
+_LAST_YEAR = {"Maverick MAX (2014-2016, pre-X3)": 2018}
+_MAVERICK_R = re.compile(r"\bmaverick\s+r\b(?!\s*[/&])")
+_PRO_S = re.compile(r"\bpro\s?-?s\b")
+
+
+def fix_family(family: str | None, year: int | None, title: str | None) -> str | None:
+    """The family this listing should be filed under, or None when its model year rules the family out."""
+    if not family:
+        return family
+    t = (title or "").lower()
+    if family in ("Maverick X3 MAX", "Maverick X3 (2-seat)") and _MAVERICK_R.search(t) and (not year or year >= 2024):
+        family = "Maverick R MAX" if family == "Maverick X3 MAX" else "Maverick R (2-seat)"
+    if family == "RZR Pro R 4" and _PRO_S.search(t):
+        family = "RZR Turbo R 4"            # the Pro S replaced the Turbo R for 2025: same class and price range
+    if family == "RZR Turbo R 4" and year and year < 2022:
+        family = "RZR XP 4"                 # "Turbo" / "Turbo S" 4-seaters before 2022 are XP 4s
+    if year and (year < _FIRST_YEAR.get(family, 0) or year > _LAST_YEAR.get(family, 9999)):
+        return None
+    return family
 
 
 def cfg(category: str | None) -> dict:

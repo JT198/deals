@@ -46,7 +46,13 @@ TRIMS = {
     # Commander: XT / DPS price like the middle (10/12 check-in), so only the top trims are marked
     "Commander MAX": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"),),
     "Commander (2-seat)": (("top_trim", r"\bx\s?-?mr\b|\bxt-?p\b"),),
+    # Defender: Lone Star asks ~14% over the family with no cab (11/11 review); Limited is priced as its cab
+    "Defender MAX": (("top_trim", r"\blone\s?star\b"),),
+    "Defender (2-seat)": (("top_trim", r"\blone\s?star\b"),),
 }
+# Editions that are a factory cab with heat and A/C but rarely say so: 118 Defender Limiteds had no equipment
+# detected and sat 20% over "typical" (11/11 review)
+FULL_CAB = {"Defender MAX": r"\blimited\b", "Defender (2-seat)": r"\blimited\b"}
 
 
 def trim_level(row) -> str | None:
@@ -109,6 +115,11 @@ def detect(row) -> list[str]:
         if f == "trailer" and re.search(r"\b(my|his|our|your|their)\s+trailer\b|\bdeliver\w*\s+(it\s+)?(with|on)\b", text):
             continue      # the seller's own trailer brings it to you; it isn't included
         found.append(f)
+    fam = row["family"] if "family" in (row.keys() if hasattr(row, "keys") else row) else None
+    head = " ".join(str(x or "") for x in (row["title"], row["trim"] if "trim" in (row.keys() if hasattr(row, "keys") else row) else "")).lower()
+    full = fam in FULL_CAB and re.search(FULL_CAB[fam], head)
+    if ("ac" in found or full) and "cab" in feats:     # A/C only comes in a factory cab, which is heated
+        found = [f for f in feats if f in found or f in ("cab", "heat", "ac")]
     if "heat" in found and "cab" not in found:     # heat without a cab is heated grips/seats, not cab heat
         found.remove("heat")
     level = trim_level(row)

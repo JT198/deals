@@ -5,18 +5,19 @@ prices, not sold prices - so "expected" means "what these usually list for").
 """
 import json
 import math
+from collections import namedtuple
 import statistics
 import time
 
-from .categories import FAMILY_CATEGORY, cfg
+from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, fix_family
 from . import db, usage
-from .variant import MIN_COMPS as VARIANT_MIN, variant
+from .variant import min_comps, variant
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, TRIMS, detect
 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
 
 TOO_GOOD = 0.40         # discount past which a listing is flagged and the score tapers (11/04)
-EQUIP_VERSION = 4   # bump when equipment.detect learns something new: every listing is re-detected once
+EQUIP_VERSION = 5   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
 NOW_YEAR = time.localtime().tm_year
@@ -30,12 +31,29 @@ def _v(listing, key):
         return None
 
 
-class Comp(tuple):
+_Comp = namedtuple("_Comp", "id year price deck miles hours len_ft axles equip track cc gvwr width key variant machine",
+                   defaults=(None, None))
+
+
+class Comp(_Comp):
     """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc, gvwr_lb, width_ft,
-    key, variant) - key is the cross-post group (normalized title, price), so a machine never prices itself through
-    a copy; variant is the sub-model within the family (variant.py)."""
-    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width, key, variant = (
-        property(lambda t, i=i: t[i]) for i in range(15))
+    key, variant, machine) - key is the cross-post group (normalized title, price), so a machine never prices itself
+    through a copy; variant is the sub-model within the family (variant.py); machine is the repost group
+    (machine_key). Built from one tuple: Comp((id, year, ...))."""
+    __slots__ = ()
+
+    def __new__(cls, t):
+        return _Comp.__new__(cls, *t)
+
+
+def machine_key(listing) -> tuple | None:
+    """The same machine posted again with a new title or price: same model year, same exact miles (or hours), same
+    town. 11/11 review: ~750 of the UTV / ATV comps were such reposts, each counted as another data point - and a
+    listing could be priced by its own earlier posting. None when the ad doesn't give enough to tell."""
+    year, loc = _v(listing, "year"), (_v(listing, "location") or "").strip().lower()
+    miles, hours = _v(listing, "miles"), _v(listing, "hours")
+    use = ("mi", miles) if miles and miles > 50 else ("h", hours) if hours and hours > 10 else None
+    return (year, use, loc) if year and use and loc and not _v(listing, "usage_doubt") else None
 
 
 def comp_key(listing) -> tuple | None:
@@ -134,19 +152,25 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
         """SELECT id, title, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
                   deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
                   CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc,
-                  gvwr_lb, width_ft, category, model, trim, engine
+                  gvwr_lb, width_ft, category, model, trim, engine, make, location, usage_doubt
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
         "COALESCE(red_flags, '[]') = '[]' AND " +      # a non-runner's price says nothing about a runner
-        ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?"),
+        ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?") +
+        " ORDER BY last_seen DESC, id",          # of one machine's postings, the latest (its current price) is kept
         (int(time.time()) - COMP_WINDOW,)).fetchall()
     by_fam: dict[str, list[Comp]] = {}
+    reposts = set()
     for r in dedupe_cross_posts(rows):
+        mk = machine_key(r)
+        if mk and (r["family"], mk) in reposts:
+            continue
+        reposts.add((r["family"], mk))
         by_fam.setdefault(r["family"], []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
                   frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"],
-                  (db.title_key(r["title"]), int(r["price"])), variant(r))))
+                  (db.title_key(r["title"]), int(r["price"])), variant(r), mk)))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -262,6 +286,19 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
     # not the listing itself, and not another posting of the same machine (its cross-post group)
     mine, me = comp_key(listing), _v(listing, "id")
     others = [x for x in family_pool(comps_by_fam, fam) if x.id != me and (mine is None or x.key != mine)]
+    machine = machine_key(listing)
+    if machine:      # ...nor an earlier posting of it under another title or price
+        others = [x for x in others if x.machine != machine]
+    # UTVs / ATVs / jet skis / mowers: an HD9 and an HD10, a Sportsman 450 and a 1000, a Scag Liberty and a
+    # Cheetah are different machines (variant.py)
+    sub, sub_thin = variant(listing), False
+    if sub:
+        same = [x for x in others if x.variant == sub]
+        if len(same) >= min_comps(cat):
+            others = same
+        else:
+            sub_thin = True
+    tr.update(variant=sub, variant_matched=bool(sub and not sub_thin))
     deck = _v(listing, "deck_in")
     if deck:   # mowers: a 42" and a 60" of the same series are different machines
         same_deck = [x for x in others if x.deck and abs(x.deck - deck) <= 6]
@@ -273,16 +310,12 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
             same = [x for x in others if getattr(x, field) and abs(getattr(x, field) - mine) <= tol]
             if len(same) >= 4:
                 others = same
-    # UTVs / ATVs: an HD9 and an HD10, a Sportsman 450 and a 1000, are different machines (variant.py)
-    sub, sub_thin = variant(listing), False
-    if sub:
-        same = [x for x in others if x.variant == sub]
-        if len(same) >= VARIANT_MIN:
-            others = same
-        else:
-            sub_thin = True
-    tr.update(variant=sub, variant_matched=bool(sub and not sub_thin))
     length = _v(listing, "len_ft")
+    if cat == "trailer" and not length:
+        # no size in the ad: the family median mixes 5x8s with 20-footers, so any number would be noise
+        # (11/11 review: these sat a median 25% "under typical", a quarter of them 67% under)
+        tr.update(method="the ad doesn't state the trailer's size, so there is nothing fair to compare it with")
+        return none
     if length:   # trailers: a 5x8 single-axle and a 7x18 tandem are different things
         axles = _v(listing, "axles")
         others = same_build(listing, others)      # ...and so are a 10K and a 14K, or a deckover
@@ -403,7 +436,7 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
             pool, n = dated, len(near)
             tr.update(method=f"fewer than 4 comps within {c['window']} year: fitted the price-by-year trend of {len(dated)} dated comps "
                              f"({100 * (math.exp(b) - 1):+.0f}%/yr) and read off {year}", typical_use=typical_use,
-                      comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in dated])
+                      comps=[{"id": x.id, "price": x.price, "adjusted": int(x.price * math.exp(b * (year - x.year)))} for x in dated])
         others = pool
 
     if sub and tr.get("method"):
@@ -531,7 +564,9 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
     else:
         s = 40
         reasons.append("new unit - compare to MSRP" if listing["is_new"] == 1
-                       else "no price stated" if price is None else "not enough comps yet")
+                       else "no price stated" if price is None
+                       else "size not stated - can't be compared" if listing["category"] == "trailer" and not _v(listing, "len_ft")
+                       else "not enough comps yet")
 
     was = max(x for x in (listing["strike_price"], listing["first_price"], 0) if x is not None)
     # Price cut / below-sold / low use are shown but add no points (10/12 check-in): the discount already uses the
@@ -831,6 +866,14 @@ def rescore_all(con) -> None:
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('equip_version', ?)", (str(EQUIP_VERSION),))
     # (ended listings too: they stay comps for 180 days)
     fixed = {r["listing_id"]: json.loads(r["data"]) for r in con.execute("SELECT listing_id, data FROM corrections")}
+    # 0. families the title or model year rule out, once per rule change (new ads are checked when parsed)
+    ver = con.execute("SELECT value FROM settings WHERE key = 'family_fix_version'").fetchone()
+    if not ver or int(ver[0]) < FAMILY_FIX_VERSION:
+        for r in con.execute("SELECT id, family, year, title FROM listings WHERE family IS NOT NULL").fetchall():
+            fam = fix_family(r["family"], r["year"], r["title"])
+            if fam != r["family"] and "family" not in fixed.get(r["id"], {}):      # Jon's own correction stands
+                con.execute("UPDATE listings SET family = ?, equipment = NULL WHERE id = ?", (fam, r["id"]))
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('family_fix_version', ?)", (str(FAMILY_FIX_VERSION),))
     for r in con.execute("SELECT id, category, family, trim, title, description, extras, summary FROM listings "
                          "WHERE parsed = 1 AND relevant = 1 AND equipment IS NULL").fetchall():
         feats = fixed.get(r["id"], {}).get("equipment")       # Jon's list wins over the text

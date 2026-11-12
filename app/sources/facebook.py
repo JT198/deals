@@ -5,6 +5,7 @@ fetch more over /api/graphql as you scroll; we read both. No account is used,
 so there is nothing to get banned - the worst case is FB showing a login wall,
 which shows up as zero results in the run log.
 """
+import os
 import asyncio
 import html as html_lib
 import json
@@ -97,7 +98,8 @@ class Facebook:
         self.on_load = on_load      # called once per page load, so the lanes can share an hourly budget
 
     async def __aenter__(self):
-        self.browser = await self.pw.chromium.launch(args=["--no-sandbox"], proxy=self.proxy)
+        # Chromium refuses to sandbox itself as root; the services run as the unprivileged "deals" user (11/12)
+        self.browser = await self.pw.chromium.launch(args=["--no-sandbox"] if os.geteuid() == 0 else [], proxy=self.proxy)
         self.ctx = await self.browser.new_context(
             user_agent=UA, viewport={"width": 1300, "height": 900}, locale="en-US",
             timezone_id="America/Chicago")

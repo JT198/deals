@@ -6,3 +6,4 @@ httpx
 jinja2
 selectolax
 psycopg[binary]
+PyJWT[crypto]>=2.8

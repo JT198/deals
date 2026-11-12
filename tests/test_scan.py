@@ -745,6 +745,41 @@ def test_failed_request_never_keeps_the_database_locked():
     assert db.connect().execute("SELECT status FROM listings WHERE id = 'facebook:0'").fetchone()[0] != "gone"
 
 
+def test_cloudflare_access_token_is_verified():
+    """The tunnel's e-mail header alone is no longer enough: the signed token must check out (enforce mode)."""
+    import time as _t
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from fastapi.testclient import TestClient
+    from app import web
+    reset([])
+    key, other = (rsa.generate_private_key(public_exponent=65537, key_size=2048) for _ in range(2))
+    iss = "https://team.cloudflareaccess.com"
+    tok = lambda k=key, **c: jwt.encode({"email": "me@example.com", "iss": iss, "aud": ["app1"], "exp": int(_t.time()) + 600, **c}, k, algorithm="RS256")
+    old = (web.CF_TEAM, web.CF_AUD, web.CF_MODE, web._signing_key, web.ALLOWED, web._access_log)
+    web.CF_TEAM, web.CF_AUD, web.CF_MODE, web.ALLOWED = "team", "app1", "enforce", {"me@example.com"}
+    web._signing_key, web._access_log = (lambda t: key.public_key()), (lambda what: None)
+    try:
+        c = TestClient(web.app)
+        get = lambda token, email="me@example.com": c.get("/api/status", headers={
+            "x-real-ip": "10.10.10.5", "cf-access-authenticated-user-email": email,
+            **({"cf-access-jwt-assertion": token} if token else {})}).status_code
+        assert get(tok()) == 200
+        assert get(None) == 403                                   # header only: what used to be trusted
+        assert get(tok(other)) == 403                             # signed by someone else
+        assert get(tok(exp=int(_t.time()) - 60)) == 403           # expired
+        assert get(tok(iss="https://evil.cloudflareaccess.com")) == 403
+        assert get(tok(aud=["another-app"])) == 403               # a token for a different Access app
+        assert get(tok(email="stranger@example.com")) == 403      # valid token, different person than the header
+        web.CF_MODE = "log"
+        assert get(None) == 200                                   # log mode never blocks
+        web.CF_TEAM = ""
+        assert get(None) == 200                                   # not configured: old behaviour
+        assert TestClient(web.app).get("/api/status", headers={"x-real-ip": "10.10.10.50"}).status_code == 200      # LAN
+    finally:
+        web.CF_TEAM, web.CF_AUD, web.CF_MODE, web._signing_key, web.ALLOWED, web._access_log = old
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:

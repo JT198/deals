@@ -3,6 +3,15 @@ Description=UTV deal finder dashboard
 After=network-online.target
 
 [Service]
+User=deals
+Group=deals
+Environment=HOME=/opt/deals/data/home PLAYWRIGHT_BROWSERS_PATH=/opt/deals/pw-browsers
+# a manual run as root can leave root-owned database files behind; hand them back first ("+" = as root)
+ExecStartPre=+/bin/sh -c 'chown deals:deals /opt/deals/data /opt/deals/data/deals.db* 2>/dev/null; true'
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/deals/data
 WorkingDirectory=/opt/deals
 EnvironmentFile=/opt/deals/.env
 ExecStart=/opt/deals/venv/bin/uvicorn app.web:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1

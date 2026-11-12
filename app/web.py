@@ -33,6 +33,48 @@ TUNNEL_IPS = set(os.environ.get("TUNNEL_IPS", "10.10.10.5").split(","))
 LAN_NETS = [ipaddress.ip_network(n) for n in os.environ.get("LAN_NETS", "10.10.10.0/24,127.0.0.0/8").split(",")]
 
 
+# Cloudflare Access signs every request it lets through (header Cf-Access-Jwt-Assertion). Until 11/12 the gate
+# trusted the plain e-mail header from the tunnel host; now the signature, issuer, expiry (and the app's audience
+# tag when CF_ACCESS_AUD is set) are checked and the e-mail is read from the token itself.
+# CF_ACCESS_TEAM unset = old behaviour. CF_ACCESS_VERIFY: "log" (default: check + log, never block) or "enforce".
+CF_TEAM = os.environ.get("CF_ACCESS_TEAM", "").strip()
+CF_AUD = os.environ.get("CF_ACCESS_AUD", "").strip()
+CF_MODE = os.environ.get("CF_ACCESS_VERIFY", "log").strip().lower()
+_JWKS = None
+_ACCESS_LOGGED: dict = {}
+
+
+def _signing_key(token: str):
+    """Cloudflare's public key for this token (keys are cached for an hour and re-fetched on an unknown key id)."""
+    global _JWKS
+    import jwt
+    if _JWKS is None:
+        _JWKS = jwt.PyJWKClient(f"https://{CF_TEAM}.cloudflareaccess.com/cdn-cgi/access/certs", cache_keys=True, lifespan=3600)
+    return _JWKS.get_signing_key_from_jwt(token).key
+
+
+def access_email(token: str | None) -> tuple[str | None, str]:
+    """-> (e-mail the token proves, "ok") or (None, why not)."""
+    if not token:
+        return None, "no token"
+    try:
+        import jwt
+        claims = jwt.decode(token, _signing_key(token), algorithms=["RS256"],
+                            issuer=f"https://{CF_TEAM}.cloudflareaccess.com", audience=CF_AUD or None,
+                            options={"verify_aud": bool(CF_AUD), "require": ["exp", "iss"]})
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"[:120]
+    aud = claims.get("aud")
+    return (claims.get("email") or "").lower() or None, "ok aud=" + ",".join(aud if isinstance(aud, list) else [str(aud)])
+
+
+def _access_log(what: str) -> None:
+    """One line per distinct outcome per 10 minutes (the page polls every 30 s)."""
+    if time.time() - _ACCESS_LOGGED.get(what, 0) > 600:
+        _ACCESS_LOGGED[what] = time.time()
+        print(f"access-token [{CF_MODE}]: {what}", flush=True)
+
+
 def _lan(ip: str) -> bool:
     try:
         return any(ipaddress.ip_address(ip) in n for n in LAN_NETS)
@@ -75,6 +117,12 @@ async def gate(request: Request, call_next):
         email = (request.headers.get("cf-access-authenticated-user-email") or "").lower()
         if not email or email not in ALLOWED:
             return JSONResponse({"error": "forbidden"}, status_code=403)
+        if CF_TEAM:
+            proven, why = await asyncio.to_thread(access_email, request.headers.get("cf-access-jwt-assertion"))
+            good = proven is not None and proven in ALLOWED and proven == email
+            _access_log(("verified, " + why) if good else ("REJECTED: " + (why if proven is None else "token e-mail not allowed / differs from header")))
+            if not good and CF_MODE == "enforce":
+                return JSONResponse({"error": "forbidden"}, status_code=403)
     elif not _lan(ip):
         return JSONResponse({"error": "forbidden"}, status_code=403)      # default deny, not default allow
     if request.method != "GET" and (request.headers.get("sec-fetch-site") == "cross-site"

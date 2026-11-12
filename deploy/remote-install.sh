@@ -33,6 +33,7 @@ echo "$RELEASE" > "$NEW/app/RELEASE"
 
 install_release() {       # $1 = directory holding app/, units in $2, nginx conf $3
   rm -rf "$ROOT/app" && cp -a "$1/app" "$ROOT/app"
+  "$PY" -m compileall -q "$ROOT/app" >/dev/null 2>&1 || true     # the services can't write bytecode next to the code
   cp "$2"/* "$UNITS/"
   cp "$3" "$NGINX_CONF"
   systemctl daemon-reload
@@ -50,6 +51,13 @@ rollback() {
 }
 trap rollback ERR
 
+if [ "$ROOT" = /opt/deals ]; then      # the services run as the unprivileged "deals" user
+  id deals >/dev/null 2>&1 || useradd --system --home-dir /opt/deals --no-create-home --shell /usr/sbin/nologin deals
+  mkdir -p "$ROOT/data/home" "$ROOT/pw-browsers"
+  [ -n "$(ls -A "$ROOT/pw-browsers")" ] || cp -a /root/.cache/ms-playwright/. "$ROOT/pw-browsers/"
+  chmod -R a+rX "$ROOT/pw-browsers"
+  chown -R deals:deals "$ROOT/data"
+fi
 mkdir -p "$NEW/units" && cp "$NEW"/deploy/*.service "$NEW"/deploy/*.timer "$NEW/units/"
 cp "$NEW"/deploy/logrotate-deals "$LOGROTATE"
 cp "$NEW"/deploy/*.sh "$ROOT/" 2>/dev/null || true

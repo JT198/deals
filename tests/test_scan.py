@@ -634,6 +634,45 @@ def test_sleds_compared_on_track_length():
     assert score.expected_price(dict(row, track_in=146), comps)[0] == 12000
 
 
+def test_sub_models_compared_with_their_own():
+    """An HD9 is priced from HD9s, a Ranger 1000 non-XP from non-XPs, a Sportsman 450 from 450s - not the family."""
+    from app import score
+    from app.variant import variant
+    v = lambda **k: variant(dict(category="utv4", family="Ranger Crew 1000", **k))
+    assert v(title="2022 Polaris Ranger Crew XP 1000 Premium", cc=999) == "1000 XP"
+    assert v(title="2023 Ranger Crew 1000 NorthStar", cc=1000) == "1000 XP"
+    assert v(title="2022 1000 crew", cc=1000) == "1000 non-XP"
+    assert v(title="2016 Ranger Crew 900", cc=None) == "850-900 class"
+    assert v(title="2019 Ranger Crew diesel", cc=1028) == "diesel"
+    assert v(title="Polaris Ranger Crew, 900 miles, $1000 off", cc=None) is None      # miles / dollars are not engine sizes
+    assert variant(dict(category="utv4", family="Defender MAX", title="2024 Defender MAX XT HD9", cc=976)) == "HD9"
+    assert variant(dict(category="utv2", family="Defender (2-seat)", title="Defender hd 7", cc=None)) == "HD5-HD8"
+    assert variant(dict(category="utv4", family="Defender MAX", title="Defender MAX Limited", cc=976)) is None
+    assert variant(dict(category="atv", family="Polaris Sportsman", title="Sportsman", cc=570)) == "570 class"
+    assert variant(dict(category="sled", family="x", title="Indy 850", cc=850)) is None
+
+    con = reset([])
+    fam = "Defender MAX"
+    _insert(con, [dict(category="utv4", family=fam, year=2023, price=24000, title=f"Defender MAX HD10 XT {i}") for i in range(12)]
+            + [dict(category="utv4", family=fam, year=2023, price=17000, title=f"Defender MAX HD9 DPS {i}") for i in range(8)]
+            + [dict(category="utv4", family=fam, year=2023, price=14000, title=f"Defender MAX HD7 {i}") for i in range(3)])
+    comps = score._comps(con)
+    row = {"id": "x", "family": fam, "year": 2023, "category": "utv4", "miles": None, "hours": None, "equipment": "[]", "price": 16000,
+           "is_new": 0, "strike_price": None, "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]"}
+    tr = {}
+    hd9 = score.expected_price(dict(row, title="2023 Can-Am Defender MAX HD9"), comps, None, tr)
+    assert hd9[0] == 17000 and hd9[1] == 8 and "only HD9 models" in tr["method"], (hd9, tr["method"])
+    assert score.expected_price(dict(row, title="2023 Can-Am Defender MAX HD10"), comps)[0] == 24000
+    # the ad doesn't say which: whole family, as before
+    assert score.expected_price(dict(row, title="2023 Can-Am Defender MAX"), comps)[0] == 24000
+    # a known sub-model with too few comps of its own: whole family, flagged, and the score trusts the discount less
+    hd7 = score.expected_price(dict(row, title="2023 Defender MAX HD7"), comps)
+    assert hd7[0] == 24000 and score.MIXED_NOTE in hd7[3], hd7
+    plain = score.score(dict(row, year=2023), 24000, 23)
+    mixed = score.score(dict(row, year=2023), 24000, 23, mixed=True)
+    assert mixed[0] < plain[0] and any("exact model" in x for x in mixed[2]), (plain, mixed)
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:

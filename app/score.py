@@ -10,6 +10,7 @@ import time
 
 from .categories import FAMILY_CATEGORY, cfg
 from . import db, usage
+from .variant import MIN_COMPS as VARIANT_MIN, variant
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, TRIMS, detect
 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
@@ -31,9 +32,10 @@ def _v(listing, key):
 
 class Comp(tuple):
     """(id, year, price per machine, deck_in, miles, hours, len_ft, axles, equip, track_in, cc, gvwr_lb, width_ft,
-    key) - key is the cross-post group (normalized title, price), so a machine never prices itself through a copy."""
-    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width, key = (
-        property(lambda t, i=i: t[i]) for i in range(14))
+    key, variant) - key is the cross-post group (normalized title, price), so a machine never prices itself through
+    a copy; variant is the sub-model within the family (variant.py)."""
+    id, year, price, deck, miles, hours, len_ft, axles, equip, track, cc, gvwr, width, key, variant = (
+        property(lambda t, i=i: t[i]) for i in range(15))
 
 
 def comp_key(listing) -> tuple | None:
@@ -132,7 +134,7 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
         """SELECT id, title, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
                   deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
                   CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc,
-                  gvwr_lb, width_ft
+                  gvwr_lb, width_ft, category, model, trim, engine
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
@@ -144,7 +146,7 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
         by_fam.setdefault(r["family"], []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
                   frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"],
-                  (db.title_key(r["title"]), int(r["price"])))))
+                  (db.title_key(r["title"]), int(r["price"])), variant(r))))
     # drop junk prices (payments, deposits, parts) - anything under 30% of the family median
     for fam, lst in by_fam.items():
         med = statistics.median(c.price for c in lst)
@@ -170,6 +172,7 @@ USAGE_CLAMP = (0.6, 1.4)   # a single comp is never moved more than -40% / +40% 
 # weight on the near comps = n / (n + TREND_K). Stops a few cheap or loaded comps from pricing a 2022 below
 # a 2020 of the same model (Jon, 2026-10-04: X3 MAX 2022 typical $19.4k vs 2020 $20.7k).
 TREND_K = 10
+MIXED_NOTE = "compared with the whole family"   # in the note when a known sub-model had too few comps of its own
 TREND_CAP = 0.12   # never moves the typical more than 12% either way
 
 
@@ -270,6 +273,15 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
             same = [x for x in others if getattr(x, field) and abs(getattr(x, field) - mine) <= tol]
             if len(same) >= 4:
                 others = same
+    # UTVs / ATVs: an HD9 and an HD10, a Sportsman 450 and a 1000, are different machines (variant.py)
+    sub, sub_thin = variant(listing), False
+    if sub:
+        same = [x for x in others if x.variant == sub]
+        if len(same) >= VARIANT_MIN:
+            others = same
+        else:
+            sub_thin = True
+    tr.update(variant=sub, variant_matched=bool(sub and not sub_thin))
     length = _v(listing, "len_ft")
     if length:   # trailers: a 5x8 single-axle and a 7x18 tandem are different things
         axles = _v(listing, "axles")
@@ -386,14 +398,20 @@ def _expected_one(listing, comps_by_fam, effects=None, trace: dict | None = None
             typical_use = rate * max(1, NOW_YEAR - year + 1) if rate is not None else None
             pre = int(base * usage_factor(typical_use))
             exp = int(equip_adjust(pre, shares(dated)))
-            pool, n = dated, len(dated)
-            tr.update(method=f"fewer than 4 comps within {c['window']} year: fitted the price-by-year trend of {n} dated comps "
+            # n = the same-age comps only: a trend read off other years is a thin estimate, and the score's
+            # thin-comp damping keys on n (it used to see every dated comp in the family and skip the damping)
+            pool, n = dated, len(near)
+            tr.update(method=f"fewer than 4 comps within {c['window']} year: fitted the price-by-year trend of {len(dated)} dated comps "
                              f"({100 * (math.exp(b) - 1):+.0f}%/yr) and read off {year}", typical_use=typical_use,
                       comps=[{"id": x.id, "price": x.price, "adjusted": None} for x in dated])
         others = pool
 
+    if sub and tr.get("method"):
+        tr["method"] += (f"; only {sub} models were compared" if not sub_thin else
+                         f"; too few {sub} listings to compare like with like, so every {fam} was used")
     notes = [x for x in (_usage_note(use, typical_use, metric, pre, base),
-                         _equip_note(feats, shares(others), exp, pre), trend_note) if x]
+                         _equip_note(feats, shares(others), exp, pre), trend_note,
+                         f"few {sub} comps: {MIXED_NOTE}" if sub_thin else None) if x]
     return exp, n, base, "; ".join(notes) or None, pre
 
 
@@ -475,7 +493,8 @@ def _usage_note(use, typical_use, metric, exp, base):
 
 
 def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
-          sold_typical: int | None = None, new_price: int | None = None) -> tuple[int, float | None, list[str]]:
+          sold_typical: int | None = None, new_price: int | None = None,
+          mixed: bool = False) -> tuple[int, float | None, list[str]]:
     """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
     reasons: list[str] = []
     price = listing["price"]
@@ -502,6 +521,9 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         if not listing["year"]:   # compared against every year of the family
             s = 45 + (s - 45) * 0.6
             reasons.append("year not stated")
+        if mixed:   # a known sub-model priced against bigger and smaller ones: the discount may just be the model
+            s = 45 + (s - 45) * 0.6
+            reasons.append("few comps of this exact model - compared across the family")
         if deal_pct >= 0.05:
             reasons.append(f"{deal_pct:.0%} under typical ${expected:,}")
         elif deal_pct <= -0.05:
@@ -857,7 +879,9 @@ def rescore_all(con) -> None:
         # show a separate "typically sells around" number and anchor the offer on it.
         sold_exp = sold_n = basis = sold_note = None
         if exp:
-            se, sn, *_ = expected_price(r, sold_comps, effects)
+            se, sn, _, snote, _ = expected_price(r, sold_comps, effects)
+            if snote and MIXED_NOTE in snote and not (note and MIXED_NOTE in note):
+                se = None     # asking comps are this sub-model, the sold ones would be the whole family: not comparable
             if se and sn >= 4:
                 if se < 0.97 * exp:
                     sold_exp, sold_n, basis = int(max(0.75 * exp, se)), sn, "sold"
@@ -871,7 +895,7 @@ def rescore_all(con) -> None:
                 sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "
                              f"({qn} sold), so expect about ${sold_exp:,}.")
         s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp,
-                                new_price=new_price)
+                                new_price=new_price, mixed=bool(note and MIXED_NOTE in note))
         o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note, new_price)
         fit = utv_fit(r)
         con.execute(

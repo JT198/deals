@@ -27,6 +27,12 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Build ideas (ordered)
 
+- [ ] From the 11/11 scoring review, still open: Defender Limited / cab models sit 10-13% over typical after the
+      cab adjustment (needs a trim tier); misfiled models (RZR Pro S 4 under Pro R 4, Maverick R under X3 MAX,
+      Vitacci / Odes / Landmaster in "Other 4-seat UTV"); reposts counted twice as comps (~950 of 8,000 UTV comps
+      share family + year + exact miles); "Why $X?" lists every year when the trend line is used; "Ranger Crew 1000"
+      holds Crew 900 / 800 / 700 (now separated by engine class, family name still misleading).
+- [ ] Re-score takes ~28 s on 38k listings (was ~5 s on 16k): `usage.doubt` compiles its patterns per listing.
 - [ ] Typical price from private sellers only (or dealer asks down-weighted); the buy box is private-only.
 - [ ] Ask the model for the price written in the ad text, to recover "$1" / "$123" placeholder listings.
 - [ ] Dealer websites as a new-price source for trailers (Marketplace only shows dealers who post there).
@@ -42,6 +48,14 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/11 Scoring review (Jon: comps looked off on older models, miles, trims). Year and miles were fine on average;
+  the cause was sub-models pooled in one family (Defender MAX HD9 -19% vs "typical", Ranger 1000 non-XP -14 to -20%,
+  Sportsman 1000 +58%, Outlander 450 -16%), so most "Great" scores were just the cheaper version. Now UTV / ATV comps
+  are narrowed to the same sub-model when 8+ exist (`app/variant.py`: engine class, Ranger 1000 XP vs non-XP,
+  Defender HD number, diesel); a known sub-model with too few of its own is compared with the family, says so, and
+  its score is pulled toward the middle. Trend-line estimates now count only same-age comps, so the thin-comp
+  damping applies to them. Buy box before/after: 4-seat UTVs at the alert bar 4 -> 3, ATVs 29 -> 6. Tests 79.
 
 - 11/11 Morning digest: starred listings that sold / were removed drop off the "Watching" list once their
   watch alert has gone out (they are not shown on the site, so the star could not be taken off).

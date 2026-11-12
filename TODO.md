@@ -52,6 +52,13 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/12 14:27 second Facebook pause of the day, also not an address block: the last 8 item pages of an 85-page scan
+  and three known-live listings all failed, yet a new browser read just-seen listings four minutes later (and the
+  fast lane's searches never stopped). Working theory: Facebook walls a browser *session* after a long run of item
+  pages. Now the session is renewed every 40 item pages, after 3 failures in a row, and before the control check
+  (`Facebook.fresh`, `scan._renew`); only failures in a clean session pause Facebook. Watch the log for a few days:
+  if pauses still happen it is something else. Tests 83.
+
 - 11/12 Hardening + follow-ups. Every service runs as the unprivileged `deals` user (read-only system, writes only
   under /opt/deals/data, cannot read .env, Chromium sandbox on; browsers in /opt/deals/pw-browsers; installer sets
   it up and re-owns data on every deploy). **Manual commands on .82: `runuser -u deals -- ...`** (a root run can

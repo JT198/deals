@@ -97,12 +97,25 @@ class Facebook:
         self.ctx = None
         self.on_load = on_load      # called once per page load, so the lanes can share an hourly budget
 
+    async def _new_context(self):
+        return await self.browser.new_context(
+            user_agent=UA, viewport={"width": 1300, "height": 900}, locale="en-US",
+            timezone_id="America/Chicago")
+
+    async def fresh(self) -> None:
+        """Throw away this session's cookies and start a clean one. Facebook starts answering item pages with the
+        login screen after a long run in one session (11/12: the last 8 pages of an 85-page scan and three known-live
+        listings all failed; a new browser read the same listings four minutes later), so a long batch renews it."""
+        old, self.ctx = self.ctx, await self._new_context()
+        try:
+            await old.close()
+        except Exception:
+            pass
+
     async def __aenter__(self):
         # Chromium refuses to sandbox itself as root; the services run as the unprivileged "deals" user (11/12)
         self.browser = await self.pw.chromium.launch(args=["--no-sandbox"] if os.geteuid() == 0 else [], proxy=self.proxy)
-        self.ctx = await self.browser.new_context(
-            user_agent=UA, viewport={"width": 1300, "height": 900}, locale="en-US",
-            timezone_id="America/Chicago")
+        self.ctx = await self._new_context()
         return self
 
     async def __aexit__(self, *exc):

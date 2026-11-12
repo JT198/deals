@@ -372,6 +372,16 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
 
 
 CONTROL_TRIES = 3
+FB_SESSION_PAGES = 40      # item pages read in one browser session before it is renewed (see Facebook.fresh)
+
+
+async def _renew(fb) -> None:
+    fresh = getattr(fb, "fresh", None)
+    if fresh:
+        try:
+            await fresh()
+        except Exception:
+            pass
 
 
 async def control_readable(con, fb, skip: set) -> bool:
@@ -413,12 +423,16 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
             errors.append(f"facebook hourly page budget reached - {len(todo) - ok - len(missed)} item pages wait")
             break
         await step_aside(lock, route)
+        if (ok + len(missed)) and (ok + len(missed)) % FB_SESSION_PAGES == 0:
+            await _renew(fb)
         try:
             d = await fb.detail(r["ext_id"])
             failures = 0
             if d is None:
                 missed.append(r["id"])
                 tail += 1
+                if tail == 3:        # three in a row: maybe this session has been walled - carry on in a new one
+                    await _renew(fb)
             else:
                 ok += 1
                 tail = 0
@@ -433,7 +447,10 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
     # A wall is a run of failures to the end of the batch: once Facebook blocks, nothing loads. A page that loaded
     # after earlier failures proves those were removals, however many there were (11/12: 28 of 52 failed with
     # loads mixed in between). Only the unbroken tail is suspect, and only if known-live listings fail too.
-    walled = tail >= 3 and not await control_readable(con, fb, {r["id"] for r in todo})
+    walled = False
+    if tail >= 3:
+        await _renew(fb)      # the controls are read in a clean session: only a block on our address fails there
+        walled = not await control_readable(con, fb, {r["id"] for r in todo})
     if walled:
         errors.append(f"facebook item pages unreadable (the last {tail} of {ok + len(missed)}) - login wall?")
     for lid in (missed[:len(missed) - tail] if walled else missed):

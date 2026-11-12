@@ -2115,6 +2115,38 @@ def test_deleted_listings_are_not_a_facebook_wall():
     assert con.execute(tail).fetchone()[0] == before      # walled pages are not counted as removals
 
 
+def test_walled_browser_session_is_renewed_not_paused():
+    """11/12 14:27: after ~80 item pages in one session Facebook answered every page with the login screen, while a
+    new browser read the same listings minutes later. A clean session is tried before Facebook is paused."""
+    from unittest.mock import AsyncMock, patch
+    now = db.now()
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now - 86400} for i in range(12)]
+                + [{"id": "facebook:live", "ext_id": "live", "detail_fetched": 1, "last_seen": now - 600}])
+
+    class Session:
+        """Reads 6 pages per session, then walls everything until fresh() is called."""
+        def __init__(self, can_renew=True):
+            self.loads, self.renewed, self.can_renew = 0, 0, can_renew
+
+        async def detail(self, ext_id):
+            self.loads += 1
+            return {"status": "active"} if self.loads <= 6 else None
+
+        async def fresh(self):
+            self.renewed += 1
+            if self.can_renew:
+                self.loads = 0
+    batch = con.execute("SELECT id, ext_id, price FROM listings WHERE id != 'facebook:live' ORDER BY CAST(ext_id AS INT)").fetchall()
+    errors, fb = [], Session()
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert not errors and fb.renewed >= 1, (errors, fb.renewed)              # renewed mid-batch and carried on
+    errors, fb = [], Session(can_renew=False)                                # a new session doesn't help: a real block
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert any("login wall" in e for e in errors), errors
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -2147,6 +2147,40 @@ def test_walled_browser_session_is_renewed_not_paused():
     assert any("login wall" in e for e in errors), errors
 
 
+def test_cool_off_before_facebook_is_paused():
+    """11/13: known-live listings failed right after a long batch but read fine minutes later. Wait and re-test."""
+    from unittest.mock import AsyncMock, patch
+    now = db.now()
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now - 86400} for i in range(6)]
+                + [{"id": f"facebook:live{i}", "ext_id": f"live{i}", "detail_fetched": 1, "last_seen": now - 600 - i} for i in range(3)])
+
+    class Throttled:
+        """Everything fails until the session has been renewed `after` times (the last renewal follows the cool-off)."""
+        def __init__(self, after):
+            self.renewed, self.after, self.last_miss = 0, after, None
+
+        async def detail(self, ext_id):
+            if ext_id.startswith("live") and self.renewed >= self.after:
+                return {"status": "active"}
+            self.last_miss = {"ext_id": ext_id, "login": True}
+            return None
+
+        async def fresh(self):
+            self.renewed += 1
+    batch = con.execute("SELECT id, ext_id, price FROM listings WHERE id NOT LIKE 'facebook:live%'").fetchall()
+    sleeps = AsyncMock()
+    errors, fb = [], Throttled(after=3)          # renewals: after 3 misses, before the controls, after the cool-off
+    with patch.object(scan.asyncio, "sleep", sleeps):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert not errors, errors
+    assert any(c.args and c.args[0] == scan.COOL_OFF_SECS for c in sleeps.call_args_list)
+    assert con.execute("SELECT COALESCE(SUM(detail_misses), 0) FROM listings").fetchone()[0] == 0     # throttled, not removed
+    errors, fb = [], Throttled(after=99)         # still unreadable after the cool-off: a real block
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert any("login wall" in e for e in errors), errors
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -384,7 +384,23 @@ async def _renew(fb) -> None:
             pass
 
 
-async def control_readable(con, fb, skip: set) -> bool:
+COOL_OFF_SECS = 300        # wait this long and try once more before calling unreadable item pages a block
+
+
+def _wall_note(fb, what: str, tried: list) -> None:
+    """Keep what the unreadable pages looked like (data/audit/walls.jsonl): three false pauses in two days were
+    diagnosed from guesses because nothing recorded what Facebook actually answered."""
+    try:
+        path = os.path.join(os.path.dirname(db.DB_PATH), "audit")
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "walls.jsonl"), "a") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "what": what, "controls": tried,
+                                "last_miss": getattr(fb, "last_miss", None)}) + "\n")
+    except OSError:
+        pass
+
+
+async def control_readable(con, fb, skip: set, tried_out: list | None = None) -> bool:
     """Is Facebook actually walling item pages, or were the failures deleted listings? A deleted listing's
     page redirects to the login screen, exactly like a block - and the re-checks deliberately go after
     listings nobody has seen in days, many of which are deleted (11/06: 6 of 6 long-unseen pages failed
@@ -405,8 +421,11 @@ async def control_readable(con, fb, skip: set) -> bool:
         try:
             if await fb.detail(r["ext_id"]) is not None:
                 return True
-        except Exception:
-            pass
+            if tried_out is not None:
+                tried_out.append(getattr(fb, "last_miss", None) or {"ext_id": r["ext_id"]})
+        except Exception as e:
+            if tried_out is not None:
+                tried_out.append({"ext_id": r["ext_id"], "error": str(e)[:120]})
         await asyncio.sleep(random.uniform(3, 6))
     return False        # none loaded, or nothing to compare against: keep the cautious reading
 
@@ -447,13 +466,27 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
     # A wall is a run of failures to the end of the batch: once Facebook blocks, nothing loads. A page that loaded
     # after earlier failures proves those were removals, however many there were (11/12: 28 of 52 failed with
     # loads mixed in between). Only the unbroken tail is suspect, and only if known-live listings fail too.
-    walled = False
+    walled, cooled = False, False
     if tail >= 3:
-        await _renew(fb)      # the controls are read in a clean session: only a block on our address fails there
-        walled = not await control_readable(con, fb, {r["id"] for r in todo})
+        skip, tried = {r["id"] for r in todo}, []
+        await _renew(fb)      # the controls are read in a clean session
+        if not await control_readable(con, fb, skip, tried):
+            # Known-live listings fail too. 11/12-13: six such pauses, yet a separate run minutes later read
+            # just-seen listings every time it was tried - so wait a few minutes and look again before pausing
+            # Facebook for hours. What the pages looked like is kept either way.
+            _wall_note(fb, "controls failed; cooling off", tried)
+            await asyncio.sleep(COOL_OFF_SECS)
+            await _renew(fb)
+            tried = []
+            walled = not await control_readable(con, fb, skip, tried)
+            cooled = not walled
+            _wall_note(fb, "still unreadable after the cool-off: pausing" if walled else "readable after the cool-off: no pause", tried)
+            print(f"  . item pages unreadable (the last {tail} of {ok + len(missed)}), "
+                  + ("still unreadable after a 5 min cool-off" if walled else "readable again after a 5 min cool-off - no pause"), flush=True)
     if walled:
         errors.append(f"facebook item pages unreadable (the last {tail} of {ok + len(missed)}) - login wall?")
-    for lid in (missed[:len(missed) - tail] if walled else missed):
+    # after a cool-off recovery the tail is unknown too (throttled, not removed): it will be re-read later
+    for lid in (missed[:len(missed) - tail] if walled or cooled else missed):
         record_miss(con, lid)
     con.commit()
 

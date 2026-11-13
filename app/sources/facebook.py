@@ -96,6 +96,7 @@ class Facebook:
         self.browser = None
         self.ctx = None
         self.on_load = on_load      # called once per page load, so the lanes can share an hourly budget
+        self.last_miss = None       # what the last unreadable item page looked like (for the wall diagnosis)
 
     async def _new_context(self):
         return await self.browser.new_context(
@@ -194,6 +195,8 @@ class Facebook:
             og = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html) \
                 or re.search(r'<meta[^>]+content="([^"]+)"[^>]+property="og:image"', html)
             photo = html_lib.unescape(og.group(1)) if og and "scontent" in og.group(1) else None
+            seen = {"ext_id": ext_id, "url": page.url[:160], "title": (await page.title())[:80], "html_len": len(html),
+                    "login": "/login" in page.url, "has_item_json": "redacted_description" in html}
         finally:
             await page.close()
         for o in hits:
@@ -211,6 +214,7 @@ class Facebook:
                 "price": _money(o.get("listing_price")),
                 "image": photo,
             }
+        self.last_miss = seen
         return None
 
 

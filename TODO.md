@@ -49,6 +49,14 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/13 The 11/12 "walled session" theory was wrong: four more pauses overnight (15:19, 23:54, 03:23, 08:29) with
+  session renewal in place. Each time the tail of an item-page batch and three known-live listings failed, yet an
+  hour after the 08:29 pause a probe read 7 of 8 listings (the miss was a deleted one). Now: when the controls
+  fail, wait 5 minutes, renew the session and test again; pause only if still unreadable (`COOL_OFF_SECS`). What the
+  failing pages looked like is appended to /opt/deals/data/audit/walls.jsonl (final URL, title, size, login
+  redirect) and the log gets a ". item pages unreadable ..." line. **Next step depends on that file**: if
+  cool-offs recover, it is a short throttle and the page pace should drop; if not, the block is real. Tests 84.
+
 - 11/12 15:17 Login-token check switched to blocking: Jon's real request verified, audience tag pinned
   (`CF_ACCESS_AUD` + `CF_ACCESS_VERIFY=enforce` in /opt/deals/.env; previous file kept as .env.bak-20261112).
   A request from the tunnel with only the e-mail header now gets 403. If the Access app is ever re-created in

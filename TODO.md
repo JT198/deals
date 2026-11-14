@@ -49,6 +49,14 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/14 ROOT CAUSE of the "Facebook blocked" pauses (walls.jsonl showed it): the control check had tried ZERO
+  listings every time. Reading a page stamps a listing as just seen, so the most recently seen listings were always
+  the batch itself, all skipped; "nothing to compare against" was then read as a block. A batch that merely ended
+  on 3+ deleted listings paused Facebook for 2 h. The 11/06, 11/12 and 11/13 fixes all sat on top of this. Now
+  the controls come from outside the batch (up to a day back) and "no control available" never pauses. The session
+  renewal and 5-minute cool-off stay as safety nets. Still unknown whether a real item-page block ever happens:
+  walls.jsonl will now show it with the controls it tried. Tests 85.
+
 - 11/13 The 11/12 "walled session" theory was wrong: four more pauses overnight (15:19, 23:54, 03:23, 08:29) with
   session renewal in place. Each time the tail of an item-page batch and three known-live listings failed, yet an
   hour after the 08:29 pause a probe read 7 of 8 listings (the miss was a deleted one). Now: when the controls

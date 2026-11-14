@@ -400,21 +400,29 @@ def _wall_note(fb, what: str, tried: list) -> None:
         pass
 
 
-async def control_readable(con, fb, skip: set, tried_out: list | None = None) -> bool:
+async def control_readable(con, fb, skip: set, tried_out: list | None = None) -> bool | None:
     """Is Facebook actually walling item pages, or were the failures deleted listings? A deleted listing's
     page redirects to the login screen, exactly like a block - and the re-checks deliberately go after
     listings nobody has seen in days, many of which are deleted (11/06: 6 of 6 long-unseen pages failed
     while listings seen within the hour loaded fine; the old check paused Facebook most mornings).
     Load listings a search showed in the last 3 hours: if one reads, the failures were removals. Up to 3 are
     tried - a single control can itself have just sold (11/12: one unlucky control paused Facebook for 2 h
-    while the fast lane's searches were working)."""
-    rows = con.execute("""SELECT id, ext_id FROM listings WHERE source = 'facebook' AND status = 'active'
-                          AND relevant = 1 AND detail_fetched = 1 AND last_seen > ?
-                          ORDER BY last_seen DESC LIMIT 12""", (db.now() - 3 * 3600,)).fetchall()
+    while the fast lane's searches were working).
+
+    11/14, from data/audit/walls.jsonl: every pause since 11/06 had tried ZERO controls. Reading a page stamps
+    the listing as just seen, so the dozen most recently seen listings were always the batch itself - all
+    skipped - and "nothing to compare against" was read as a block. The controls are now picked from outside
+    the batch (up to a day back if need be), and no control at all is "can't tell", never a block."""
+    rows = [r for r in con.execute(
+        """SELECT id, ext_id FROM listings WHERE source = 'facebook' AND status = 'active'
+             AND relevant = 1 AND detail_fetched = 1 AND COALESCE(detail_misses, 0) = 0 AND last_seen > ?
+           ORDER BY last_seen DESC LIMIT 400""", (db.now() - 86400,)) if r["id"] not in skip]
+    if not rows:
+        if tried_out is not None:
+            tried_out.append({"note": "no listing outside the batch to test with"})
+        return None         # can't tell
     tried = 0
     for r in rows:
-        if r["id"] in skip:
-            continue
         if tried == CONTROL_TRIES:
             break
         tried += 1
@@ -427,7 +435,7 @@ async def control_readable(con, fb, skip: set, tried_out: list | None = None) ->
             if tried_out is not None:
                 tried_out.append({"ext_id": r["ext_id"], "error": str(e)[:120]})
         await asyncio.sleep(random.uniform(3, 6))
-    return False        # none loaded, or nothing to compare against: keep the cautious reading
+    return False        # three known-live listings would not load
 
 
 async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route: str = "home", wait_until=None) -> None:
@@ -470,7 +478,11 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
     if tail >= 3:
         skip, tried = {r["id"] for r in todo}, []
         await _renew(fb)      # the controls are read in a clean session
-        if not await control_readable(con, fb, skip, tried):
+        first = await control_readable(con, fb, skip, tried)
+        if first is None:     # nothing to test with: not a block, and the tail is not counted as removed either
+            cooled = True
+            _wall_note(fb, "no control available: no pause", tried)
+        elif not first:
             # Known-live listings fail too. 11/12-13: six such pauses, yet a separate run minutes later read
             # just-seen listings every time it was tried - so wait a few minutes and look again before pausing
             # Facebook for hours. What the pages looked like is kept either way.
@@ -478,7 +490,7 @@ async def fb_details(con, fb, todo, errors: list, lock=None, budget=None, route:
             await asyncio.sleep(COOL_OFF_SECS)
             await _renew(fb)
             tried = []
-            walled = not await control_readable(con, fb, skip, tried)
+            walled = await control_readable(con, fb, skip, tried) is False
             cooled = not walled
             _wall_note(fb, "still unreadable after the cool-off: pausing" if walled else "readable after the cool-off: no pause", tried)
             print(f"  . item pages unreadable (the last {tail} of {ok + len(missed)}), "

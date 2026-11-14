@@ -1557,15 +1557,16 @@ def test_review_batch_2026_10_09():
     assert got["facebook:0"] == "active" and got["facebook:1"] == "gone" and got["craigslist:2"] == "gone", got
     assert [r["id"] for r in scan.stale_candidates(con, 5)] == ["facebook:0"]      # its page gets checked instead
 
-    # b. most of a batch failing to load is a wall, not a batch of removals
-    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1} for i in range(6)])
+    # b. a batch ending in failures while a known-live listing outside it won't load either is a wall, not removals
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1} for i in range(6)]
+                + [{"id": "facebook:control", "ext_id": "control", "detail_fetched": 1, "last_seen": db.now() - 3600}])
 
     class FB:
         async def detail(self, ext_id):
             return {"status": "active"} if ext_id == "0" else None
     errors = []
     with patch.object(scan.asyncio, "sleep", AsyncMock()):
-        asyncio.run(scan.fb_details(con, FB(), con.execute("SELECT id, ext_id, price FROM listings").fetchall(), errors))
+        asyncio.run(scan.fb_details(con, FB(), con.execute("SELECT id, ext_id, price FROM listings WHERE id != 'facebook:control'").fetchall(), errors))
     assert any("login wall" in e for e in errors), errors
     assert con.execute("SELECT SUM(detail_misses) FROM listings").fetchone()[0] == 0
 
@@ -2179,6 +2180,37 @@ def test_cool_off_before_facebook_is_paused():
     with patch.object(scan.asyncio, "sleep", AsyncMock()):
         asyncio.run(scan.fb_details(con, fb, batch, errors))
     assert any("login wall" in e for e in errors), errors
+
+
+def test_controls_come_from_outside_the_batch():
+    """11/14: the most recently seen listings are the batch itself (reading a page stamps it), so the old check
+    found no control, tried nothing and paused Facebook. Six false pauses in three days."""
+    from unittest.mock import AsyncMock, patch
+    now = db.now()
+    # 20 listings in the batch, all stamped just now (the last 4 are deleted); one live listing seen 2 hours ago
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now} for i in range(20)]
+                + [{"id": "facebook:other", "ext_id": "other", "detail_fetched": 1, "last_seen": now - 7200}])
+
+    class FB:
+        def __init__(self):
+            self.asked = []
+
+        async def detail(self, ext_id):
+            self.asked.append(ext_id)
+            return None if ext_id in ("16", "17", "18", "19") else {"status": "active"}
+    batch = con.execute("SELECT id, ext_id, price FROM listings WHERE id != 'facebook:other' ORDER BY CAST(ext_id AS INT)").fetchall()
+    errors, fb = [], FB()
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, fb, batch, errors))
+    assert not errors and fb.asked[-1] == "other", (errors, fb.asked[-3:])        # the control was actually loaded
+    assert con.execute("SELECT SUM(detail_misses) FROM listings").fetchone()[0] == 4
+    # nothing outside the batch to test with: can't tell, so no pause
+    con = reset([{"id": f"facebook:{i}", "ext_id": str(i), "detail_fetched": 1, "last_seen": now} for i in range(20)])
+    batch = con.execute("SELECT id, ext_id, price FROM listings ORDER BY CAST(ext_id AS INT)").fetchall()
+    errors = []
+    with patch.object(scan.asyncio, "sleep", AsyncMock()):
+        asyncio.run(scan.fb_details(con, FB(), batch, errors))
+    assert not errors, errors
 
 
 if __name__ == "__main__":

@@ -29,6 +29,26 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Build ideas (ordered)
 
+- [ ] **11/14 review - proposed, waiting for Jon's pick** (numbers from the live DB that day):
+      1. *Stale deals*: a 15%+-under listing still up after 45 days sells at 2-5% per two weeks vs 7-15% when new
+         (trailers 15.3% -> 2.4%, UTVs 7.3% -> 5.4% -> 3.3% at day 75). 170 of 335 UTV buy-box listings are 45+ days
+         old; 5 of the top 8 UTV scores had sat 38-104 days; 22 of 32 ATV alerts and 5 of 11 UTV alerts were for
+         listings over a week old. -> fade the score with days listed, show "sat N days", instant alerts only for
+         fresh listings or a fresh price cut.
+      2. *Red-flag severity*: 38% of private ATVs and 27% of trailers carry a flag; the commonest are "needs battery",
+         "sold as-is", "no title", "surface rust". Every flag costs 15 points, caps the score at 70 and removes the
+         listing from comps. -> deal-breakers / repair-cost items / noise.
+      3. *Buy box too wide*: the default view opens on a trailer and three 2005-2007 ATVs; ATVs have no year limit,
+         trailers include 1,200 that can't carry a UTV, 4-seat UTVs lead with Vitacci / Landmaster. -> models list or
+         "no budget brands" for utv4, trailers = fits-a-UTV only, sections per category.
+      4. *Dollars next to percent*: 38 of 56 "Great" ATVs/trailers in the box save under $1,500.
+      5. *Compact cards + phone layout*: on a phone the first screen is all filters (first card starts ~580 px down)
+         and one card is taller than the screen (120 cards = 87,000 px).
+      6. Smaller: scorecard window per category (UTVs: 22.7% of 25%+-under sell in 14 days vs 10.2% of overpriced; at
+         3 days it looks flat); 192 lawn tractors filed as zero-turns; Market tab has no sub-model picker and showed
+         a blank page instead of its error; 1,774 Facebook listings wait for their item page while the fast lane
+         re-runs searches every 10 minutes (UTV deals take a median 12.9 days to sell); 33% of live listings have no
+         saved photo.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
 - [ ] RZR Pro S 4 sits in the Turbo R 4 family (4 same-age comps); give it its own family once ~15 are listed.
@@ -48,6 +68,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/14 "Why $X?" and the Market tab had been failing since the 11/12 hardening ("disk I/O error"): with the
+  system read-only the dashboard had no writable temp directory for SQLite's big sorts (the scan lanes had
+  PrivateTmp, the dashboard did not). Fixed: `PRAGMA temp_store=MEMORY` in db.connect + PrivateTmp on every unit.
+  Found while screenshotting the site for a review; nobody had opened either since. Tests 86.
 
 - 11/14 ROOT CAUSE of the "Facebook blocked" pauses (walls.jsonl showed it): the control check had tried ZERO
   listings every time. Reading a page stamps a listing as just seen, so the most recently seen listings were always

@@ -55,6 +55,14 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/14 (late) Trailers: only ones that fit a 4-seat UTV (Jon: "if I buy a UTV I will also need a trailer").
+  Alerts and the digest (incl. its price-cut section) no longer take a non-fitting trailer at any score - the
+  "exceptional deal at 85+" exception is gone; the Trailers tab opens with "Fits a 4-seat UTV" ticked (untick for
+  every size). Others are still scanned: they price the fitting ones. Title rule confirmed for Minnesota (Jon
+  checked): no titles for ATVs / UTVs / sleds; trailers only over 4,000 lb gross - `flags.heavy_trailer` now uses
+  the stated rating first, then tandem = over / single = under (a 16 ft single-axle was wrongly "big"). Wisconsin
+  titles every trailer, but Jon registers in Minnesota. Tests 87.
+
 - 11/14 Review build (Jon: "do them all"; ATVs to the digest; 4-seat = Polaris and Can-Am only).
   **Ranking.** (1) A deal that has sat fades: the part of the score above normal goes from full at 7-21 days listed
   to 40-60% at 45-90 days, per category (`score.AGE_FADE`); a 3%+ price cut restarts the clock (`listings.cut_at`,

@@ -272,7 +272,10 @@ def test_trailer_alerts_gate_on_fit():
                  dict(base, id="facebook:2", ext_id="2", title="steal", utv_fit="no", score=90),
                  dict(base, id="facebook:3", ext_id="3", title="fresh small", utv_fit="maybe", score=55)])
     asyncio.run(alerts(con))
-    assert sorted(SENT) == ["facebook:0", "facebook:2"], SENT   # fits, or a small one that's an exceptional deal
+    # only the one that fits a 4-seat UTV: the trailer is for hauling the UTV (11/14 - a small one used to alert at 85+)
+    assert sorted(SENT) == ["facebook:0"], SENT
+    why = {r["listing_id"]: r["reason"] for r in con.execute("SELECT listing_id, reason FROM alert_activity WHERE outcome = 'skipped'")}
+    assert "fit a 4-seat UTV" in why["facebook:2"], why
 
 
 def test_rough_offer_without_comps():
@@ -808,6 +811,12 @@ def test_review_1114_age_flags_alert_age_and_tractors():
     assert L("no title", "trailer", heavy=True) == "problem" and L("bill of sale only", "trailer", heavy=False) == "note"
     assert flags.heavy_trailer({"category": "trailer", "gvwr_lb": 7000, "axles": None, "len_ft": None})
     assert not flags.heavy_trailer({"category": "trailer", "gvwr_lb": 2990, "axles": 1, "len_ft": 10})
+    # Minnesota titles trailers over 4,000 lb gross: a stated rating decides; else tandem = over, single = under
+    assert not flags.heavy_trailer({"category": "trailer", "gvwr_lb": 3500, "axles": 2, "len_ft": 18})
+    assert not flags.heavy_trailer({"category": "trailer", "gvwr_lb": None, "axles": 1, "len_ft": 16})
+    assert flags.heavy_trailer({"category": "trailer", "gvwr_lb": None, "axles": 2, "len_ft": 14})
+    assert flags.heavy_trailer({"category": "trailer", "gvwr_lb": None, "axles": None, "len_ft": 18})
+    assert not flags.heavy_trailer({"category": "atv", "gvwr_lb": 9000, "axles": 2, "len_ft": 20})
     # --- score: only problems cost points and cap; the part above "normal" fades with weeks on the market
     row = {"id": "x", "category": "utv4", "family": "RZR XP 4", "year": 2022, "price": 14000, "is_new": 0, "strike_price": None,
            "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]", "miles": None, "hours": None}

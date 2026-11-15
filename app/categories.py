@@ -115,11 +115,12 @@ CATEGORIES = {
     },
     "trailer": {
         # compared by type + size (length within 2 ft, same axle count) - see score.expected_price.
-        # fit_gate: trailers that can't carry a 4-seat UTV only alert at this score or higher.
+        # Alerts, the digest and the buy box only take trailers that fit a 4-seat UTV (score.utv_fit == "yes");
+        # the others are still scanned because they price the ones that do.
         "label": "Trailers", "emoji": "🚚",
         "dep": 0.04, "window": 2, "fit": True, "low_hpy": 0, "high_hpy": 10**9,
         "usage": {},
-        "cl_cat": "tra", "every_min": 60, "fit_gate": 85,
+        "cl_cat": "tra", "every_min": 60,
         "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
         "bands": [500, 1500, 2500, 3500, 4500, 6000, 8000, 11000, 16000, 40000],
         "families": [

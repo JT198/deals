@@ -48,7 +48,7 @@ def build(con) -> str:
                  AND backlog = 0 AND score >= ? AND COALESCE(is_dealer, 0) = 0 AND COALESCE(seller_type, '') != 'dealer'
                  AND COALESCE(is_new, 0) = 0
                ORDER BY score DESC""", (cat, since, MIN_SCORE)).fetchall()
-        rows = [r for r in rows if (cat != "trailer" or r["utv_fit"] == "yes" or r["score"] >= cfg.get("fit_gate", 100))
+        rows = [r for r in rows if (cat != "trailer" or r["utv_fit"] == "yes")      # trailers: only ones that fit the UTV
                 and buybox.fits(rule, r, dist(r), radius)][:PER_CATEGORY]
         if not rows:
             continue
@@ -71,7 +71,8 @@ def build(con) -> str:
                ORDER BY l.score DESC""", (since, since, since)).fetchall():
         rule = rules.get(r["category"], {})
         if (r["before"] and r["price"] and r["price"] < r["before"] and (r["score"] or 0) >= MIN_SCORE
-                and rule.get("digest", True) and buybox.fits(rule, r, dist(r), radius)):
+                and rule.get("digest", True) and buybox.fits(rule, r, dist(r), radius)
+                and (r["category"] != "trailer" or r["utv_fit"] == "yes")):
             cuts.append(r)
     if cuts:
         lines.append("\n📉 <b>Price cuts into deal range</b>")

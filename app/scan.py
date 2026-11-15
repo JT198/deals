@@ -833,10 +833,9 @@ async def _send_alerts(con, http, st, quiet) -> int:
         return buybox.fits(rules.get(r["category"]) or {}, r, dist(r), radius)
 
     def fits_need(r, kind):
-        """Trailers that can't carry a 4-seat UTV only alert when the deal is exceptional."""
-        if r["category"] != "trailer" or r["utv_fit"] == "yes":
-            return True
-        return kind == "enabled" and (r["score"] or 0) >= cfg("trailer")["fit_gate"]
+        """The trailer is for hauling the UTV: only ones that fit a 4-seat UTV alert (Jon, 11/14 - until then a
+        trailer that didn't fit could still alert on a score of 85+)."""
+        return r["category"] != "trailer" or r["utv_fit"] == "yes"
 
     def switched_on(r, kind):
         return bool((rules.get(r["category"]) or {}).get(kind))
@@ -889,7 +888,7 @@ async def _send_alerts(con, http, st, quiet) -> int:
         if not switched_on(r, "enabled"):
             return "instant alerts are off for this category"
         if not fits_need(r, "enabled"):
-            return "trailer too small for a UTV"
+            return "trailer doesn't (or isn't known to) fit a 4-seat UTV"
         if not passes_limits(r):
             return "outside the buy box"
         if not enough_savings(r):

@@ -327,8 +327,10 @@ td.t { white-space: normal; min-width: 240px; }
         or Craigslist, so check a dealer's own site for sale prices before offering.</li>
       <li>Trailers are compared by type, weight class (7K / 10K / 14K+), body style (between the fenders vs deckover) and size (length within 2 ft, same axle count), or per foot when there
         aren't enough the same size. Most trailers on Marketplace are new dealer stock - set Condition to "used only" to hide them.</li>
-      <li>Alerts: trailers that fit a UTV alert normally; anything else only when it's an exceptional deal (score 85+).
-        Just-listed alerts are for UTV-size trailers only. Tick <b>Fits a 4-seat UTV</b> in the filters to see just those.</li>
+      <li>Alerts, the morning digest and your buy box only take trailers that fit a 4-seat UTV - a trailer whose size
+        isn't stated, or that only "may fit", is left out. The Trailers tab opens on those too; untick
+        <b>Fits a 4-seat UTV</b> in the filters to see every size. The rest are still scanned, because they are what
+        the fitting ones are priced against.</li>
       <li>Trailers whose loaded rating (GVWR) is above your truck's towing capacity (Setup; default 12,700 lb for the
         F-150 PowerBoost) get a warning tag - fine if you never load them near capacity.</li>
       <li>Before buying: title and VIN plate match, tire date codes, bearings, floor, lights, brakes (brakes need a brake
@@ -418,7 +420,8 @@ td.t { white-space: normal; min-width: 240px; }
         no points: the typical price is lowered by what listings with such issues actually ask in that category
         (a few percent on a UTV, more on a cheap ATV), and the card says by how much. Things that aren't defects
         ("sold as-is", no heat on a model that never had it) are ignored. A missing title only counts as a problem
-        on a trailer big enough to be titled.</li>
+        on a trailer over 4,000 lb gross - the size Minnesota titles; ATVs, UTVs, snowmobiles and small trailers
+        are registered there without one.</li>
       <li><b>A deal that has sat fades.</b> The part of the score above "normal" shrinks as a listing stays up:
         full strength for the first 1-3 weeks (trailers 7 days, ATVs 14, UTVs 21), down to about half after
         45-90 days. A price cut restarts the clock. Cards show ⏳ once a listing has been up long enough to matter.</li>
@@ -553,12 +556,13 @@ const SEARCH = { q: "", ids: new Set(), t: null };   // description matches come
 let DATA = [], TAB = store.get("tab", "deals"), SORT = store.get("sort", ["score", -1]);
 if (!Array.isArray(SORT) || SORT.length !== 2) SORT = ["score", -1];
 if (!["deals", "all", "market", "setup", "sell"].includes(TAB)) TAB = "deals";
-const F = Object.assign({ fit: false, q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
+const F = Object.assign({ fit: true, q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fams: [] },
   store.get("filters", {}) || {});
 if (!Array.isArray(F.fams)) F.fams = [];
 const listedAt = d => d.listed_at || d.first_seen;
 if (/^\d+$/.test(F.age || "")) F.age = (+F.age * 24) + "h";   // old day-based values
 if (store.get("ver", 1) < 2) { F.age = ""; F.sort = "score"; store.set("filters", F); store.set("ver", 2); }
+if (store.get("ver", 1) < 3) { F.fit = true; store.set("filters", F); store.set("ver", 3); }   // 11/14: trailers open on the ones that fit a UTV
 // Quick views from the status line: temporary, never saved, never touch the filters
 let QUICK = null;   // null | "1h" | "visit"
 const QUICK_LABEL = { "1h": "listed in the last hour", visit: "new since your last visit" };
@@ -964,7 +968,7 @@ function quickBar(n) {
     <button class="btn" id="quickoff">✕ Show everything</button></div>` : "";
 }
 // What's narrowing the results right now (besides the category), so a remembered filter is never invisible
-const DEFAULTS = { q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fit: false };
+const DEFAULTS = { q: "", min: "", max: "", year: "", ymax: "", unseen: false, dist: "", age: "", cond: "", sort: "score", priv: false, star: false, hidden: false, fit: true };
 const AGE_LABEL = { visit: "new since my last visit", "1h": "last hour", "6h": "last 6 hours", "24h": "last 24 hours", "72h": "last 3 days", "168h": "last 7 days" };
 function activeFilters() {
   const a = [];
@@ -979,7 +983,7 @@ function activeFilters() {
   if (F.cond) a.push(F.cond === "new" ? "new only" : "used only");
   if (F.priv) a.push("private only");
   if (F.star) a.push("starred only");
-  if (F.fit && CAT === "trailer") a.push("fits a 4-seat UTV");
+  if (!F.fit && CAT === "trailer") a.push("every size, not only ones that fit a UTV");
   if (F.fams.length) a.push(F.fams.join(", "));
   return a;
 }

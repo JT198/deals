@@ -12,9 +12,9 @@ capped at 70, and the listing dropped from the comps. But the commonest flags on
            description. Ignored.
 
 Anything the patterns don't recognise is a NOTE: the model was told to list real concerns, but an unknown one
-should not sink a listing on its own. "No title" is a PROBLEM only for a trailer big enough to be titled - Minnesota and
-Wisconsin register ATVs, UTVs and snowmobiles through the DNR without issuing titles, and small utility trailers
-are registered without one, so a bill of sale is normal for all of those.
+should not sink a listing on its own. "No title" is a PROBLEM only for a trailer Minnesota titles (over 4,000 lb gross). Minnesota
+and Wisconsin register ATVs, UTVs and snowmobiles through the DNR without issuing titles, and Minnesota only plates
+trailers of 4,000 lb or less, so a bill of sale is normal for all of those (confirmed with Jon 11/14).
 """
 import json
 import re
@@ -65,14 +65,22 @@ _NOT_A_PROBLEM = re.compile(r"\b(rebuilt|new|fresh)\s+(engine|motor|top\s+end|tr
 
 
 def heavy_trailer(row) -> bool:
-    """A trailer big enough that Minnesota titles it (over about 4,000 lb gross): no title there is a real problem.
-    Small utility trailers are only registered, so "bill of sale only" is normal for them."""
+    """A trailer Minnesota titles: over 4,000 lb gross (smaller utility, boat and snowmobile trailers only get a
+    permanent plate, so "bill of sale only" is normal for them). Jon registers in Minnesota; Wisconsin titles every
+    trailer, but a small one bought there still needs no title here. When the ad gives no weight rating: a tandem
+    is over the line, a single axle is not, and with neither stated 16 ft or longer is taken as a tandem."""
     def g(k):
         try:
             return row[k]
         except (KeyError, IndexError, TypeError):
             return None
-    return g("category") == "trailer" and bool((g("gvwr_lb") or 0) > 4000 or (g("axles") or 0) >= 2 or (g("len_ft") or 0) >= 16)
+    if g("category") != "trailer":
+        return False
+    if g("gvwr_lb"):
+        return g("gvwr_lb") > 4000
+    if g("axles"):
+        return g("axles") >= 2
+    return (g("len_ft") or 0) >= 16
 
 
 def level(flag: str, category: str | None = None, heavy: bool = False) -> int:

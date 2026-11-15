@@ -4,6 +4,7 @@
 """
 import asyncio
 import json
+import math
 import os
 import tempfile
 import time
@@ -793,6 +794,86 @@ def test_why_panel_and_big_sorts_need_no_temp_directory():
     assert r.status_code == 200 and r.json()["asking"]["comps"], r.text[:200]
 
 
+def test_review_1114_age_flags_alert_age_and_tractors():
+    from unittest.mock import AsyncMock, patch
+    from app import score, flags
+    from app.categories import is_lawn_tractor
+    # --- red-flag levels
+    L = lambda f, c="atv", heavy=False: flags.LABEL[flags.level(f, c, heavy)]
+    assert [L(f) for f in ("does not run", "needs engine work", "salvage title", "sitting for 3 years", "needs work",
+                           "price listed is down payment")] == ["problem"] * 6
+    assert [L(f) for f in ("needs new battery", "cracked windshield", "brakes need work", "torn seat", "rebuilt engine",
+                           "no title", "some flag nobody wrote a rule for")] == ["note"] * 7
+    assert [L(f) for f in ("sold as-is", "no warranty", "no heat or ac", "no trailer included", "high mileage (9,000 miles)")] == ["noise"] * 5
+    assert L("no title", "trailer", heavy=True) == "problem" and L("bill of sale only", "trailer", heavy=False) == "note"
+    assert flags.heavy_trailer({"category": "trailer", "gvwr_lb": 7000, "axles": None, "len_ft": None})
+    assert not flags.heavy_trailer({"category": "trailer", "gvwr_lb": 2990, "axles": 1, "len_ft": 10})
+    # --- score: only problems cost points and cap; the part above "normal" fades with weeks on the market
+    row = {"id": "x", "category": "utv4", "family": "RZR XP 4", "year": 2022, "price": 14000, "is_new": 0, "strike_price": None,
+           "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]", "miles": None, "hours": None}
+    fresh = score.score(row, 20000, 30, True, days_listed=3)[0]
+    assert fresh == 75
+    assert score.score(dict(row, red_flags='["sold as-is", "needs new battery"]'), 20000, 30, True, days_listed=3)[0] == fresh
+    bad = score.score(dict(row, red_flags='["does not run"]'), 20000, 30, True, days_listed=3)
+    assert bad[0] == fresh - 15 and "red flags: does not run" in bad[2], bad
+    old = score.score(row, 20000, 30, True, days_listed=120)
+    assert old[0] == 63 and any("listed 120 days" in r for r in old[2]), old            # 45 + 30 * 0.6
+    assert score.score(row, 20000, 30, True, days_listed=21)[0] == fresh                  # inside the grace period
+    assert score.score(dict(row, price=22000), 20000, 30, True, days_listed=200)[0] == score.score(dict(row, price=22000), 20000, 30, True)[0]
+    assert score.age_factor("trailer", 45) == 0.4 and score.age_factor("trailer", 7) == 1.0 and 0.4 < score.age_factor("trailer", 20) < 1
+    # --- small issues are priced into "typical" from what such listings ask
+    eff = score.issue_effects({"atv": {0: [0.0] * 40, 1: [math.log(0.88)] * 30, 2: [math.log(0.70)] * 30}, "utv": {0: [0.0] * 5}})
+    assert -0.12 < eff["atv"]["one"] < -0.08 and -0.30 < eff["atv"]["two"] < -0.20, eff
+    assert all(abs(eff["utv"][k] - score.NOTE_PRIOR[k]) < 1e-9 for k in ("one", "two")), eff     # too little data: the prior
+    con = reset([])
+    fam, t = "RZR XP 4", db.now()
+    _insert(con, [dict(category="utv4", family=fam, year=2022, price=20000, title=f"rzr xp 4 clean {i}", listed_at=t - 3600) for i in range(9)]
+            + [dict(id="facebook:note", ext_id="note", category="utv4", family=fam, year=2022, price=14000, title="rzr xp 4 needs battery",
+                    red_flags='["needs new battery"]', listed_at=t - 3600),
+               dict(id="facebook:dead", ext_id="dead", category="utv4", family=fam, year=2022, price=9000, title="rzr xp 4 non runner",
+                    red_flags='["does not run"]', listed_at=t - 3600),
+               dict(id="facebook:stale", ext_id="stale", category="utv4", family=fam, year=2022, price=14000, title="rzr xp 4 sat all summer",
+                    listed_at=t - 150 * 86400),
+               dict(id="facebook:cut", ext_id="cut", category="utv4", family=fam, year=2022, price=14000, title="rzr xp 4 just reduced",
+                    listed_at=t - 150 * 86400, cut_at=t - 2 * 86400)])
+    score.rescore_all(con)
+    got = {r["id"]: r for r in con.execute("SELECT id, expected, score, usage_note, flag_level, reasons FROM listings")}
+    assert got["facebook:note"]["flag_level"] == 1 and got["facebook:dead"]["flag_level"] == 2 and got["facebook:k0"]["flag_level"] == 0
+    assert got["facebook:note"]["expected"] == 19000 and "known issues (needs new battery)" in got["facebook:note"]["usage_note"], dict(got["facebook:note"])
+    assert got["facebook:dead"]["score"] <= 70 and got["facebook:stale"]["expected"] == 20000
+    assert got["facebook:cut"]["score"] > got["facebook:stale"]["score"] + 8, (got["facebook:cut"]["score"], got["facebook:stale"]["score"])
+    assert all(c.id not in ("facebook:note", "facebook:dead") for c in score._comps(con)[fam])        # flagged ones are not comps
+    # --- instant alerts: only fresh listings or fresh price cuts
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'", (json.dumps({"utv4": {"enabled": True, "min_score": "60"}}),))
+    con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('alert_max_age_days', '7')")
+    con.execute("UPDATE listings SET score = 80, backlog = 0 WHERE id IN ('facebook:stale', 'facebook:cut', 'facebook:note')"); con.commit()
+    sent = []
+
+    async def fake_send(http, r, header=None, ask=True):
+        sent.append(r["id"]); return True
+    with patch.object(scan.notify, "send_listing", fake_send), patch.object(scan.notify, "enabled", lambda: True):
+        asyncio.run(scan.send_alerts(con, None, db.settings(con)))
+    assert "facebook:cut" in sent and "facebook:note" in sent and "facebook:stale" not in sent, sent
+    why = [r["reason"] for r in con.execute("SELECT reason FROM alert_activity WHERE listing_id = 'facebook:stale'")]
+    assert any("over 7 days" in w for w in why), why
+    # --- price cuts restart the clock
+    scan.set_price(con, "facebook:stale", 14000, 13000); con.commit()
+    assert con.execute("SELECT cut_at FROM listings WHERE id = 'facebook:stale'").fetchone()[0] >= t
+    scan.set_price(con, "facebook:k0", 20000, 19900); con.commit()                           # a $100 trim is not a cut
+    assert con.execute("SELECT cut_at FROM listings WHERE id = 'facebook:k0'").fetchone()[0] is None
+    # --- lawn tractors are not zero-turns
+    assert is_lawn_tractor("John Deere X350 42 in") and is_lawn_tractor("2023 Cub Cadet XT1 LT46") and is_lawn_tractor("Husqvarna YTH2348 lawn tractor")
+    assert not is_lawn_tractor("John Deere Z345R zero turn") and not is_lawn_tractor("Cub Cadet ZT1 50") and not is_lawn_tractor("Exmark Lazer Z riding mower")
+    assert not is_lawn_tractor("Toro TimeCutter 4225") and not is_lawn_tractor("Scag Tiger Cat II 61")
+    # --- scorecard: UTVs are judged over 14 days, the rest over 3
+    con = reset([])
+    _insert(con, [dict(category="utv4", score=80, listed_at=t - 20 * 86400, first_seen=t - 20 * 86400 + 60, status="sold", ended_at=t - 10 * 86400),
+                  dict(category="utv4", score=80, listed_at=t - 5 * 86400, first_seen=t - 5 * 86400 + 60),       # too young for 14 days
+                  dict(category="atv", score=80, listed_at=t - 20 * 86400, first_seen=t - 20 * 86400 + 60, status="sold", ended_at=t - 10 * 86400)])
+    top = score.scorecard(con)["buckets"][0]
+    assert (top["n"], top["ended"]) == (2, 1), top          # the UTV sold on day 10 counts; the ATV sold too late for its 3 days
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:
@@ -814,7 +895,8 @@ def test_parse_pwc_and_sled_fields():
 def test_scorecard_buckets_and_snapshot():
     from app import score
     t = db.now()
-    old = {"first_seen": t - 5 * 86400 + 3600, "listed_at": t - 5 * 86400}     # caught an hour after posting
+    # caught an hour after posting; ATVs, which are judged over 3 days (UTVs get 14 - see the 11/14 review test)
+    old = {"first_seen": t - 5 * 86400 + 3600, "listed_at": t - 5 * 86400, "category": "atv"}
     rows = []
     for i in range(30):   # great: 15 of 30 sold within 3 days; overpriced: 3 of 30
         rows.append(dict(old, id=f"facebook:g{i}", ext_id=f"g{i}", score=80, status="sold" if i < 15 else "active",
@@ -822,7 +904,7 @@ def test_scorecard_buckets_and_snapshot():
         rows.append(dict(old, id=f"facebook:o{i}", ext_id=f"o{i}", score=30, status="sold" if i < 3 else "active",
                          ended_at=t - 4 * 86400 if i < 3 else None))
     rows.append(dict(old, id="facebook:dealer", ext_id="dealer", score=90, is_dealer=1, status="sold", ended_at=t))
-    rows.append({"id": "facebook:fresh", "ext_id": "fresh", "score": 90, "status": "sold", "ended_at": t})   # posted < 3 days ago
+    rows.append({"id": "facebook:fresh", "ext_id": "fresh", "score": 90, "status": "sold", "ended_at": t, "category": "atv"})   # posted < 3 days ago
     rows.append(dict(old, id="facebook:backlog", ext_id="backlog", score=90, status="sold", seen_active=0, ended_at=t))
     rows.append(dict(old, id="facebook:old", ext_id="old", score=90, status="sold", ended_at=t,                 # found weeks late
                      listed_at=t - 30 * 86400))
@@ -1146,14 +1228,16 @@ def test_sweep_finds_old_listings_quietly_and_splits_full_bands():
     halves = [(r["lo"], r["hi"]) for r in con.execute("SELECT lo, hi FROM sweep_queue WHERE lo < 2000 AND state = 'todo'")]
     assert halves == [(500, 1250), (1251, 1999)], halves
 
-    # an old find scoring like a great deal is recorded, not sent; a later score jump alerts as usual
+    # an old find scoring like a great deal is not sent (11/14: instant alerts are for fresh listings and fresh
+    # price cuts); when its seller cuts the price it alerts after all
     con.execute("""UPDATE listings SET parsed = 1, relevant = 1, category = 'pwc', score = 90, is_dealer = 0,
                      red_flags = '[]', reasons = '[]' WHERE ext_id IN ('1', '2')""")
     con.commit()
     asyncio.run(alerts(con))
     assert SENT == ["facebook:2"], SENT
-    assert con.execute("SELECT alerted_score FROM listings WHERE ext_id = '1'").fetchone()[0] == 90
-    con.execute("UPDATE listings SET score = 100, price = 2700 WHERE ext_id = '1'")   # a 10% price cut: alerts after all
+    assert con.execute("SELECT alerted_score FROM listings WHERE ext_id = '1'").fetchone()[0] is None
+    scan.set_price(con, "facebook:1", 3000, 2700)                                     # a 10% price cut: alerts after all
+    con.execute("UPDATE listings SET score = 100 WHERE ext_id = '1'")
     con.commit()
     SENT.clear()
     asyncio.run(alerts(con))

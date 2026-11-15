@@ -9,7 +9,7 @@ import time
 
 import httpx
 
-from .categories import CATEGORIES, FAMILY_CATEGORY, fix_family
+from .categories import CATEGORIES, FAMILY_CATEGORY, fix_family, is_lawn_tractor
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://10.10.10.76:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:27b-64k")
@@ -154,8 +154,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
         "enclosed", "open", "equipment", "tilt", "dump", "deckover", "drive-on", "other") else None
     axles = num(d.get("axles")) if trailer else None
     gvwr = num(d.get("gvwr_lb")) if trailer else None
+    tractor = cat == "mower" and is_lawn_tractor(listing.get("title"), text(d.get("model")))
     return {
-        "relevant": 1 if (flag(d.get("relevant")) and cat) else 0,
+        "relevant": 1 if (flag(d.get("relevant")) and cat and not tractor) else 0,
         "category": cat,
         "year": year if year and 1965 <= year <= 2030 else None,
         "make": text(d.get("make")),

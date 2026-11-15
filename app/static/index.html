@@ -208,8 +208,50 @@ td.t { white-space: normal; min-width: 240px; }
   padding: 7px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); max-width: 260px; display: none; z-index: 5; }
 .runs td { font-size: 12px; }
 .err { color: var(--bad); font-size: 12px; white-space: normal; }
+/* 11/14: compact cards - the facts you decide on; everything else behind Details */
+.card .body { gap: 5px; }
+.deal { font-size: 14px; color: var(--text-2); }
+.deal b { font-size: 15px; }
+.deal .hint { margin-left: 2px; }
+.tag.age { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.tag.note { background: var(--warn-bg); color: var(--warn); }
+.tag.quiet { opacity: .7; }
+.card .more { border-top: 1px solid var(--border); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 7px; }
+.card .more .actions { margin-top: 2px; padding-top: 0; }
+.sec { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 22px 0 10px; font-size: 16px; }
+.sec:first-child { margin-top: 4px; }
+.sec span { color: var(--text-2); font-size: 13px; font-weight: 400; }
+.sec span i { font-style: normal; }
+@media (min-width: 601px) { .filters input[type=number] { width: 92px; } }
+.sec .btn { margin-left: auto; font-size: 13px; padding: 3px 10px; }
+#filtertoggle { display: none; }
 @media (max-width: 600px) {
-  .grid { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr; gap: 10px; }
+  /* photo on the left, the numbers on the right: three or four listings per screen instead of one */
+  .card { display: grid; grid-template-columns: 37% 1fr; }
+  .card .img { aspect-ratio: auto; min-height: 138px; height: 100%; }
+  .card .more { grid-column: 1 / -1; }
+  .card .body { padding: 8px 10px 9px; }
+  .card h3 { font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .price { font-size: 17px; }
+  .badge { font-size: 12px; padding: 2px 6px; top: 6px; left: 6px; }
+  .ribbon { top: auto; bottom: 6px; right: auto; left: 6px; font-size: 11px; }
+  .actions .btn { min-width: 0; padding: 4px 7px; }
+  /* filters fold away behind one button; search and sort stay */
+  #filtertoggle { display: inline-block; }
+  #filtersec:not(.open) .filters > *:not(.keep) { display: none; }
+  .filters { margin-bottom: 10px; }
+  .filters #f-q { flex: 1 1 140px; width: auto !important; }
+  /* the two header buttons sit on the title line, so the listings start sooner */
+  header { padding-top: 12px; position: relative; }
+  .sub { font-size: 13px; }
+  #scanbtn, #helpbtn { position: absolute; top: 9px; padding: 3px 9px; font-size: 12px; }
+  #helpbtn { right: 16px; }
+  #scanbtn { right: 78px; }
+  nav { margin-top: 8px; }
+  .cats { margin-top: 8px; }
+  .sec { margin: 16px 0 8px; flex-wrap: nowrap; }
+  .sec span i { display: none; }
   #f-fams, .cats, nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }   /* swipe, no visible bar */
   #f-fams::-webkit-scrollbar, .cats::-webkit-scrollbar, nav::-webkit-scrollbar { display: none; }
   #f-fams { padding-bottom: 4px; }
@@ -236,7 +278,8 @@ td.t { white-space: normal; min-width: 240px; }
 <main>
   <section id="filtersec">
     <div class="filters">
-      <input id="f-q" type="search" placeholder="Search ads and notes" style="width:200px">
+      <input id="f-q" class="keep" type="search" placeholder="Search ads and notes" style="width:200px">
+      <button class="btn keep" id="filtertoggle" type="button">Filters</button>
       <label>Min $ <input id="f-min" type="number" step="1000" min="0"></label>
       <label>Max $ <input id="f-max" type="number" step="1000" min="0"></label>
       <label>Min year <input id="f-year" type="number" min="1965" max="2030"></label>
@@ -247,15 +290,15 @@ td.t { white-space: normal; min-width: 240px; }
         <option value="72h">last 3 days</option><option value="168h">last 7 days</option></select></label>
       <label>Condition <select id="f-cond"><option value="">any</option><option value="used">used only</option>
         <option value="new">new only</option></select></label>
-      <label>Sort <select id="f-sort"><option value="score">best deal</option><option value="newest">newest first</option>
-        <option value="price">lowest price</option></select></label>
+      <label class="keep">Sort <select id="f-sort"><option value="score">best deal</option><option value="saving">most $ under typical</option>
+        <option value="newest">newest first</option><option value="price">lowest price</option></select></label>
       <label id="f-fit-wrap"><input id="f-fit" type="checkbox"> Fits a 4-seat UTV</label>
       <label><input id="f-private" type="checkbox"> Private only</label>
       <label><input id="f-star" type="checkbox"> Starred / shortlist</label>
       <label><input id="f-hidden" type="checkbox"> Show hidden</label>
       <label title="Listings you've opened from here are faded; tick to leave them out"><input id="f-unseen" type="checkbox"> Hide ones I've opened</label>
       <button class="btn" id="comparebtn" hidden>Compare shortlist</button>
-      <span class="viewtoggle"><button class="btn" id="view-cards">Cards</button> <button class="btn" id="view-map">Map</button></span>
+      <span class="viewtoggle keep"><button class="btn" id="view-cards">Cards</button> <button class="btn" id="view-map">Map</button></span>
     </div>
     <div class="chips" id="f-fams" style="margin:-4px 0 14px"></div>
   </section>
@@ -369,9 +412,23 @@ td.t { white-space: normal; min-width: 240px; }
         Goes down for dealers, new stock, and being over typical. A price cut, low use, or a price under what similar
         ones sold for show as reasons but add no points: the % under typical already counts the cut price and the use,
         and on the 10/12 check-in none of them made a listing sell any faster.</li>
-      <li>Anything with red flags (needs work, title problems, scam signs) is capped at 70 - never "Great".</li>
+      <li><b>Red flags come in three kinds.</b> A real <b>problem</b> (doesn't run, engine or transmission work,
+        salvage, frame or flood damage, sat for years, scam signs) costs 15 points each and caps the score at 70 -
+        never "Great". A <b>small known issue</b> (battery, tires, carb clean, torn seat, cracked windshield) costs
+        no points: the typical price is lowered by what listings with such issues actually ask in that category
+        (a few percent on a UTV, more on a cheap ATV), and the card says by how much. Things that aren't defects
+        ("sold as-is", no heat on a model that never had it) are ignored. A missing title only counts as a problem
+        on a trailer big enough to be titled.</li>
+      <li><b>A deal that has sat fades.</b> The part of the score above "normal" shrinks as a listing stays up:
+        full strength for the first 1-3 weeks (trailers 7 days, ATVs 14, UTVs 21), down to about half after
+        45-90 days. A price cut restarts the clock. Cards show ⏳ once a listing has been up long enough to matter.</li>
       <li>Prices under $100 or under 20% of typical are treated as placeholders ("$1 - make an offer"), not deals.</li>
       <li>Few comps or no model year pull the score toward the middle, because the typical price is less certain.</li>
+      <li><b>Instant alerts are for fresh news</b>: a listing posted in the last 7 days (Setup), or one whose seller
+        just cut the price. An older listing that drifts over the bar shows on the dashboard without a Telegram.</li>
+      <li><b>My buy box</b> shows one section per category you have instant alerts on, best first; trailers there
+        are only the ones that fit a 4-seat UTV. Each card leads with dollars under typical; "Details" opens the
+        comps, offer guidance, notes and the rest.</li>
     </ul>
 
     <h3>Offer guidance</h3>
@@ -735,57 +792,106 @@ function fitTag(d) {
               no: ["", "Too small for a UTV"], unknown: ["", "Size not stated"] }[d.utv_fit];
   return (t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "") + over;
 }
-function facts(d) {
-  return [CAT === "all" || CAT === "box" ? catOf(d.category).label : null, d.year, trailerSize(d),
-    d.deck_in ? d.deck_in + '" deck' : null, d.units > 1 && d.price ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
-    d.track_in ? d.track_in + '" track' : null, d.engine || null, d.usage_doubt ? "miles unclear" : null, d.miles != null && !d.usage_doubt && d.category !== "trailer" ? d.miles.toLocaleString() + " mi" : null,
-    d.hours != null && !d.usage_doubt ? d.hours.toLocaleString() + " hrs" : null,
+// How long a listing has been up, and when that starts to matter (same clocks as the score's fade, score.AGE_FADE)
+const STALE_DAYS = { utv4: 45, utv2: 45, atv: 30, trailer: 21 };
+const daysUp = d => Math.max(0, Math.floor((Date.now() / 1000 - listedAt(d)) / 86400));
+const savingOf = d => d.expected && d.price ? d.expected - d.price : null;
+function ageChip(d) {
+  const days = daysUp(d), cut = d.cut_at && d.cut_at > Date.now() / 1000 - 14 * 86400;
+  if (cut) return `<span class="tag plus" title="The seller dropped the price ${ago(d.cut_at)}">price cut ${ago(d.cut_at)}</span>`;
+  if (days >= (STALE_DAYS[d.category] || 30))
+    return `<span class="tag age" title="Listings still up after this long rarely turn out to be deals; the score has been lowered for it">⏳ ${days} days listed</span>`;
+  return "";
+}
+function dealLine(d) {
+  if (!d.expected) return `<div class="deal">No typical price yet <span class="hint">${d.comps || 0} comps</span></div>`;
+  const save = savingOf(d), pct = d.deal_pct ?? 0;
+  const head = pct >= 0.03 ? `<b class="under">${money(save)} under</b>` : pct <= -0.03 ? `<b class="over">${money(-save)} over</b>` : "<b>About</b>";
+  return `<div class="deal">${head} typical ${money(d.expected)}${Math.abs(pct) >= 0.03 ? ` · ${Math.round(Math.abs(pct) * 100)}%` : ""} <span class="hint">${d.comps} comps</span></div>`;
+}
+function facts(d) {      // the short line on the card
+  const use = d.usage_doubt ? "miles unclear" : d.miles != null && d.category !== "trailer" ? d.miles.toLocaleString() + " mi"
+    : d.hours != null ? d.hours.toLocaleString() + " hrs" : null;
+  return [d.year, trailerSize(d), d.deck_in ? d.deck_in + '" deck' : null, d.track_in ? d.track_in + '" track' : null, use,
     d.location ? d.location + (d.distance != null ? ` (${d.distance} mi)` : "") : d.distance != null ? `${d.distance} mi away` : null,
-    d.dealer ? "dealer" : "private", d.is_new ? "new" : null, d.source, d.listed_at ? "listed " + ago(d.listed_at) : "seen " + ago(d.first_seen),
+    d.dealer ? "dealer" : null, d.is_new ? "new" : null, "listed " + ago(listedAt(d))]
+    .filter(Boolean).map(esc).join(" · ");
+}
+function moreFacts(d) {  // the rest, under Details
+  return [catOf(d.category).label, d.units > 1 && d.price ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
+    d.engine || null, d.dealer ? "dealer" : "private seller", d.source,
     d.last_seen && d.last_seen < Date.now() / 1000 - 86400 ? "last confirmed up " + ago(d.last_seen) : null]
     .filter(Boolean).map(esc).join(" · ");
 }
+// red flags by how serious they are (flags.py): 2 = a real problem, 1 = a small known issue, 0 = not a defect
+function flagChips(d, all) {
+  const f = d.red_flags || [], lv = d.flag_levels || [];
+  const probs = f.filter((x, i) => (lv[i] ?? 1) === 2), notes = f.filter((x, i) => (lv[i] ?? 1) === 1), noise = f.filter((x, i) => lv[i] === 0);
+  const red = probs.map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("");
+  if (all) return red + notes.map(r => `<span class="tag note">${esc(r)}</span>`).join("") + noise.map(r => `<span class="tag quiet">${esc(r)}</span>`).join("");
+  return red + (notes.length ? `<span class="tag note" title="${esc(notes.join("; "))} - already allowed for in the typical price">${
+    notes.length === 1 ? esc(notes[0]) : notes.length + " small issues"}</span>` : "");
+}
+const MORE = new Set();     // cards whose Details are open (kept across the redraws a refresh causes)
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-more]"); if (!b) return;
+  const id = b.dataset.more, box = document.getElementById("more-" + id.replace(/[^a-z0-9]/gi, ""));
+  if (!box) return;
+  MORE.has(id) ? MORE.delete(id) : MORE.add(id);
+  box.hidden = !MORE.has(id); b.textContent = MORE.has(id) ? "Less ▴" : "Details ▾";
+});
 function card(d) {
-  const was = Math.max(d.strike_price || 0, d.first_price || 0);
   if (SEEN.has(d.id)) return cardHtml(d).replace('<article class="card">', '<article class="card seen" title="You opened this one">');
   return cardHtml(d);
 }
 function cardHtml(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
-  // cautions first: "too good to be true?" and "about what similar ones actually sell for" (11/04 ranking)
-  const caution = (d.reasons || []).filter(r => /too good|actually sell for/.test(r));
-  const plus = (d.reasons || []).filter(r => /under|cut|motivated|low use/.test(r) && !/too good|actually sell for/.test(r));
+  // cautions first: "too good to be true?", "about what similar ones actually sell for", a thin comparison
+  const caution = (d.reasons || []).filter(r => /too good|actually sell for|exact model|year not stated/.test(r));
+  const safe = d.id.replace(/[^a-z0-9]/gi, ""), open = MORE.has(d.id);
   return `<article class="card">
-    <a class="img" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 photo not saved yet - Open shows it</span>' : ""}
+    <a class="img" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 no photo saved</span>' : ""}
       ${badge(d)}${d.status === "pending" ? '<span class="ribbon">Pending</span>'
-        : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold/removed</span>'
+        : d.detail_misses > 0 ? '<span class="ribbon">⚠ May be sold</span>'
         : isNew(d) ? '<span class="ribbon new">NEW</span>'
         : listedAt(d) > Date.now() / 1000 - 86400 ? '<span class="ribbon">Just listed</span>' : ""}</a>
     <div class="body">
       <h3>${esc(d.title)}</h3>
       <div class="price">${money(d.price)}${was > d.price ? `<s>${money(was)}</s>` : ""}</div>
-      ${vsTypical(d)}
+      ${dealLine(d)}
       <div class="facts">${facts(d)}</div>
-      ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
-      ${offerBox(d)}
-      ${whyBox(d)}
-      ${noteBox(d)}
-      ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
-        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
-      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${d.feedback ? `<span class="tag ${d.feedback === "+" ? "plus" : "flag"}" title="Your thumbs on the Telegram alert">${d.feedback === "+" ? "👍 good one" : "👎 not for me"}</span>` : d.alerted_score != null ? `<span class="tag" title="You were sent this one on Telegram">🔔 alerted</span>` : ""}${d.usage_doubt ? `<span class="tag flag" title="${esc(d.usage_doubt)}">⚠ Miles unclear - ask the seller</span>` : ""}${caution.map(r => `<span class="tag warn" title="${/too good/.test(r) ? "More than 40% under typical - often a misread model, a partial price or a parts machine. Worth a quick look before you get excited." : "Under typical asking, but no cheaper than what similar ones have actually sold for."}">⚠ ${esc(r)}</span>`).join("")}${fitTag(d)}${plus.map(r => `<span class="tag plus">${esc(r)}</span>`).join("")}
-        ${(d.red_flags || []).map(r => `<span class="tag flag">⚠ ${esc(r)}</span>`).join("")}
-        ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
+      <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${
+        ageChip(d)}${caution.map(r => `<span class="tag warn">⚠ ${esc(r.replace(/ - compared across the family/, ""))}</span>`).join("")}${
+        flagChips(d)}${fitTag(d)}${d.alerted_score != null ? `<span class="tag" title="Sent to Telegram at score ${d.alerted_score}">🔔 alerted</span>` : ""}${
+        d.notes ? `<span class="tag note" title="${esc(d.notes)}">📝 note</span>` : ""}</div>
       <div class="actions">
         <a class="btn primary" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>
         ${d.starred || d.stage ? `<select class="btn stage" data-stage="${esc(d.id)}" title="Where you are with this one">${[["", "★ Watching"], ...STAGES].map(([v, l]) =>
             `<option value="${v}" ${(d.stage || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>`
           : `<button class="btn" data-act="star" data-id="${esc(d.id)}" title="Starred listings are re-checked every scan; Telegram tells you about price drops, pending and sold">☆ Star</button>`}
         <button class="btn" data-act="hide" data-id="${esc(d.id)}">${d.hidden ? "Unhide" : "Hide"}</button>
+        <button class="btn" data-more="${esc(d.id)}">${open ? "Less ▴" : "Details ▾"}</button>
+      </div>
+    </div>
+    <div class="more" id="more-${safe}" ${open ? "" : "hidden"}>
+      ${vsTypical(d)}
+      <div class="facts">${moreFacts(d)}</div>
+      ${d.summary ? `<div class="summary">${esc(d.summary)}</div>` : ""}
+      ${offerBox(d)}
+      ${whyBox(d)}
+      ${noteBox(d)}
+      ${(d.copies || []).length ? `<div class="facts">Also listed: ${d.copies.map(x =>
+        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.source)} ↗</a>${x.score != null && x.score !== d.score ? ` (scores ${x.score})` : ""}`).join(" · ")}</div>` : ""}
+      <div class="tags">${d.feedback ? `<span class="tag ${d.feedback === "+" ? "plus" : "flag"}" title="Your thumbs on the Telegram alert">${d.feedback === "+" ? "👍 good one" : "👎 not for me"}</span>` : ""}
+        ${flagChips(d, true)}
+        ${(d.reasons || []).filter(r => /cut|motivated|low use|listed \d+ days/.test(r)).map(r => `<span class="tag">${esc(r)}</span>`).join("")}
+        ${(d.extras || []).map(r => `<span class="tag">${esc(r)}</span>`).join("")}</div>
+      <div class="actions">
         <button class="btn" data-act="gone" data-id="${esc(d.id)}" title="It's no longer posted - remove it from the dashboard">Gone</button>
         ${d.notes ? "" : `<button class="btn" data-act="note" data-id="${esc(d.id)}" title="Add a note (shared with Alex)">Note</button>`}
         <button class="btn" data-fix="${esc(d.id)}" title="The model misread this ad? Correct the model, year, miles, equipment or red flags">${d.corrected ? "✎ Fixed" : "Fix"}</button>
       </div>
-      <div class="fixbox" id="fix-${d.id.replace(/[^a-z0-9]/gi, "")}" hidden></div>
+      <div class="fixbox" id="fix-${safe}" hidden></div>
     </div></article>`;
 }
 const STAGES = [["contacted", "Contacted"], ["viewing", "Viewing scheduled"], ["offer", "Offer made"], ["purchased", "Purchased ✓"], ["passed", "Passed"]];
@@ -877,9 +983,12 @@ function activeFilters() {
   if (F.fams.length) a.push(F.fams.join(", "));
   return a;
 }
+$("#filtertoggle").onclick = () => $("#filtersec").classList.toggle("open");
 function filterBar(n) {
   if (QUICK) return "";
   const a = activeFilters();
+  $("#filtertoggle").textContent = a.length ? `Filters (${a.length})` : "Filters";
+  $("#filtertoggle").classList.toggle("primary", a.length > 0);
   document.querySelectorAll("#filtersec [id^=f-]").forEach(el => {
     const k = { "f-q": "q", "f-min": "min", "f-max": "max", "f-year": "year", "f-ymax": "ymax", "f-dist": "dist", "f-age": "age", "f-cond": "cond" }[el.id];
     if (k) el.classList.toggle("changed", !!F[k]);
@@ -898,6 +1007,7 @@ function renderDeals() {
   const by = { score: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (b.score ?? -1) - (a.score ?? -1)
       || (b.comps ?? 0) - (a.comps ?? 0) || (a.distance ?? 1e6) - (b.distance ?? 1e6) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
+    saving: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (savingOf(b) ?? -1e9) - (savingOf(a) ?? -1e9),
     price: (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) };
   const rows = QUICK ? filtered() : filtered().sort(by[F.sort] || by.score);
   $("#view-cards").classList.toggle("on", VIEW === "cards"); $("#view-map").classList.toggle("on", VIEW === "map");
@@ -911,12 +1021,31 @@ function renderDeals() {
   }
   const emptyBox = CAT === "box" && !rows.length
     ? `<div class="empty">Nothing in your buy box right now. Widen it in Setup → Buy box, or pick a category above.</div>` : null;
+  if (CAT === "box" && !QUICK && rows.length) {
+    // one section per category, best first: a UTV shopper should not have to scroll past trailers to see UTVs
+    const secs = CATS.map(c => [c, rows.filter(d => d.category === c.key)]).filter(([, v]) => v.length);
+    const drawn = [];
+    const html = secs.map(([c, v]) => {
+      const openAll = BOXOPEN === c.key, list = v.slice(0, openAll ? 120 : SEC_N);
+      drawn.push(...list);
+      return `<h2 class="sec">${c.emoji} ${esc(c.label)} <span>${v.length}<i> in your buy box</i></span>${v.length > SEC_N
+        ? `<button class="btn" data-secall="${c.key}">${openAll ? "Show fewer" : `Show all ${v.length}`}</button>` : ""}</h2>
+        <div class="grid">${list.map(card).join("")}</div>`;
+    }).join("");
+    $("#tab-deals").innerHTML = filterBar(rows.length) + html;
+    withDetails(drawn);
+    return;
+  }
   $("#tab-deals").innerHTML = quickBar(rows.length) + filterBar(rows.length) + (rows.length ? `<div class="grid">${shown.map(card).join("")}</div>`
     : emptyBox || `<div class="empty">No listings match these filters yet.</div>`);
   withDetails(shown);
 }
 
 // ---- "My buy box": the categories with instant alerts on, inside their limits (same rules as alerts) ----
+const SEC_N = 8;            // cards per category section before "Show all"
+let BOXOPEN = null;
+document.addEventListener("click", e => { const b = e.target.closest("[data-secall]"); if (!b) return;
+  BOXOPEN = BOXOPEN === b.dataset.secall ? null : b.dataset.secall; render(); });
 let SETS = null;
 const inCat = d => CAT === "all" ? true : CAT === "box" ? inBox(d) : d.category === CAT;
 function inBox(d) {
@@ -924,7 +1053,7 @@ function inBox(d) {
   if (!r || !r.enabled) return false;
   if (SETS.settings.alert_private_only === "1" && d.dealer) return false;
   if (d.is_new === 1) return false;
-  if (d.category === "trailer" && d.utv_fit && d.utv_fit !== "yes" && d.utv_fit !== "maybe") return false;
+  if (d.category === "trailer" && d.utv_fit !== "yes") return false;      // the trailer is for the UTV (11/14)
   const num = k => (r[k] === "" || r[k] == null) ? null : +r[k];
   if ((r.models || []).length && !r.models.includes(d.family)) return false;
   const reach = num("within_mi") || ((+SETS.settings.radius_mi || 100) + 10);
@@ -1087,20 +1216,20 @@ function fitRadius(group, shown, home) {
 }
 
 let ALL_ROWS = 300;
-const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["offer_aim","Aim to pay"],
+const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["saving","$ under"],["offer_aim","Aim to pay"],
   ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
 function renderAll() {
   const [k, dir] = SORT;
   const all = filtered();
-  all.forEach(d => d.listed = listedAt(d));
+  all.forEach(d => { d.listed = listedAt(d); d.saving = savingOf(d); });
   all.sort((a, b) => { const x = a[k], y = b[k];
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
   const rows = all.slice(0, ALL_ROWS);      // 14k rows would be ~200k table cells: a phone freezes
   $("#tab-all").innerHTML = filterBar(all.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
-    <td>${d.score ?? "–"}</td><td>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}${d.notes ? ` <span class="hint">📝 ${esc(d.notes.slice(0, 60))}</span>` : ""}</td>
+    <td>${d.score ?? "–"}</td><td${daysUp(d) >= (STALE_DAYS[d.category] || 30) ? ' class="over" title="Still listed after this long: rarely a deal"' : ""}>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}${d.notes ? ` <span class="hint">📝 ${esc(d.notes.slice(0, 60))}</span>` : ""}</td>
     <td>${money(d.price)}</td><td>${money(d.expected)}</td>
-    <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${money(d.offer_aim)}</td>
+    <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${d.saving == null ? "—" : (d.saving < 0 ? "−" : "") + money(Math.abs(d.saving))}</td><td>${money(d.offer_aim)}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
     <td>${d.distance ?? "—"}</td><td>${d.dealer ? "dealer" : "private"}</td><td>${ago(d.first_seen)}</td></tr>`).join("")}</tbody></table></div>
     <p class="hint">${all.length > rows.length ? `Showing the first ${rows.length} of ${all.length} listings <button class="btn" id="morerows">Show ${Math.min(500, all.length - rows.length)} more</button>. ` : `${all.length} listings. `}"Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
@@ -1178,7 +1307,8 @@ function scorecardPanel(s) {
   const hist = s.history.filter(h => h.buckets && h.buckets[0].pct != null);
   return `<div class="panel"><h2>Scorecard: is the ranking working?</h2>
     <p class="verdict">${esc(s.verdict)}</p>
-    <p class="hint">Share of each score band that sold or went pending within ${s.min_exposure_days} days of being posted -
+    <p class="hint">Share of each score band that sold or went pending within ${s.min_exposure_days} days of being posted
+      (14 days for UTVs, which sell slower) -
       private, used listings the finder caught within a day of posting (${s.listings} listings). Removed listings don't count
       (many are scams). If the score means something, the top bands sell more. Measured this way since 10/12; the history
       before that counted every listing and removals, so it reads lower and flatter.</p>
@@ -1268,6 +1398,7 @@ async function renderSetup() {
     <label>Deal alert when score ≥<input name="alert_threshold" type="number" value="${esc(v.alert_threshold)}"></label>
     <label>...and at least this % under typical<input name="alert_min_pct" type="number" value="${esc(v.alert_min_pct)}"><span class="hint">0 = no floor. Against typical asking, or what similar ones sell for if lower</span></label>
     <label>...and at least this many $ under<input name="alert_min_usd" type="number" step="100" value="${esc(v.alert_min_usd)}"><span class="hint">The margin a flip needs</span></label>
+    <label>Instant alerts only for listings newer than (days)<input name="alert_max_age_days" type="number" value="${esc(v.alert_max_age_days ?? 7)}"><span class="hint">Older ones alert only when the seller cuts the price. 0 = any age</span></label>
     <label>Just-listed alert window (minutes)<input name="fresh_window_min" type="number" value="${esc(v.fresh_window_min)}"><span class="hint">Only listings posted this recently</span></label>
     <label>Just-listed minimum score<input name="fresh_min_score" type="number" value="${esc(v.fresh_min_score)}"><span class="hint">50 = priced normally or better, no red flags</span></label>
     <label>Alerts for<select name="alert_private_only"><option value="1" ${v.alert_private_only === "1" ? "selected" : ""}>Private sellers only</option>

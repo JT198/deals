@@ -9,7 +9,8 @@ from collections import namedtuple
 import statistics
 import time
 
-from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, fix_family
+from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, fix_family, is_lawn_tractor
+from . import flags as flaglib
 from . import db, usage
 from .variant import min_comps, variant
 from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, TRIM_FEATS, TRIMS, detect
@@ -17,6 +18,29 @@ from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
 
 TOO_GOOD = 0.40         # discount past which a listing is flagged and the score tapers (11/04)
+
+# A deal that has sat is rarely a deal (11/14, private listings 15%+ under typical, share selling in the next two
+# weeks: trailers 15.3% when new vs 2.4% after 45 days; mowers / sleds / jet skis 8.8% vs 1.9%; ATVs 11.3% vs
+# 7.0%, 3.2% after 75; UTVs 7.3% vs 5.4%, 3.3% after 75). The part of the score above "normal" fades from
+# full strength at `grace` days on the market to `floor` at `full` days. A price cut restarts the clock.
+AGE_FADE = {"utv4": (21, 90, 0.6), "utv2": (21, 90, 0.6), "atv": (14, 75, 0.5), "trailer": (7, 45, 0.4)}
+AGE_FADE_DEFAULT = (14, 75, 0.5)
+
+
+def age_factor(category, days) -> float:
+    grace, full, floor = AGE_FADE.get(category, AGE_FADE_DEFAULT)
+    if days is None or days <= grace:
+        return 1.0
+    return floor if days >= full else 1 - (1 - floor) * (days - grace) / (full - grace)
+
+
+# Listings with small known issues ("needs battery", "torn seat" - flags.NOTE) ask less than clean ones, and how
+# much depends on the machine: about 2-5% on a UTV, 11% on an ATV, a third with two or more (11/14). So their
+# typical price is moved by what such listings actually ask in their category, learned every re-score and shrunk
+# toward these priors - instead of the old flat 15 points per flag.
+NOTE_PRIOR = {"one": -0.05, "two": -0.12}
+NOTE_CLAMP = -0.35
+NOTE_MIN, NOTE_SHRINK = 15, 15
 EQUIP_VERSION = 5   # bump when equipment.detect learns something new: every listing is re-detected once
 
 COMP_WINDOW = 180 * 86400
@@ -156,7 +180,8 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
-        "COALESCE(red_flags, '[]') = '[]' AND " +      # a non-runner's price says nothing about a runner
+        # a non-runner's price says nothing about a runner; "sold as-is" alone (flag_level 0) is no reason to drop one
+        "(flag_level = 0 OR (flag_level IS NULL AND COALESCE(red_flags, '[]') = '[]')) AND " +
         ("status = 'sold' AND COALESCE(ended_at, last_seen) >= ?" if sold else "last_seen >= ?") +
         " ORDER BY last_seen DESC, id",          # of one machine's postings, the latest (its current price) is kept
         (int(time.time()) - COMP_WINDOW,)).fetchall()
@@ -527,7 +552,7 @@ def _usage_note(use, typical_use, metric, exp, base):
 
 def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
           sold_typical: int | None = None, new_price: int | None = None,
-          mixed: bool = False) -> tuple[int, float | None, list[str]]:
+          mixed: bool = False, days_listed: float | None = None) -> tuple[int, float | None, list[str]]:
     """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
     reasons: list[str] = []
     price = listing["price"]
@@ -557,6 +582,11 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         if mixed:   # a known sub-model priced against bigger and smaller ones: the discount may just be the model
             s = 45 + (s - 45) * 0.6
             reasons.append("few comps of this exact model - compared across the family")
+        fade = age_factor(listing["category"], days_listed) if s > 45 else 1.0
+        if fade < 1:     # still unsold after weeks at this price: the market has passed on it (AGE_FADE)
+            s = 45 + (s - 45) * fade
+            if fade <= 0.85:
+                reasons.append(f"listed {int(days_listed)} days - a deal that has sat this long rarely is one")
         if deal_pct >= 0.05:
             reasons.append(f"{deal_pct:.0%} under typical ${expected:,}")
         elif deal_pct <= -0.05:
@@ -605,10 +635,15 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         s -= 10
         reasons.append("dealer")
 
-    flags = json.loads(listing["red_flags"] or "[]")
-    if flags:
-        s = min(s - min(35, 15 * len(flags)), 70)   # never "Great" (or alert-worthy) with known problems
-        reasons.append("red flags: " + ", ".join(flags))
+    try:
+        flags = json.loads(listing["red_flags"] or "[]")
+    except ValueError:
+        flags = []
+    # only real problems cost points and cap the score (flags.py); small known issues are priced into "typical"
+    problems = [f for f, lv in zip(flags, flaglib.of_row(listing)) if lv == flaglib.PROBLEM]
+    if problems:
+        s = min(s - min(35, 15 * len(problems)), 70)   # never "Great" (or alert-worthy) with known problems
+        reasons.append("red flags: " + ", ".join(problems))
 
     if new_price and price and listing["is_new"] != 1 and price >= 0.9 * new_price:
         s = min(s, 50)      # used, but priced like a new one: not a deal whatever the comps say
@@ -725,8 +760,14 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
         notes.insert(0, f"Typical asking price for {noun} is about ${expected:,} ({comps} comps nearby)."
                      + (f" {sold_note}" if sold_note else ""))
     flags = json.loads(listing["red_flags"] or "[]")
-    if flags:
-        notes.append("Known issues (" + ", ".join(flags) + "): get a repair estimate and take it off these numbers.")
+    levels = flaglib.of_row(listing)
+    problems = [f for f, l in zip(flags, levels) if l == flaglib.PROBLEM]
+    small = [f for f, l in zip(flags, levels) if l == flaglib.NOTE]
+    if problems:
+        notes.append("Known problems (" + ", ".join(problems) + "): get a repair estimate and take it off these numbers.")
+    if small:
+        notes.append("Small known issues (" + ", ".join(small[:4]) + "): the typical price here already allows for them"
+                     + (" - beyond the problems above." if problems else "."))
     if listing["category"] == "trailer":
         fit = utv_fit(listing)
         notes.append(FIT_NOTE[fit].format(height=", interior height ~7 ft" if listing["trailer_type"] == "enclosed" else ""))
@@ -787,24 +828,31 @@ ENDED = ("sold", "pending", "gone")
 SOLD = ("sold", "pending")
 
 
+SCORECARD_WINDOW = {"utv4": 14, "utv2": 14}    # days; a $15k UTV takes longer to sell than a $2k ATV
+
+
 def scorecard(con, comps=None, window_days: int = 3) -> dict:
     """Is the ranking any good? Private, used listings we caught within a day of being posted, posted at least
-    window_days ago: what share of each score band sold or went pending within window_days of posting.
+    their window ago: what share of each score band sold or went pending within that window of posting.
+    The window is window_days, except SCORECARD_WINDOW's categories (11/14: at 3 days UTVs looked flat, 6.4% of
+    75+ vs 3.3% of under-45; at 14 days 22.7% of those 25%+ under sold vs 10.2% of the overpriced).
     (Until 10/12 this counted every listing ever seen, incl. the deep sweep's weeks-old backlog, and counted
     removals - often scams - as successes; that flattened it.) Ended listings keep the score they ended with."""
     now = int(time.time())
-    win = window_days * 86400
-    rows = con.execute(
-        """SELECT score, status, ended_at, listed_at t0 FROM listings
+
+    def window(category) -> int:
+        return SCORECARD_WINDOW.get(category, window_days) * 86400
+    rows = [r for r in con.execute(
+        """SELECT score, status, ended_at, listed_at t0, category FROM listings
            WHERE relevant = 1 AND seen_active = 1 AND COALESCE(is_new, 0) = 0 AND COALESCE(is_dealer, 0) = 0
              AND COALESCE(seller_type, '') != 'dealer' AND score IS NOT NULL AND COALESCE(user_gone, 0) = 0
              AND listed_at IS NOT NULL AND first_seen - listed_at < 86400
              AND listed_at < ? AND listed_at > ?""",
-        (now - win, now - 60 * 86400)).fetchall()
+        (now - window_days * 86400, now - 60 * 86400)) if r["t0"] < now - window(r["category"])]
     buckets = []
     for label, lo, hi in BUCKETS:
         v = [r for r in rows if lo <= r["score"] < hi]
-        sold = [r for r in v if r["status"] in SOLD and r["ended_at"] and r["ended_at"] - r["t0"] <= win]
+        sold = [r for r in v if r["status"] in SOLD and r["ended_at"] and r["ended_at"] - r["t0"] <= window(r["category"])]
         days = [(r["ended_at"] - r["t0"]) / 86400 for r in sold if r["ended_at"] > r["t0"]]
         buckets.append({"label": label, "n": len(v), "ended": len(sold),
                         "pct": round(100 * len(sold) / len(v), 1) if v else None,
@@ -814,7 +862,7 @@ def scorecard(con, comps=None, window_days: int = 3) -> dict:
         verdict = "Not enough listings yet to judge - this needs a few weeks of data."
     elif top["pct"] >= 1.5 * bottom["pct"] and (buckets[1]["n"] < 10 or buckets[1]["pct"] >= bottom["pct"]):
         verdict = (f"Working: listings scored 75+ are selling {top['pct'] / max(bottom['pct'], 0.1):.1f}x as often "
-                   f"within {window_days} days as ones scored under 45.")
+                   f"in their first days as ones scored under 45.")
     elif top["pct"] > bottom["pct"]:
         verdict = "Pointing the right way, but the gap between great and overpriced is small."
     else:
@@ -845,7 +893,7 @@ def scorecard(con, comps=None, window_days: int = 3) -> dict:
     learned.sort(key=lambda x: -x["n"])
     return {"buckets": buckets, "verdict": verdict, "alerts": alerts, "coverage": coverage,
             "coverage_pct": round(100 * sum(c["priced"] or 0 for c in coverage) / total),
-            "learned": learned[:8], "min_exposure_days": window_days, "listings": len(rows)}
+            "learned": learned[:8], "min_exposure_days": window_days, "windows": dict(SCORECARD_WINDOW), "listings": len(rows)}
 
 
 def snapshot_scorecard(con) -> None:
@@ -855,6 +903,29 @@ def snapshot_scorecard(con) -> None:
     con.execute("INSERT OR REPLACE INTO scorecard_log(day, data) VALUES (?, ?)",
                 (day, json.dumps({"buckets": s["buckets"], "coverage_pct": s["coverage_pct"], "listings": s["listings"]})))
     con.commit()
+
+
+def _issue_group(category) -> str:
+    return "utv" if category in ("utv4", "utv2") else (category or "utv")
+
+
+def issue_effects(ratios_by: dict) -> dict:
+    """group -> {"one": e, "two": e}: how far listings with one / two-plus small known issues sit under clean ones
+    of their category (medians of log(price / typical), relative to the clean listings' own median), shrunk
+    toward NOTE_PRIOR and never above zero."""
+    out = {}
+    for group, by in ratios_by.items():
+        clean = by.get(0, [])
+        eff = {}
+        for key, k in (("one", 1), ("two", 2)):
+            vals = by.get(k, [])
+            n = len(vals) if len(vals) >= NOTE_MIN and len(clean) >= 2 * NOTE_MIN else 0
+            data = math.exp(statistics.median(vals) - statistics.median(clean)) - 1 if n else NOTE_PRIOR[key]
+            val = (n * data + NOTE_SHRINK * NOTE_PRIOR[key]) / (n + NOTE_SHRINK)
+            eff[key] = max(NOTE_CLAMP, min(0.0, val))
+        eff["two"] = min(eff["two"], eff["one"])       # two issues never cost less than one
+        out[group] = eff
+    return out
 
 
 def rescore_all(con) -> None:
@@ -873,6 +944,10 @@ def rescore_all(con) -> None:
             fam = fix_family(r["family"], r["year"], r["title"])
             if fam != r["family"] and "family" not in fixed.get(r["id"], {}):      # Jon's own correction stands
                 con.execute("UPDATE listings SET family = ?, equipment = NULL WHERE id = ?", (fam, r["id"]))
+        # lawn / garden tractors filed as zero-turns are not machines we track
+        for r in con.execute("SELECT id, title, model FROM listings WHERE category = 'mower' AND relevant = 1").fetchall():
+            if is_lawn_tractor(r["title"], r["model"]) and "relevant" not in fixed.get(r["id"], {}):
+                con.execute("UPDATE listings SET relevant = 0 WHERE id = ?", (r["id"],))
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('family_fix_version', ?)", (str(FAMILY_FIX_VERSION),))
     for r in con.execute("SELECT id, category, family, trim, title, description, extras, summary FROM listings "
                          "WHERE parsed = 1 AND relevant = 1 AND equipment IS NULL").fetchall():
@@ -888,6 +963,25 @@ def rescore_all(con) -> None:
         if d != r["usage_doubt"]:
             con.execute("UPDATE listings SET usage_doubt = ? WHERE id = ?", (d, r["id"]))
     con.commit()
+    # 1c. how serious each listing's red flags are (flags.py): decides who is a fair comp and who is penalised
+    for r in con.execute("""SELECT id, category, red_flags, gvwr_lb, axles, len_ft, flag_level FROM listings
+                            WHERE parsed = 1 AND relevant = 1""").fetchall():
+        lv = max(flaglib.of_row(r), default=0) if (r["red_flags"] or "[]") != "[]" else 0
+        if lv != r["flag_level"]:
+            con.execute("UPDATE listings SET flag_level = ? WHERE id = ?", (lv, r["id"]))
+    # 1d. once: when each listing's price was last cut, from the price history (scan.set_price keeps it up from here)
+    if not con.execute("SELECT 1 FROM settings WHERE key = 'cut_at_backfilled'").fetchone():
+        last: dict = {}
+        for h in con.execute("SELECT listing_id, ts, price FROM price_history ORDER BY listing_id, ts"):
+            prev = last.get(h["listing_id"])
+            if prev and h["price"] and prev[0] and h["price"] <= prev[0] * 0.97:
+                last[h["listing_id"]] = (h["price"], h["ts"])
+            else:
+                last[h["listing_id"]] = (h["price"], prev[1] if prev else None)
+        con.executemany("UPDATE listings SET cut_at = ? WHERE id = ? AND cut_at IS NULL",
+                        [(ts, lid) for lid, (_, ts) in last.items() if ts])
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('cut_at_backfilled', '1')")
+    con.commit()
     # 2. what each feature is worth, from last run's pre-equipment typical prices
     effects = equipment_effects(con)
     comps = _comps(con)
@@ -901,6 +995,8 @@ def rescore_all(con) -> None:
     ratios = sold_ratios(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status IN ('active', 'pending')").fetchall()
+    now = int(time.time())
+    staged, ratios_by = [], {}
     for r in rows:
         if r["usage_doubt"]:      # doubtful mileage never moves the price
             r = dict(r)
@@ -937,8 +1033,29 @@ def rescore_all(con) -> None:
                 sold_exp, sold_n, basis = int(exp * q), qn, "est"
                 sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "
                              f"({qn} sold), so expect about ${sold_exp:,}.")
+        # small known issues (flags.NOTE): 0 = none, 1 = one, 2 = two or more; a real problem is scored instead
+        lv = flaglib.of_row(r)
+        notes_n = 0 if flaglib.PROBLEM in lv else min(2, lv.count(flaglib.NOTE))
+        staged.append((r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n))
+        if (exp and r["price"] and r["price"] >= 300 and r["year"] and (r["units"] or 1) == 1 and r["is_new"] != 1
+                and flaglib.PROBLEM not in lv and 0.3 <= r["price"] / exp <= 2.5):
+            ratios_by.setdefault(_issue_group(r["category"]), {}).setdefault(notes_n, []).append(math.log(r["price"] / exp))
+    issue = issue_effects(ratios_by)
+    for r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n in staged:
+        if exp and notes_n:
+            e = issue.get(_issue_group(r["category"]), NOTE_PRIOR)["one" if notes_n == 1 else "two"]
+            adj = int(exp * (1 + e))
+            if exp - adj >= max(50, 0.01 * exp):
+                names = [f for f, l in zip(json.loads(r["red_flags"] or "[]"), flaglib.of_row(r)) if l == flaglib.NOTE]
+                why = (f"−${exp - adj:,} for known issues ({', '.join(names[:2])}{', ...' if len(names) > 2 else ''}): "
+                       f"ones with small problems ask about {round(-e * 100)}% less")
+                note = f"{note}; {why}" if note else why
+                exp = adj
+                sold_exp = int(sold_exp * (1 + e)) if sold_exp else sold_exp
+        born = max(r["listed_at"] or r["first_seen"] or now, r["cut_at"] or 0)
         s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp,
-                                new_price=new_price, mixed=bool(note and MIXED_NOTE in note))
+                                new_price=new_price, mixed=bool(note and MIXED_NOTE in note),
+                                days_listed=max(0.0, (now - born) / 86400))
         o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note, new_price)
         fit = utv_fit(r)
         con.execute(

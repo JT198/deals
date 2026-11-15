@@ -97,10 +97,15 @@ def upsert(con, source: str, item: dict, backlog: bool = False) -> bool:
     return False
 
 
+PRICE_CUT = 0.03              # a drop this size restarts a listing's clock (score fade, instant alerts)
+
+
 def set_price(con, lid, old, new):
     if new and new != old:
         con.execute("UPDATE listings SET price = ?, first_price = COALESCE(first_price, ?) WHERE id = ?",
                     (new, new, lid))
+        if old and new <= old * (1 - PRICE_CUT):
+            con.execute("UPDATE listings SET cut_at = ? WHERE id = ?", (db.now(), lid))
         con.execute("INSERT INTO price_history VALUES (?,?,?)", (lid, db.now(), new))
 
 
@@ -836,6 +841,18 @@ async def _send_alerts(con, http, st, quiet) -> int:
     def switched_on(r, kind):
         return bool((rules.get(r["category"]) or {}).get(kind))
 
+    max_age = float(st.get("alert_max_age_days") or 0) * 86400
+
+    def too_old(r):
+        """Instant alerts are for what just happened: a new listing or a fresh price cut. 11/14: 22 of 32 ATV
+        alerts and 5 of 11 UTV alerts were for listings over a week old, and a "deal" that has sat 45 days sells
+        a third to a sixth as often as a new one. A follow-up alert (the listing alerted before) is always a
+        price cut, so it passes."""
+        if not max_age or r["alerted_score"] is not None:
+            return False
+        born = max(r["listed_at"] or r["first_seen"] or 0, r["cut_at"] or 0)
+        return db.now() - born > max_age
+
     def mark(sql, rows, kind=None):
         """Record the alert from the rows as they were selected and sent - another lane may have changed
         the listing's price or score in the meantime, and a marker from the newer row would swallow the
@@ -877,6 +894,8 @@ async def _send_alerts(con, http, st, quiet) -> int:
             return "outside the buy box"
         if not enough_savings(r):
             return "savings under the alert floor"
+        if too_old(r):
+            return f"on the market over {int(max_age // 86400)} days with no price cut"
         if not first_copy(r):
             return "same ad already alerted (cross-post)"
         return None
@@ -904,7 +923,9 @@ async def _send_alerts(con, http, st, quiet) -> int:
 
     # Old listings the first deep sweep dug up: Jon gets a summary of those, not a Telegram flood.
     # Recorded as alerted at this score, so a later price cut that lifts the score still alerts.
-    old_news = [r for r in deals if r["backlog"] and r["alerted_score"] is None]
+    # (an old find whose seller has just cut the price is news, and alerts like any fresh cut)
+    old_news = [r for r in deals if r["backlog"] and r["alerted_score"] is None
+                and not (max_age and r["cut_at"] and db.now() - r["cut_at"] <= max_age)]
     if old_news:
         mark(deal_mark, old_news, "backlog")
         skip = {r["id"] for r in old_news}

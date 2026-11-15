@@ -178,13 +178,26 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 1        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 2        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
 _LAST_YEAR = {"Maverick MAX (2014-2016, pre-X3)": 2018}
 _MAVERICK_R = re.compile(r"\bmaverick\s+r\b(?!\s*[/&])")
 _PRO_S = re.compile(r"\bpro\s?-?s\b")
+
+
+# Lawn and garden tractors the model files as zero-turns (11/14: 192 of 3,518 live "zero-turns", priced against real
+# ones): the words, or a tractor model number, with nothing in the ad that says zero-turn.
+_TRACTOR = re.compile(
+    r"\b(lawn|garden|yard)\s*tractor\b|\bxt[123]\b|\bltx?\s?-?\d{2,4}\b|\b[esd]\s?1\d\d\b|\bla\s?1\d\d\b|\bl1\d\d\b"
+    r"|\bx[357]\d\d\b|\byth\s?\d|\bts\s?\d{3}\b|\blgt\b|\bgt\s?\d{4}\b|\bt\d{3,4}\b|\b(super\s*)?bronco\b|\bpony\b|\bsabre\b|\bstx\s?\d\d\b", re.I)
+_ZERO_TURN = re.compile(r"zero|\bz\s?-?turn|\bztr?\b|\bzt\s?-?[\dx]|\bz\d{3}|\brzt\b|time\s?cutter|lap\s*bar|\bz\s?master\b|stand[\s-]?on", re.I)
+
+
+def is_lawn_tractor(title: str | None, model: str | None = None) -> bool:
+    text = f"{title or ''} {model or ''}"
+    return bool(_TRACTOR.search(text)) and not _ZERO_TURN.search(text)
 
 
 def fix_family(family: str | None, year: int | None, title: str | None) -> str | None:

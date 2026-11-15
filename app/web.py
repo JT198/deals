@@ -24,6 +24,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import db, geo, images, scan, score, sweep
+from . import flags as flaglib
 from .sources.facebook import proxy_config
 from .categories import CATEGORIES, FAMILY_CATEGORY
 from .equipment import APPLIES, TRIM_FEATS
@@ -173,7 +174,7 @@ LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_p
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
   reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_rough, equipment, usage_doubt, lat, lon, new_price, new_comps, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit,
-  units, track_in, cc, stage, stage_ts, alerted_score, img_file,
+  units, track_in, cc, stage, stage_ts, alerted_score, img_file, cut_at,
   (SELECT 1 FROM corrections c WHERE c.listing_id = listings.id) corrected,
   (SELECT verdict FROM feedback f WHERE f.listing_id = listings.id ORDER BY ts DESC LIMIT 1) feedback"""
 
@@ -229,7 +230,7 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
 LIGHT = ("id", "source", "category", "family", "model", "year", "price", "score", "comps", "deal_pct", "expected",
          "distance", "lat", "lon", "approx", "location", "title", "url", "dealer", "status", "hidden", "starred",
          "stage", "notes", "feedback", "listed_at", "first_seen", "detail_misses", "is_new", "utv_fit", "miles",
-         "hours", "offer_aim", "alerted_score")
+         "hours", "offer_aim", "alerted_score", "cut_at")
 
 
 def _card(r, dist) -> dict:
@@ -240,6 +241,8 @@ def _card(r, dist) -> dict:
     d["dealer"] = bool(d["is_dealer"] == 1 or d["seller_type"] == "dealer")
     d["image"] = images.public(d)
     d.pop("img_file", None)
+    if d.get("red_flags"):       # 0 noise / 1 note / 2 problem for each flag, so the card can colour them
+        d["flag_levels"] = flaglib.of_row(d)
     # empty fields are most of the bytes; the page treats missing like null / empty
     return {k: v for k, v in d.items() if v is not None and v != "" and v != []}
 
@@ -721,10 +724,10 @@ def get_settings():
 
 # key -> (min, max, blank allowed)
 NUMERIC = {"radius_mi": (5, 500, False), "alert_threshold": (0, 100, False), "feed_max_mi": (0, 2000, False), "tow_capacity_lb": (0, 40000, True),
-           "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False),
+           "alert_min_pct": (0, 90, False), "alert_min_usd": (0, 100000, False), "alert_max_age_days": (0, 365, False),
            "fresh_window_min": (5, 1440, False), "fresh_min_score": (0, 100, False),
            "home_lat": (-90, 90, False), "home_lon": (-180, 180, False)}
-EDITABLE = {"scan_every", "alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
+EDITABLE = {"scan_every", "alert_max_age_days", "alert_min_pct", "alert_min_usd", "fb_proxy", "fb_route", "tow_capacity_lb", "radius_mi", "alert_threshold", "alert_private_only", "alert_rules", "fresh_window_min", "fresh_min_score",
             "active_hours", "home_zip", "home_lat", "home_lon", "home_label", "fb_location", "feed_max_mi"}
 
 

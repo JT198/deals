@@ -135,6 +135,7 @@ DEFAULT_SETTINGS = {
     "fresh_min_score": "50",       # ...and not overpriced / not red-flagged
     "alert_min_pct": "0",          # deal alerts also need at least this % under typical (or sold) price...
     "alert_min_usd": "0",          # ...and at least this many dollars of savings (a flip needs margin)
+    "alert_max_age_days": "7",     # instant alerts only for listings posted (or price-cut) this recently; 0 = any age
     "seed_version": "1",
 }
 
@@ -196,6 +197,8 @@ def init() -> None:
         # jet skis / snowmobiles
         "units": "INTEGER",                                      # machines the one price buys (a pair of skis = 2)
         "track_in": "INTEGER", "cc": "INTEGER",                  # sled track length; engine displacement
+        "flag_level": "INTEGER",                                 # worst red flag: 0 none / noise, 1 note, 2 problem (flags.py)
+        "cut_at": "INTEGER",                                     # when the seller last cut the price by 3%+
     })
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:

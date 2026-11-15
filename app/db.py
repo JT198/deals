@@ -147,6 +147,9 @@ def connect(shared: bool = False) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=30000")
+    # big sorts stay in memory: the services run with a read-only system (11/12), and the dashboard had no
+    # writable temp directory, so "Why $X?" failed with "disk I/O error" whenever it had to rebuild the comps
+    con.execute("PRAGMA temp_store=MEMORY")
     return con
 
 

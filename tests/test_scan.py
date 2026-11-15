@@ -780,6 +780,19 @@ def test_cloudflare_access_token_is_verified():
         web.CF_TEAM, web.CF_AUD, web.CF_MODE, web._signing_key, web.ALLOWED, web._access_log = old
 
 
+def test_why_panel_and_big_sorts_need_no_temp_directory():
+    """11/14: with the system read-only the dashboard could not write SQLite temp files, and "Why $X?" answered 500."""
+    from app import score
+    con = reset([])
+    assert db.connect().execute("PRAGMA temp_store").fetchone()[0] == 2          # 2 = memory
+    fam = "RZR XP 4"
+    _insert(con, [dict(category="utv4", family=fam, year=2021, price=15000 + 100 * i, title=f"rzr xp 4 number {i}") for i in range(8)])
+    lid = con.execute("SELECT id FROM listings LIMIT 1").fetchone()[0]
+    score.rescore_all(con)
+    r = client().get(f"/api/listing/{lid}/why")
+    assert r.status_code == 200 and r.json()["asking"]["comps"], r.text[:200]
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:

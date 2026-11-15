@@ -12,6 +12,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/opt/deals/data
+PrivateTmp=yes
 WorkingDirectory=/opt/deals
 EnvironmentFile=/opt/deals/.env
 ExecStart=/opt/deals/venv/bin/uvicorn app.web:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1

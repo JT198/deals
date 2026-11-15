@@ -12,6 +12,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/opt/deals/data
+PrivateTmp=yes
 Type=oneshot
 WorkingDirectory=/opt/deals
 EnvironmentFile=/opt/deals/.env

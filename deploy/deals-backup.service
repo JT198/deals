@@ -11,5 +11,6 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/opt/deals/data
+PrivateTmp=yes
 Type=oneshot
 ExecStart=/opt/deals/backup.sh

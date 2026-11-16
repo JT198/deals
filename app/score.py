@@ -5,11 +5,12 @@ prices, not sold prices - so "expected" means "what these usually list for").
 """
 import json
 import math
+import re
 from collections import namedtuple
 import statistics
 import time
 
-from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, fix_family, is_lawn_tractor
+from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, is_lawn_tractor, resolve
 from . import flags as flaglib
 from . import db, usage
 from .variant import min_comps, variant
@@ -18,6 +19,10 @@ from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
 
 TOO_GOOD = 0.40         # discount past which a listing is flagged and the score tapers (11/04)
+PLACEHOLDER_PRICES = {1111, 1234, 11111, 12345, 111111, 123456}
+AUCTION = re.compile(r"\bauction\b|\bbid(s|ding)?\b", re.I)
+AUCTION_TEXT = re.compile(r"\b(online|public|consignment)\s+auction\b|\bauction\s+(ends|closes|starts|date|on\s+\w+day|this|november|december|january)"
+                          r"|\bstarting\s+bid\b|\bbid\s+(now|online|here|at)\b|\bbidding\s+(ends|closes|starts|is\s+open)\b|\bno\s+reserve\b", re.I)
 
 # A deal that has sat is rarely a deal (11/14, private listings 15%+ under typical, share selling in the next two
 # weeks: trailers 15.3% when new vs 2.4% after 45 days; mowers / sleds / jet skis 8.8% vs 1.9%; ATVs 11.3% vs
@@ -559,9 +564,12 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
     deal_pct = None
     if listing["is_new"] == 1:
         expected = None   # our comps are used machines; new units need an MSRP comparison
-    if price is not None and (price < 100 or (expected and price < 0.2 * expected)):
-        # "$1", "$3", "$123" - sellers who want offers, not a real price
+    if price is not None and (price < 100 or (expected and price < 0.2 * expected) or price in PLACEHOLDER_PRICES):
+        # "$1", "$3", "$123", "$1,234", "$12,345" - sellers who want offers, not a real price
         return 35, None, [f"price ${price:,} looks like a placeholder"]
+    if AUCTION.search(_v(listing, "title") or "") or AUCTION_TEXT.search((_v(listing, "description") or "")[:2000]):
+        # 11/16: "November Auction" Rangers at $12,345 scored 78-85 - the listed price is not what it sells for
+        return 35, None, ["auction - the listed price isn't the selling price"]
     if expected and price:
         deal_pct = (expected - price) / expected
         s = 45 + 100 * max(-0.4, min(0.4, deal_pct))
@@ -940,10 +948,11 @@ def rescore_all(con) -> None:
     # 0. families the title or model year rule out, once per rule change (new ads are checked when parsed)
     ver = con.execute("SELECT value FROM settings WHERE key = 'family_fix_version'").fetchone()
     if not ver or int(ver[0]) < FAMILY_FIX_VERSION:
-        for r in con.execute("SELECT id, family, year, title FROM listings WHERE family IS NOT NULL").fetchall():
-            fam = fix_family(r["family"], r["year"], r["title"])
-            if fam != r["family"] and "family" not in fixed.get(r["id"], {}):      # Jon's own correction stands
-                con.execute("UPDATE listings SET family = ?, equipment = NULL WHERE id = ?", (fam, r["id"]))
+        for r in con.execute("""SELECT id, category, family, year, title, model, description, seats FROM listings
+                                WHERE relevant = 1 AND category IS NOT NULL""").fetchall():
+            cat, fam = resolve(r["category"], r["family"], r["year"], r["title"], r["model"], r["description"], r["seats"])
+            if (fam, cat) != (r["family"], r["category"]) and "family" not in fixed.get(r["id"], {}):   # Jon's correction stands
+                con.execute("UPDATE listings SET family = ?, category = ?, equipment = NULL WHERE id = ?", (fam, cat, r["id"]))
         # lawn / garden tractors filed as zero-turns are not machines we track
         for r in con.execute("SELECT id, title, model FROM listings WHERE category = 'mower' AND relevant = 1").fetchall():
             if is_lawn_tractor(r["title"], r["model"]) and "relevant" not in fixed.get(r["id"], {}):

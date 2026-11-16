@@ -48,7 +48,7 @@ CATEGORIES = {
         "families": [
             "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP/Pro R (2-seat)", "RZR 900/570/Trail (2-seat)",
             "Ranger XP 1000/1500 (2-seat)", "Ranger 570/500 (2-seat)", "General 1000 (2-seat)",
-            "Defender (2-seat)", "Maverick X3 (2-seat)", "Maverick R (2-seat)", "Maverick Sport/Trail (2-seat)", "Commander (2-seat)",
+            "Defender (2-seat)", "Maverick (2013-2018, pre-X3, 2-seat)", "Maverick X3 (2-seat)", "Maverick R (2-seat)", "Maverick Sport/Trail (2-seat)", "Commander (2-seat)",
             "Pioneer 1000/700/520 (2-seat)", "Talon 1000 (2-seat)", "Teryx/KRX 1000 (2-seat)",
             "Mule (2-seat)", "Wolverine X2/RMAX2", "Viking (3-seat)", "Gator XUV/HPX",
             "Kubota RTV", "CFMoto ZForce/UForce (2-seat)", "Other 2-seat UTV",
@@ -179,11 +179,11 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 3        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 4        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
-_LAST_YEAR = {"Maverick MAX (2014-2016, pre-X3)": 2018}
+_LAST_YEAR = {"Maverick MAX (2014-2016, pre-X3)": 2018, "Maverick (2013-2018, pre-X3, 2-seat)": 2018}
 _MAVERICK_R = re.compile(r"\bmaverick\s+r\b(?!\s*[/&])")
 _PRO_S = re.compile(r"\bpro\s?-?s\b")
 
@@ -248,6 +248,90 @@ def fix_family(family: str | None, year: int | None, title: str | None) -> str |
     if year and (year < _FIRST_YEAR.get(family, 0) or year > _LAST_YEAR.get(family, 9999)):
         return None
     return family
+
+
+# ---- 11/16: one checking layer after the AI (resolve) -------------------------------------------------------
+# Jon: "this site shouldn't be so dumb with the brand and model". A hand audit of the 220 best-scoring machines
+# found ~1 in 12 materially wrong: 2-seaters in 4-seat families, model names the AI filed under the wrong family,
+# snowmobiles filed as ATVs. resolve() applies what the ad says outright over what the AI guessed.
+
+# 4-seat family -> its 2-seat counterpart (None: there is no 2-seat version we track)
+TWO_SEAT = {
+    "RZR XP 4": "RZR XP 1000/Turbo (2-seat)", "RZR Pro XP 4": "RZR Pro XP/Pro R (2-seat)", "RZR Pro R 4": "RZR Pro XP/Pro R (2-seat)",
+    "RZR Turbo R 4": "RZR Pro XP/Pro R (2-seat)", "RZR 4 (other)": "RZR 900/570/Trail (2-seat)",
+    "Ranger Crew 1000": "Ranger XP 1000/1500 (2-seat)", "Ranger Crew 570": "Ranger 570/500 (2-seat)", "General 4": "General 1000 (2-seat)",
+    "Defender MAX": "Defender (2-seat)", "Maverick MAX (2014-2016, pre-X3)": "Maverick (2013-2018, pre-X3, 2-seat)",
+    "Maverick X3 MAX": "Maverick X3 (2-seat)", "Maverick R MAX": "Maverick R (2-seat)", "Maverick Sport MAX": "Maverick Sport/Trail (2-seat)",
+    "Maverick Trail/Sport MAX": "Maverick Sport/Trail (2-seat)", "Commander MAX": "Commander (2-seat)",
+    "Pioneer 1000-5/6": "Pioneer 1000/700/520 (2-seat)", "Pioneer 700-4": "Pioneer 1000/700/520 (2-seat)", "Talon 4": "Talon 1000 (2-seat)",
+    "Teryx4": "Teryx/KRX 1000 (2-seat)", "Teryx KRX4": "Teryx/KRX 1000 (2-seat)", "Mule Pro-FXT": "Mule (2-seat)",
+    "Wolverine X4": "Wolverine X2/RMAX2", "Wolverine RMAX4": "Wolverine X2/RMAX2", "Viking VI": "Viking (3-seat)",
+    "Gator XUV 4-seat": "Gator XUV/HPX", "CFMoto ZForce/UForce 4-seat": "CFMoto ZForce/UForce (2-seat)", "Other 4-seat UTV": "Other 2-seat UTV",
+}
+FOUR_SEAT = {two: four for four, two in TWO_SEAT.items() if two and four not in ("Pioneer 700-4", "Wolverine RMAX4", "RZR Pro R 4",
+                                                                                    "RZR Turbo R 4", "Maverick Trail/Sport MAX", "Teryx KRX4")}
+_SEAT4 = re.compile(
+    r"(?<!\br\s)(?<!\br-)\bmax\b(?!\s?-?[23]\b)|\bcrew\b|\bxp\s?-?4\b|\bpro\s?xp\s?-?4|\b(rzr|general|teryx|krx|talon|rmax|wolverine)\s?(xp\s?|pro\s?xp\s?|pro\s?r\s?|turbo\s?r?\s?)?(1000\s?)?-?\s?x?4\b"
+    r"|\bx-?4\b|\b(4|four|5|five|6|six)[\s-]?(seat|seater|seats|passenger|pass|door|person|place|up)\b|\b1000\s?-?[56]\b|\b700\s?-?4\b"
+    r"|\b1000\s?x\s?-?4\b|teryx\s?4|krx\s?4|\bviking\s?vi\b|\bfxt\b|\bs4\b", re.I)
+# "cash for 4 seat ranger", "looking to trade for a crew": what the seller wants, not what they're selling
+_WANTS = re.compile(r"\b(for|want\w*|looking|trade\w*|swap\w*)\s+(for\s+)?(a\s+|an\s+)?[\w-]*\s*[\w-]*\s*(4|four|crew|max)\b[\w\s-]{0,12}", re.I)
+_SEAT2 = re.compile(r"\b(2|two|3|three)[\s-]?(seat|seater|seats|passenger|person)\b", re.I)
+
+# Model names that settle the family (title + the AI's model text). (category, family or None, pattern, brand).
+# None = no family we track: no typical price rather than a wrong one. Checked in order; first match wins.
+SIGNATURES = (
+    # snowmobiles filed as ATVs (11/16: an Arctic Cat M7, a Polaris XC 500)
+    ("sled", None, r"\b(indy|rmk|xcr|xc\s?sp|switchback|mxz|ski[\s-]?doo|summit|sno\s?pro|phazer|sidewinder|sr\s?viper|snowmobile|zr\s?\d{3,4}|zl\s?\d{3})\b", None, ("atv",)),
+    ("sled", None, r"\bart?ic\s?cat\b.*\bm\s?[5-9]\b|\bpolaris\b.*\bxc\s?\d{3}\b", None, ("atv",)),
+    # Polaris ATVs that are not Sportsmen
+    ("atv", "Youth ATV (under 150cc)", r"\b(x\s?-?90|sportsman\s+(90|110)|predator\s+(50|90)|outlaw\s+(50|90|110)|phoenix\s+50|scrambler\s+(50|90))\b", "polaris", None),
+    ("atv", "Other ATV", r"\b(predator|outlaw|fusion|trail\s?blazer|xpress)\b", "polaris", None),
+    ("atv", "Polaris Scrambler", r"\bscrambler\b", "polaris", None),
+    # Yamaha utility ATVs that are not Grizzlies / Kodiaks, and not sport quads
+    ("atv", "Other ATV", r"\b(bruin|big\s?bear|wolverine\s+(350|400|450)|moto-?4)\b", "yamaha", None),
+    # Honda FourTrax / Recon without Foreman / Rubicon / Rancher in the ad
+    ("atv", "Other ATV", r"^(?!.*\b(foreman|rubicon|rancher)\b).*\b(fourtrax|four\s?trax|recon)\b", "honda", None),
+    # UTVs
+    ("utv2", None, r"\bace\s?\d{3}\b|\bpolaris\s+ace\b", "polaris", ("utv2", "utv4")),        # one seat: no family we track
+    ("utv4", "Ranger Crew 1000", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b.*\bcrew\b|^(?!.*\brzr\b).*\bcrew\b.*\bhigh\s?lifter\b", "polaris", ("utv2", "utv4")),
+    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b", "polaris", ("utv2",)),
+    # jet skis
+    ("pwc", "Sea-Doo Spark", r"\btrixx?\b(?!.*\b(rxp|gti|gts)\b)", None, ("pwc",)),
+    # Polaris trail sleds the AI filed as utility / touring
+    ("sled", "Polaris Indy/Switchback/Rush (trail/crossover)", r"^(?!.*\b(titan|voyageur|widetrak|wide\s?trak|rmk|khaos)\b).*\b(indy|classic|xlt|xcr?|edge|super\s?sport|sks)\b", "polaris", ("sled",)),
+)
+SIGNATURES = tuple((cat, fam, re.compile(rx, re.I), brand, only) for cat, fam, rx, brand, only in SIGNATURES)
+
+
+def resolve(category: str | None, family: str | None, year: int | None, title: str | None, model: str | None = None,
+            description: str | None = None, seats: int | None = None) -> tuple[str | None, str | None]:
+    """(category, family) after checking what the AI read against what the ad says outright."""
+    head = f"{title or ''} {model or ''}"
+    brands = title_brands(f"{title or ''} {model or ''}") or ({family_brand(family)} if family_brand(family) else set())
+    for cat, fam, rx, brand, only in SIGNATURES:
+        if only and category not in only:
+            continue
+        if fam and (family or "").startswith(("Vintage", "Youth")):
+            continue          # an old or kids' machine stays in its own family; only a category fix applies
+        if brand and brand not in brands:
+            continue
+        if rx.search(head):
+            if fam != family or cat != category:
+                category, family = cat, fam
+            break
+    # seats: a "4-seat" machine the ad (or the AI's own seat count) says is a 2-3 seater, and nothing says 4
+    said = _WANTS.sub(" ", f"{title or ''} {(description or '')[:1500]}")      # what the seller wrote
+    text = f"{model or ''} {said}"
+    if family in TWO_SEAT and not _SEAT4.search(text) and ((seats and seats <= 3) or _SEAT2.search(said)):
+        family = TWO_SEAT[family]
+        category = FAMILY_CATEGORY.get(family, "utv2") if family else "utv2"
+    # ...and a "2-seat" one whose title says MAX / Crew / XP 4 / 4-seater
+    elif family in FOUR_SEAT and _SEAT4.search(_WANTS.sub(" ", title or "")) and not _SEAT2.search(said):
+        family = FOUR_SEAT[family]
+        category = "utv4"
+    family = fix_family(family, year, title)
+    return category, family
 
 
 def cfg(category: str | None) -> dict:

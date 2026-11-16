@@ -55,6 +55,19 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/16 Checking layer after the AI (Jon: "this site shouldn't be so dumb with the brand and model and also the
+  scoring"). Hand audit of the 220 best-scoring machines: brand nearly always right, ~1 in 12 materially wrong
+  (family, category, fake price). `categories.resolve` now runs after every parse and once over the database
+  (FAMILY_FIX_VERSION 4): model-name signatures (Polaris Predator / Fusion / x90 / Scrambler 50, Yamaha Bruin / Big
+  Bear / Moto-4, Honda FourTrax / Recon, Ace, High Lifter, Trixx, Polaris Indy names in utility, snowmobile names
+  in ATV ads), seat count (4-seat family -> 2-seat when the AI's seat count or the ad says 2-3 and nothing says
+  MAX / Crew / 4 seats; title MAX / Crew / XP 4 -> 4-seat; trade wishes and Yamaha "R MAX 2" excluded), brand clash.
+  New family "Maverick (2013-2018, pre-X3, 2-seat)". 765 listings changed (551 live). Measured first: silent
+  "4-seat" ads the AI rates 4 seats price like 4-seaters (-2%), so those stay. Placeholder prices (1,234 / 12,345 /
+  ...; 133 live) and auction ads score 35. Not changed: 40%+-under listings sell (24-27% in 14 days) and are removed
+  no more often than fair ones (9-10%), so "too good to be true" stays a caution, not a penalty.
+  `tests.RESOLVE_CASES` = 38 real titles from the audit + dry run; add every new misfile there. Tests 89.
+
 - 11/15 (late) Brand clash: a "2023 Can am xt 700" was filed as a Honda Pioneer and shown as Great 81 (also already
   gone - it was in the new re-check queue, not reached yet, 17 min after that went live). `categories.fix_family`
   now drops the family when the title names a different brand than the family's (`family_brand` / `title_brands`):

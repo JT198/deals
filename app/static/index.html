@@ -425,7 +425,13 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>A deal that has sat fades.</b> The part of the score above "normal" shrinks as a listing stays up:
         full strength for the first 1-3 weeks (trailers 7 days, ATVs 14, UTVs 21), down to about half after
         45-90 days. A price cut restarts the clock. Cards show ⏳ once a listing has been up long enough to matter.</li>
-      <li>Prices under $100 or under 20% of typical are treated as placeholders ("$1 - make an offer"), not deals.</li>
+      <li>Prices under $100 or under 20% of typical, and made-up ones like $1,234 or $12,345, are treated as placeholders
+        ("$1 - make an offer"), not deals. So are auction ads: the listed price isn't what it sells for.</li>
+      <li><b>Model checks.</b> The AI's reading of brand, model and seats is checked against what the ad says outright:
+        a title naming another brand drops the model (no typical price rather than a wrong one); a "4-seat" machine
+        whose ad says 2-3 seats, and nothing about MAX / Crew / 4 seats, is moved to the 2-seat list (and the reverse);
+        model names that settle it (Predator, Fusion, Bruin, Big Bear, FourTrax, High Lifter, Trixx, ...) and snowmobile
+        names in an ATV ad win over the AI's guess.</li>
       <li>Few comps or no model year pull the score toward the middle, because the typical price is less certain.</li>
       <li><b>Instant alerts are for fresh news</b>: a listing posted in the last 7 days (Setup), or one whose seller
         just cut the price. An older listing that drifts over the bar shows on the dashboard without a Telegram.</li>

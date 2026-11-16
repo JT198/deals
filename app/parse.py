@@ -9,7 +9,7 @@ import time
 
 import httpx
 
-from .categories import CATEGORIES, FAMILY_CATEGORY, fix_family, is_lawn_tractor
+from .categories import CATEGORIES, FAMILY_CATEGORY, is_lawn_tractor, resolve
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://10.10.10.76:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:27b-64k")
@@ -135,8 +135,9 @@ async def parse(http: httpx.AsyncClient, listing: dict) -> dict | None:
     if fam and cat != FAMILY_CATEGORY[fam]:
         cat = FAMILY_CATEGORY[fam]    # the family is the more specific answer
     year = num(d.get("year"))
-    if fam:      # families the title or the model year rule out (categories.fix_family)
-        fam = fix_family(fam, year if year and 1965 <= year <= 2030 else None, listing.get("title"))
+    if cat:      # what the ad says outright beats the AI's guess (categories.resolve)
+        cat, fam = resolve(cat, fam, year if year and 1965 <= year <= 2030 else None, listing.get("title"), text(d.get("model")),
+                           listing.get("description"), num(d.get("seats")))
         cat = FAMILY_CATEGORY[fam] if fam else cat
     deck = num(d.get("deck_in"))
     units = num(d.get("units"))

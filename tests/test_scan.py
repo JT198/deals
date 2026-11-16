@@ -898,6 +898,77 @@ def test_review_1114_age_flags_alert_age_and_tractors():
     assert (top["n"], top["ended"]) == (2, 1), top          # the UTV sold on day 10 counts; the ATV sold too late for its 3 days
 
 
+# Real titles from the 11/16 hand audit of the 220 best-scoring machines: (category, family the AI chose, year,
+# title, AI model text, description, AI seat count) -> (category, family) after categories.resolve.
+RESOLVE_CASES = [
+    (("atv", "Polaris Sportsman", 2003, "2003 Polaris predator 500cc", "Predator 500", "", None), ("atv", "Other ATV")),
+    (("atv", "Polaris Sportsman", 2007, "2007 Polaris fusion 700", "Fusion 700", "", None), ("atv", "Other ATV")),
+    (("atv", "Polaris Sportsman", 2000, "2000 Polaris x90", "x90", "", None), ("atv", "Youth ATV (under 150cc)")),
+    (("atv", "Yamaha sport (Raptor/Banshee/YFZ)", 2004, "2004 Yamaha Bruin 350 ATV", "Bruin 350", "", None), ("atv", "Other ATV")),
+    (("atv", "Honda Foreman/Rubicon", 1998, "1998 Honda fourtrax 300", "Fourtrax 300", "", None), ("atv", "Other ATV")),
+    (("atv", "Arctic Cat/Textron Alterra", 2006, "2006 artic cat M7 big bore", "M7", "", None), ("sled", None)),
+    (("atv", "Polaris Sportsman", 1999, "'99 Polaris XC 500", "XC 500", "", None), ("sled", None)),
+    (("utv2", "Ranger 570/500 (2-seat)", 2015, "Polaris Ace 570", "Ace 570", "", None), ("utv2", None)),
+    (("utv2", "RZR XP 1000/Turbo (2-seat)", 2023, "2023 Polaris high lifter xp1000", "High Lifter XP1000", "", 2), ("utv2", "Ranger XP 1000/1500 (2-seat)")),
+    (("pwc", "Sea-Doo GTI/GTS", 2023, "2023 sea doo trixx", "Trixx", "", None), ("pwc", "Sea-Doo Spark")),
+    (("sled", "Polaris Titan/Voyageur/Widetrak (utility)", 2002, "2002 Polaris Classic 550", "Classic 550", "", None),
+     ("sled", "Polaris Indy/Switchback/Rush (trail/crossover)")),
+    (("utv4", "Maverick MAX (2014-2016, pre-X3)", 2015, "2015 Can am maverick", "Maverick 1000R", "Runs and drives good", 2),
+     ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    (("utv2", "Commander (2-seat)", 2024, "2024 Can Am Commander XT Max low miles", "Commander XT Max 1000R", "", 4), ("utv4", "Commander MAX")),
+    (("utv2", "Ranger XP 1000/1500 (2-seat)", 2022, "2022 Polaris Ranger XP 1000 Crew", "Ranger XP 1000 Crew", "", 5), ("utv4", "Ranger Crew 1000")),
+    (("utv2", "RZR XP 1000/Turbo (2-seat)", 2021, "2021 Polaris RZR XP 1000 4 seater", "RZR XP 1000", "", 4), ("utv4", "RZR XP 4")),
+    (("utv2", "Pioneer 1000/700/520 (2-seat)", 2023, "2023 Can am xt 700", "XT 700", "", 2), ("utv2", None)),
+    # left alone: the ad agrees with the AI, or says nothing either way
+    (("utv4", "Maverick X3 MAX", 2019, "2019 CanAm x3", "Maverick X3 XDS Max", "", 4), ("utv4", "Maverick X3 MAX")),
+    (("utv4", "Ranger Crew 1000", 2020, "2020 Polaris Ranger", "Ranger 1000 XP", "Runs great", 4), ("utv4", "Ranger Crew 1000")),
+    (("utv4", "Defender MAX", 2022, "2022 CanAm Defender HD/10", "Defender HD10", "6 passenger SBS", 6), ("utv4", "Defender MAX")),
+    (("utv4", "Pioneer 700-4", 2018, "2018 Honda Pioneer 700-4", "Pioneer 700-4", "", 4), ("utv4", "Pioneer 700-4")),
+    (("utv4", "Talon 4", 2021, "Honda Talon 1000x4", "Talon 1000x4", "", 4), ("utv4", "Talon 4")),
+    (("utv4", "RZR XP 4", 2024, "2024 Polaris xp4 1000 sport", "RZR XP 4 1000 Sport", "", 4), ("utv4", "RZR XP 4")),
+    (("utv2", "Wolverine X2/RMAX2", 2024, "2024 YAMAHA WOLVERINE X2 1000", "Wolverine X2 1000", "", 2), ("utv2", "Wolverine X2/RMAX2")),
+    (("utv2", "Pioneer 1000/700/520 (2-seat)", 2017, "2016 Honda pioneer 1000-3", "Pioneer 1000-3", "", 3), ("utv2", "Pioneer 1000/700/520 (2-seat)")),
+    (("atv", "Polaris Sportsman", 2007, "2007 Polaris Sportsman 700", "Sportsman 700", "", None), ("atv", "Polaris Sportsman")),
+    (("atv", "Polaris Sportsman", 2015, "2015 Polaris Sportsman 570 4x4", "Sportsman 570", "", None), ("atv", "Polaris Sportsman")),
+    (("atv", "Can-Am Renegade", 2019, "2019 Can-Am Renegade X xc 1000", "Renegade X xc 1000", "trade for snowmobile", None), ("atv", "Can-Am Renegade")),
+    (("atv", "Kawasaki Brute Force", 2008, "2008 Kawasaki Brute Force 750 ATV with Moose Snow plow", "Brute Force 750", "", None),
+     ("atv", "Kawasaki Brute Force")),
+    (("atv", "Honda Foreman/Rubicon", 2002, "2002 Honda Foreman Rubicon", "Foreman Rubicon", "", None), ("atv", "Honda Foreman/Rubicon")),
+    (("sled", "Polaris RMK/Khaos (mountain)", 2014, "2014 Polaris Pro rmk 800", "Pro RMK 800", "", None), ("sled", "Polaris RMK/Khaos (mountain)")),
+    (("sled", "Vintage snowmobile (pre-2000)", 1992, "1992 Polaris Indy Trail", "Indy Trail", "", None), ("sled", "Vintage snowmobile (pre-2000)")),
+    (("utv2", "Ranger XP 1000/1500 (2-seat)", 2023, "2023 Polaris Ranger Premium", "Ranger Premium", "", 2), ("utv2", "Ranger XP 1000/1500 (2-seat)")),
+    # found in the dry run over the live data: Yamaha's "R MAX 2", a trade wish, and the AI's own wrong model text
+    (("utv2", "Wolverine X2/RMAX2", 2021, "2021 Yamaha r max 2  1000xt r", "RMAX2 1000XT R", "", 2), ("utv2", "Wolverine X2/RMAX2")),
+    (("utv2", "Wolverine X2/RMAX2", 2022, "2022 Yamaha wolverine r-max", "Wolverine RMAX", "", 2), ("utv2", "Wolverine X2/RMAX2")),
+    (("utv2", "Ranger 570/500 (2-seat)", 2007, "07 700 ranger and cash for 4 seat ranger", "Ranger 700", "", 2), ("utv2", "Ranger 570/500 (2-seat)")),
+    (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki mule pro fxr", "Mule Pro-FXT", "", 2), ("utv2", "Mule (2-seat)")),
+    (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki Mule PRO-FXT LE 820 EPS", "Mule PRO-FXT LE 820 EPS", "", 2), ("utv4", "Mule Pro-FXT")),
+    (("utv2", "Ranger 570/500 (2-seat)", 2020, "Polaris Crew Cab 570", "Ranger 570", "", 2), ("utv4", "Ranger Crew 570")),
+]
+
+
+def test_resolve_against_the_audit():
+    from app.categories import resolve, FAMILY_CATEGORY
+    wrong = [(args[3], got, want) for args, want in RESOLVE_CASES if (got := resolve(*args)) != want]
+    assert not wrong, wrong
+    assert all(f is None or FAMILY_CATEGORY[f] == c for _, (c, f) in RESOLVE_CASES)
+
+
+def test_placeholder_and_auction_prices_are_not_deals():
+    from app import score
+    row = {"id": "x", "category": "utv4", "family": "Ranger Crew 1000", "year": 2021, "price": 12345, "is_new": 0, "strike_price": None,
+           "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]", "miles": None, "hours": None,
+           "title": "2021 Polaris ranger 1000xp", "description": ""}
+    s, pct, why = score.score(row, 19524, 40, True)
+    assert s == 35 and pct is None and "placeholder" in why[0], (s, why)
+    s, pct, why = score.score(dict(row, price=9000, title="2021 Polaris ranger 1000xp November Auction"), 19524, 40, True)
+    assert s == 35 and "auction" in why[0], (s, why)
+    s, _, why = score.score(dict(row, price=9000, description="Online auction ends Thursday at 7pm, bid now"), 19524, 40, True)
+    assert s == 35, why
+    s, _, _ = score.score(dict(row, price=9000, description="I bought it at an auction two years ago, runs great"), 19524, 40, True)
+    assert s > 60
+
+
 def test_parse_pwc_and_sled_fields():
     from app import parse as P
     class R:

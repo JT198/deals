@@ -179,7 +179,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 4        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 5        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -241,6 +241,9 @@ def fix_family(family: str | None, year: int | None, title: str | None) -> str |
         return None           # the title names another brand: no typical price rather than the wrong one
     if family in ("Maverick X3 MAX", "Maverick X3 (2-seat)") and _MAVERICK_R.search(t) and (not year or year >= 2024):
         family = "Maverick R MAX" if family == "Maverick X3 MAX" else "Maverick R (2-seat)"
+    if family in ("Maverick X3 MAX", "Maverick X3 (2-seat)") and year and year < 2017:
+        # an X3 is 2017+; an earlier Maverick is the pre-X3 model
+        family = "Maverick MAX (2014-2016, pre-X3)" if family == "Maverick X3 MAX" else "Maverick (2013-2018, pre-X3, 2-seat)"
     if family == "RZR Pro R 4" and _PRO_S.search(t):
         family = "RZR Turbo R 4"            # the Pro S replaced the Turbo R for 2025: same class and price range
     if family == "RZR Turbo R 4" and year and year < 2022:

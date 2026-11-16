@@ -945,6 +945,10 @@ RESOLVE_CASES = [
     (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki Mule PRO-FXT LE 820 EPS", "Mule PRO-FXT LE 820 EPS", "", 2), ("utv4", "Mule Pro-FXT")),
     (("utv2", "Ranger 570/500 (2-seat)", 2020, "Polaris Crew Cab 570", "Ranger 570", "", 2), ("utv4", "Ranger Crew 570")),
     (("utv2", "Maverick X3 (2-seat)", 2015, "2015 Can Am Maverick", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    (("utv2", None, 2014, "2014 Can-Am Maverick 1000R X xc", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    (("utv2", None, 2018, "2018 Can Am Maverick 1000r", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    (("utv2", None, 2019, "2019 Can Am Maverick Sport 1000", "Maverick Sport", "", 2), ("utv2", None)),
+    (("utv2", None, 2018, "2018 Can Am Maverick", "Maverick", "", 2), ("utv2", None)),           # 2017-18: X3 or not, can't tell
 ]
 
 

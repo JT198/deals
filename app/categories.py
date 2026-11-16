@@ -179,7 +179,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 5        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 6        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -279,6 +279,8 @@ _SEAT4 = re.compile(
     r"|\b1000\s?x\s?-?4\b|teryx\s?4|krx\s?4|\bviking\s?vi\b|\bfxt\b|\bs4\b", re.I)
 # "cash for 4 seat ranger", "looking to trade for a crew": what the seller wants, not what they're selling
 _WANTS = re.compile(r"\b(for|want\w*|looking|trade\w*|swap\w*)\s+(for\s+)?(a\s+|an\s+)?[\w-]*\s*[\w-]*\s*(4|four|crew|max)\b[\w\s-]{0,12}", re.I)
+_OLD_MAVERICK = re.compile(r"^(?!.*\b(x3|sport|trail|max|r\s?max)\b).*\bmaverick\b", re.I)
+_MAVERICK_1000R = re.compile(r"\b1000\s?r\b", re.I)
 _SEAT2 = re.compile(r"\b(2|two|3|three)[\s-]?(seat|seater|seats|passenger|person)\b", re.I)
 
 # Model names that settle the family (title + the AI's model text). (category, family or None, pattern, brand).
@@ -333,6 +335,10 @@ def resolve(category: str | None, family: str | None, year: int | None, title: s
     elif family in FOUR_SEAT and _SEAT4.search(_WANTS.sub(" ", title or "")) and not _SEAT2.search(said):
         family = FOUR_SEAT[family]
         category = "utv4"
+    # a 2-seat Maverick from before the X3 (until 11/16 there was no family for it, so the AI left it blank)
+    if (category == "utv2" and family in (None, "Maverick X3 (2-seat)") and year and _OLD_MAVERICK.search(head)
+            and (year <= 2016 or (year <= 2018 and _MAVERICK_1000R.search(head)))):
+        family = "Maverick (2013-2018, pre-X3, 2-seat)"
     family = fix_family(family, year, title)
     return category, family
 

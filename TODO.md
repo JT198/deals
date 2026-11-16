@@ -55,6 +55,17 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/15 Two Great cards Jon opened were dead (a 14-hour-old trailer removed, a 23-day-old ATV sold). 177 of 362 Great
+  cards had not been confirmed in 3+ days: the old "hot" re-check took the 6 highest scores across all 43k
+  listings per scan, after new listings had used the hourly budget (that ATV's page was last read 22 days ago).
+  Now `scan.shown_candidates`: buy-box cards scoring 60+ are re-confirmed every 6 h and Great (75+) cards anywhere
+  every 12 h, oldest confirmation first, 15 per full scan + 10 per night sweep run; they go ahead of the deep
+  sweep's backlog in the page queue. "Confirmed" = a search showed it (searches carry sold / pending) or its page
+  was read. Round-robin 6 -> 3, stale 4 -> 2, photo 6 -> 4 per scan to make room. Cards unconfirmed for a day
+  say "last confirmed Nd ago". Queue on day one: 426 cards. Check in a few days how many Great cards are
+  unconfirmed for 12 h+, and whether 40%+-under ("too good to be true?") listings vanish too fast to be worth
+  showing near the top. Tests 87.
+
 - 11/14 (late) Trailers: only ones that fit a 4-seat UTV (Jon: "if I buy a UTV I will also need a trailer").
   Alerts and the digest (incl. its price-cut section) no longer take a non-fitting trailer at any score - the
   "exceptional deal at 85+" exception is gone; the Trailers tab opens with "Fits a 4-seat UTV" ticked (untick for

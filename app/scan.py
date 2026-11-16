@@ -39,10 +39,10 @@ FB_BACKOFF_HOURS = (2, 4, 8)  # pause all Facebook traffic this long after it re
 FB_DETAILS_PER_RUN = 40
 SOLD_DETAILS_PER_RUN = 120    # item pages for newly seen sold listings (the first pull has a backlog)
 SOLD_MAX_SECS = 3 * 3600      # the sold pull (~190 loads) waits out the hourly budget instead of quitting, up to this long
-FB_RECHECKS_PER_RUN = 6
-PHOTO_RECHECKS_PER_RUN = 6    # best-scoring listings whose photo link expired before we saved a copy
+FB_RECHECKS_PER_RUN = 3
+PHOTO_RECHECKS_PER_RUN = 4    # best-scoring listings whose photo link expired before we saved a copy
 FADING_RECHECKS_PER_RUN = 14  # still on the dashboard but unseen for 2+ days: catch deletions before Jon does
-STALE_RECHECKS_PER_RUN = 4    # long unseen (already hidden from the dashboard): only the records care
+STALE_RECHECKS_PER_RUN = 2    # long unseen (already hidden from the dashboard): only the records care
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
 FB_BUDGET_RESERVE = 45        # ...of which the long lanes leave this many for the fast lane
 QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
@@ -136,16 +136,47 @@ def apply_detail(con, lid, d: dict | None, old_price):
     set_price(con, lid, old_price, d.get("price"))
 
 
-HOT_SCORE = 60                # listings worth showing get re-checked every HOT_RECHECK_SECS
-HOT_RECHECK_SECS = 6 * 3600
-HOT_RECHECKS_PER_RUN = 6
+# What Jon actually looks at gets confirmed first (11/15: he opened two "Great" cards - a trailer removed and an
+# ATV sold; 177 of 362 Great cards had not been confirmed in 3+ days because the old "hot" group took the 6
+# highest scores across all 43k listings per scan, after new listings had used the hourly budget).
+# "Confirmed" = a search showed it (searches carry sold / pending) or its page was read, whichever is later.
+SHOWN_RECHECKS_PER_RUN = 15
+BOX_CONFIRM_SECS = 6 * 3600       # buy-box listings scoring BOX_SCORE+ (the default view)
+BOX_SCORE = 60
+GREAT_CONFIRM_SECS = 12 * 3600    # "Great" (75+) cards in any category
+GREAT_SCORE = 75
+
+
+def shown_candidates(con, limit: int) -> list:
+    """Listings on screen whose last confirmation is getting old: the buy box first, then Great cards anywhere,
+    oldest confirmation first within each, so nothing starves behind the top scores."""
+    st = db.settings(con)
+    rules = db.alert_rules(st)
+    radius = int(st.get("radius_mi") or 100)
+    dist = buybox.distance_fn(con, st)
+    now = db.now()
+    rows = con.execute(
+        """SELECT * FROM listings WHERE source='facebook' AND detail_fetched=1 AND status IN ('active','pending')
+             AND relevant = 1 AND hidden = 0 AND score >= ? AND MAX(last_seen, COALESCE(last_checked, 0)) < ?""",
+        (min(BOX_SCORE, GREAT_SCORE), now - min(BOX_CONFIRM_SECS, GREAT_CONFIRM_SECS))).fetchall()
+    box, great = [], []
+    for r in rows:
+        rule = rules.get(r["category"]) or {}
+        confirmed = max(r["last_seen"] or 0, r["last_checked"] or 0)
+        in_box = (rule.get("enabled") and r["is_new"] != 1 and buybox.fits(rule, r, dist(r), radius)
+                  and (r["category"] != "trailer" or r["utv_fit"] == "yes"))
+        if in_box and r["score"] >= BOX_SCORE and confirmed < now - BOX_CONFIRM_SECS:
+            box.append((confirmed, r))
+        elif r["score"] >= GREAT_SCORE and confirmed < now - GREAT_CONFIRM_SECS:
+            great.append((confirmed, r))
+    return [r for _, r in sorted(box, key=lambda x: x[0]) + sorted(great, key=lambda x: x[0])][:limit]
 
 
 def recheck_candidates(con) -> list:
     """Facebook item pages to re-open this full scan, to notice price cuts, pending, sold and removed:
       1. suspects - failed to load last time; retried every scan so a removed listing is confirmed in ~an hour
       2. starred listings, every scan (watch alerts)
-      3. listings scoring HOT_SCORE+ not checked in HOT_RECHECK_SECS (the ones Jon actually looks at)
+      3. what the dashboard shows: buy box and Great cards not confirmed lately (shown_candidates)
       4. fading - still on the dashboard, unseen 2+ days (instant-alert categories first)
       5. photos - top scores whose photo link expired before we saved a copy
       6. stale - not seen by any search or sweep in stale_after() (already hidden): the page says if it's gone
@@ -156,9 +187,7 @@ def recheck_candidates(con) -> list:
         con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0
                         ORDER BY COALESCE(last_checked, 0) ASC LIMIT 20""").fetchall(),
         con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND starred = 1").fetchall(),
-        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND relevant = 1 AND score >= ?
-                        AND COALESCE(last_checked, 0) < ? ORDER BY score DESC LIMIT ?""",
-                    (HOT_SCORE, now - HOT_RECHECK_SECS, HOT_RECHECKS_PER_RUN)).fetchall(),
+        shown_candidates(con, SHOWN_RECHECKS_PER_RUN),
         fading_candidates(con, FADING_RECHECKS_PER_RUN),
         photo_candidates(con, PHOTO_RECHECKS_PER_RUN),
         stale_candidates(con, STALE_RECHECKS_PER_RUN),
@@ -371,7 +400,7 @@ def pending_details(con, limit: int, where: str = "status='active'") -> list:
     """Facebook listings whose item page we haven't read yet: fresh finds first, then what the deep sweep
     dug up. Ads the model already dropped from their title alone wait for title_only_candidates()."""
     return con.execute(
-        """SELECT id, ext_id, price FROM listings
+        """SELECT id, ext_id, price, backlog FROM listings
            WHERE source='facebook' AND detail_fetched=0 AND (parsed = 0 OR COALESCE(relevant, 1) != 0) AND """ + where + """
            ORDER BY backlog ASC, first_seen DESC LIMIT ?""", (limit,)).fetchall()
 
@@ -694,7 +723,11 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                                        fb_status + ("" if sold else only_new))
                 if not (quick or sold):
                     seen_ids = {r["id"] for r in todo}
-                    todo += [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
+                    again = [r for r in recheck_candidates(con) if r["id"] not in seen_ids]
+                    # fresh finds, then the re-checks (what Jon sees is in there), then the deep sweep's backlog -
+                    # the hourly budget runs out at the end of the list, so the backlog is what waits
+                    fresh = [r for r in todo if not r["backlog"]]
+                    todo = fresh + again + [r for r in todo if r["backlog"]]
                 await fb_details(con, fb, todo, errors, lock=None if quick else fb_lock, budget=budget, route=fb_route,
                                  wait_until=wait_until)
         except (SkipFacebook, BudgetSpent):

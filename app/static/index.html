@@ -807,6 +807,13 @@ function ageChip(d) {
     return `<span class="tag age" title="Listings still up after this long rarely turn out to be deals; the score has been lowered for it">⏳ ${days} days listed</span>`;
   return "";
 }
+// When we last saw it still for sale (a search showing it, or its page): a Great card unconfirmed for a day+
+// may already be gone (11/15: two of them were, a removed trailer and a sold ATV)
+const confirmedAt = d => Math.max(d.last_seen || 0, d.last_checked || 0);
+function confirmChip(d) {
+  const t = confirmedAt(d); if (!t || t > Date.now() / 1000 - 86400) return "";
+  return `<span class="tag" title="Last time a search or its page showed it still for sale; it's queued for a re-check">last confirmed ${ago(t)}</span>`;
+}
 function dealLine(d) {
   if (!d.expected) return `<div class="deal">No typical price yet <span class="hint">${d.comps || 0} comps</span></div>`;
   const save = savingOf(d), pct = d.deal_pct ?? 0;
@@ -824,7 +831,7 @@ function facts(d) {      // the short line on the card
 function moreFacts(d) {  // the rest, under Details
   return [catOf(d.category).label, d.units > 1 && d.price ? `${d.units} for one price (~${money(Math.round(d.price / d.units))} each)` : null,
     d.engine || null, d.dealer ? "dealer" : "private seller", d.source,
-    d.last_seen && d.last_seen < Date.now() / 1000 - 86400 ? "last confirmed up " + ago(d.last_seen) : null]
+    confirmedAt(d) ? "last confirmed up " + ago(confirmedAt(d)) : null]
     .filter(Boolean).map(esc).join(" · ");
 }
 // red flags by how serious they are (flags.py): 2 = a real problem, 1 = a small known issue, 0 = not a defect
@@ -865,7 +872,7 @@ function cardHtml(d) {
       ${dealLine(d)}
       <div class="facts">${facts(d)}</div>
       <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${
-        ageChip(d)}${caution.map(r => `<span class="tag warn">⚠ ${esc(r.replace(/ - compared across the family/, ""))}</span>`).join("")}${
+        ageChip(d)}${confirmChip(d)}${caution.map(r => `<span class="tag warn">⚠ ${esc(r.replace(/ - compared across the family/, ""))}</span>`).join("")}${
         flagChips(d)}${fitTag(d)}${d.alerted_score != null ? `<span class="tag" title="Sent to Telegram at score ${d.alerted_score}">🔔 alerted</span>` : ""}${
         d.notes ? `<span class="tag note" title="${esc(d.notes)}">📝 note</span>` : ""}</div>
       <div class="actions">

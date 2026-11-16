@@ -174,7 +174,7 @@ LIST_COLS = """id, source, category, deck_in, engine, url, title, price, first_p
   miles, turbo, is_dealer, is_new, motivated, detail_misses, extras, red_flags, summary, expected, comps, deal_pct, score,
   reasons, starred, hidden, notes, expected_base, usage_note, offer_open, offer_aim, offer_walk, offer_rough, equipment, usage_doubt, lat, lon, new_price, new_comps, expected_sold, sold_comps, sold_basis,
   trailer_type, len_ft, width_ft, height_ft, axles, gvwr_lb, brakes, utv_fit,
-  units, track_in, cc, stage, stage_ts, alerted_score, img_file, cut_at,
+  units, track_in, cc, stage, stage_ts, alerted_score, img_file, cut_at, last_checked,
   (SELECT 1 FROM corrections c WHERE c.listing_id = listings.id) corrected,
   (SELECT verdict FROM feedback f WHERE f.listing_id = listings.id ORDER BY ts DESC LIMIT 1) feedback"""
 

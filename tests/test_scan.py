@@ -469,16 +469,24 @@ def test_sold_estimate_from_category_ratio():
     assert score.sold_ratios(con)["utv4"] == (0.8, 8)
 
 
-def test_recheck_order_suspects_first_then_hot():
+def test_recheck_order_suspects_first_then_what_jon_sees():
+    """11/15: two Great cards Jon opened were gone (removed / sold). Buy-box and Great cards whose last
+    confirmation (search sighting or page read) is getting old are re-checked first, oldest first."""
     t = db.now()
-    base = {"detail_fetched": 1, "last_checked": t - 10 * 3600}
+    base = {"detail_fetched": 1, "last_checked": t - 30 * 3600, "last_seen": t - 30 * 3600, "price": 10000}
     con = reset([dict(base, id="facebook:plain", ext_id="plain", score=40),
-                 dict(base, id="facebook:hot", ext_id="hot", score=85),
-                 dict(base, id="facebook:fresh-hot", ext_id="fresh-hot", score=90, last_checked=t - 600),
+                 dict(base, id="facebook:great-older", ext_id="great-older", score=78, category="sled", last_seen=t - 40 * 3600, last_checked=t - 40 * 3600),
+                 dict(base, id="facebook:great", ext_id="great", score=90, category="sled"),
+                 dict(base, id="facebook:box", ext_id="box", score=65, category="utv4", family="RZR XP 4"),
+                 dict(base, id="facebook:box-seen", ext_id="box-seen", score=95, category="utv4", family="RZR XP 4", last_seen=t - 600),
+                 dict(base, id="facebook:sled-good", ext_id="sled-good", score=65, category="sled"),
                  dict(base, id="facebook:suspect", ext_id="suspect", score=30, detail_misses=1)])
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'", (json.dumps({"utv4": {"enabled": True}, "sled": {"enabled": False}}),)); con.commit()
+    shown = [r["id"] for r in scan.shown_candidates(con, 10)]
+    # the buy box first; then Great cards anywhere, oldest confirmation first; a search 10 min ago is confirmation
+    assert shown == ["facebook:box", "facebook:great-older", "facebook:great"], shown
     ids = [r["id"] for r in scan.recheck_candidates(con)]
-    assert ids[0] == "facebook:suspect" and ids[1] == "facebook:hot", ids
-    assert ids.index("facebook:fresh-hot") > ids.index("facebook:plain") or "facebook:fresh-hot" not in ids[:2], ids
+    assert ids[:4] == ["facebook:suspect", "facebook:box", "facebook:great-older", "facebook:great"], ids
 
 
 def test_gone_button():

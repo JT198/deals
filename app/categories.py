@@ -20,7 +20,11 @@ CATEGORIES = {
         "dep": 0.08, "window": 1, "fit": True, "low_hpy": 60, "high_hpy": 200,
         "usage": {"miles": (-0.025, 1000), "hours": (-0.03, 100)},
         "cl_cat": "sna", "every_min": 60,
-        "quick": ["rzr xp 4", "ranger crew", "can am max", "4 seat side by side"],   # also run by the 5-minute fast lane
+        # the fast lane (every 10 min, newest first, QUICK_SEARCHES_PER_RUN at a time): every Polaris / Can-Am 4-seat
+        # search - Jon's buy box (11/16: a quarter of box listings were found 15+ hours after posting)
+        "quick": ["rzr xp 4", "rzr 4 seater", "rzr pro xp 4", "ranger crew", "ranger xp 1000 crew", "ranger northstar",
+                  "can am defender max", "can am maverick max", "can am commander max", "can am max", "polaris general 4",
+                  "general xp 4", "4 seat side by side"],
         "bands": [1500, 5000, 8000, 11000, 14000, 17000, 20000, 24000, 29000, 36000, 70000],
         "families": [
             "RZR XP 4", "RZR Pro XP 4", "RZR Pro R 4", "RZR Turbo R 4", "RZR 4 (other)",
@@ -36,7 +40,7 @@ CATEGORIES = {
             "rzr xp 4", "rzr 4 seater", "rzr pro xp 4", "ranger crew", "ranger xp 1000 crew",
             "can am defender max", "can am maverick max", "can am commander max",
             "honda pioneer 1000-5", "kawasaki teryx4", "teryx krx4", "polaris general 4",
-            "yamaha wolverine x4", "4 seat side by side", "crew utv",
+            "yamaha wolverine x4", "4 seat side by side", "crew utv", "ranger northstar", "general xp 4",
         ],
     },
     "utv2": {
@@ -121,7 +125,9 @@ CATEGORIES = {
         "dep": 0.04, "window": 2, "fit": True, "low_hpy": 0, "high_hpy": 10**9,
         "usage": {},
         "cl_cat": "tra", "every_min": 60,
-        "quick": ["utility trailer", "enclosed trailer", "utv trailer"],   # also run by the 5-minute fast lane
+        # the fast lane: trailers big enough for a 4-seat UTV
+        "quick": ["utility trailer", "enclosed trailer", "utv trailer", "tandem axle trailer", "car hauler trailer",
+                  "7x16 trailer", "flatbed trailer", "tilt trailer", "landscape trailer", "16 ft trailer", "18 ft trailer"],
         "bands": [500, 1500, 2500, 3500, 4500, 6000, 8000, 11000, 16000, 40000],
         "families": [
             "Enclosed cargo", "Enclosed car hauler (8.5 wide)", "Open utility (rails / mesh sides)",
@@ -130,7 +136,7 @@ CATEGORIES = {
         ],
         "searches": [
             "tandem axle trailer", "car hauler trailer", "7x16 trailer", "7x14 trailer",
-            "flatbed trailer", "tilt trailer", "sled trailer", "landscape trailer",
+            "flatbed trailer", "tilt trailer", "sled trailer", "landscape trailer", "16 ft trailer", "18 ft trailer",
         ],
     },
     "pwc": {
@@ -179,7 +185,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 6        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 7        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -299,6 +305,12 @@ SIGNATURES = (
     ("atv", "Other ATV", r"^(?!.*\b(foreman|rubicon|rancher)\b).*\b(fourtrax|four\s?trax|recon)\b", "honda", None),
     # UTVs
     ("utv2", None, r"\bace\s?\d{3}\b|\bpolaris\s+ace\b", "polaris", ("utv2", "utv4")),        # one seat: no family we track
+    # NorthStar is a Ranger edition; a General is a General (11/16: "xp 1000 northstar ultimate" filed as a RZR XP 4,
+    # "General XP 1000 Sport" as a Ranger Crew)
+    ("utv4", "Ranger Crew 1000", r"^(?!.*\b(rzr|general|razor)\b).*\bnorth\s?star\b", "polaris", ("utv4",)),
+    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\b(rzr|general|razor)\b).*\bnorth\s?star\b", "polaris", ("utv2",)),
+    ("utv4", "General 4", r"^(?!.*\b(ranger|rzr|razor)\b).*\bgeneral\b", "polaris", ("utv4",)),
+    ("utv2", "General 1000 (2-seat)", r"^(?!.*\b(ranger|rzr|razor)\b).*\bgeneral\b", "polaris", ("utv2",)),
     ("utv4", "Ranger Crew 1000", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b.*\bcrew\b|^(?!.*\brzr\b).*\bcrew\b.*\bhigh\s?lifter\b", "polaris", ("utv2", "utv4")),
     ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b", "polaris", ("utv2",)),
     # jet skis

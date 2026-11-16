@@ -55,6 +55,16 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
+  found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median
+  1.4 h, 75th 25 h, 90th 118 h. Causes: searches covered 100 mi while the boxes reach 150 (most late 4-seat finds
+  were 100-150 mi out, found by the overnight sweep), and the fast lane ran 3 of 16 box searches. Now: each
+  category searches as far as its buy box (`db.search_radius`, incl. the sweep); the fast lane runs every Polaris /
+  Can-Am 4-seat search and every UTV-size trailer search, 10 per run, longest-waiting first (SEED_VERSION 7, new
+  searches "ranger northstar", "general xp 4", "16 ft trailer", "18 ft trailer"); its budget share 45 -> 70 loads/h;
+  ATVs and snowmobiles scanned daily (Setup). NorthStar / General misfiles added to resolve. Tests 90.
+  **Re-measure ~11/23** with the same query (time from listed_at to first_seen, box listings, backlog = 0).
+
 - 11/16 Checking layer after the AI (Jon: "this site shouldn't be so dumb with the brand and model and also the
   scoring"). Hand audit of the 220 best-scoring machines: brand nearly always right, ~1 in 12 materially wrong
   (family, category, fake price). `categories.resolve` now runs after every parse and once over the database

@@ -179,7 +179,7 @@ async def run() -> None:
                         break
                     await scan.step_aside(lock, route)
                     try:
-                        items = await fb.search(j["query"], loc, radius, sort="best_match", scrolls=0,
+                        items = await fb.search(j["query"], loc, db.search_radius(st, j["category"]), sort="best_match", scrolls=0,
                                                 price=(j["lo"], j["hi"]))
                     except Exception as e:      # left on the list; it is first in line next run
                         errors.append(f"fb '{j['query']}' ${j['lo']}-{j['hi']}: {e}")

@@ -945,6 +945,11 @@ RESOLVE_CASES = [
     (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki Mule PRO-FXT LE 820 EPS", "Mule PRO-FXT LE 820 EPS", "", 2), ("utv4", "Mule Pro-FXT")),
     (("utv2", "Ranger 570/500 (2-seat)", 2020, "Polaris Crew Cab 570", "Ranger 570", "", 2), ("utv4", "Ranger Crew 570")),
     (("utv2", "Maverick X3 (2-seat)", 2015, "2015 Can Am Maverick", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    # 11/16 late finds: a NorthStar filed as a RZR, a General as a Ranger
+    (("utv4", "RZR XP 4", 2022, "2022 Polaris xp 1000 northstar ultimate", "XP 1000 Northstar Ultimate", "", 4), ("utv4", "Ranger Crew 1000")),
+    (("utv4", "Ranger Crew 1000", 2023, "2023 Polaris General XP 1000 Sport", "General XP 1000 Sport", "", 4), ("utv4", "General 4")),
+    (("utv4", "Ranger Crew 1000", 2024, "2024 Polaris ranger crew xp 1000 northstar ult", "Ranger Crew XP 1000", "", 6), ("utv4", "Ranger Crew 1000")),
+    (("utv4", "RZR XP 4", 2024, "2024 Polaris RZR XP 4 Ultimate general use", "RZR XP 4", "", 4), ("utv4", "RZR XP 4")),
     (("utv2", None, 2014, "2014 Can-Am Maverick 1000R X xc", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
     (("utv2", None, 2018, "2018 Can Am Maverick 1000r", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
     (("utv2", None, 2019, "2019 Can Am Maverick Sport 1000", "Maverick Sport", "", 2), ("utv2", None)),
@@ -972,6 +977,21 @@ def test_placeholder_and_auction_prices_are_not_deals():
     assert s == 35, why
     s, _, _ = score.score(dict(row, price=9000, description="I bought it at an auction two years ago, runs great"), 19524, 40, True)
     assert s > 60
+
+
+def test_fast_lane_covers_the_buy_box_and_searches_reach_it():
+    """11/16: a quarter of 4-seat buy-box listings were found 15+ hours after posting - the box reaches 150 mi but
+    searches covered 100, and the fast lane ran 3 of the 16 box searches."""
+    from app.categories import CATEGORIES
+    st = {"radius_mi": "100", "alert_rules": json.dumps({"utv4": {"enabled": True, "within_mi": "150"},
+                                                         "atv": {"enabled": False, "within_mi": "200"}, "trailer": {"enabled": True}})}
+    assert db.search_radius(st, "utv4") == 150 and db.search_radius(st, "atv") == 100 and db.search_radius(st, "trailer") == 100
+    assert db.search_radius({"radius_mi": "100", "alert_rules": json.dumps({"utv4": {"enabled": True, "within_mi": "900"}})}, "utv4") == 300
+    con = reset([])
+    quick = {r["query"] for r in con.execute("SELECT query FROM searches WHERE quick = 1")}
+    assert quick == set(CATEGORIES["utv4"]["quick"]) | set(CATEGORIES["trailer"]["quick"]) | set(CATEGORIES["mower"].get("quick", [])), quick
+    assert {"ranger northstar", "can am defender max", "car hauler trailer"} <= quick and "kawasaki teryx4" not in quick
+    assert scan.QUICK_SEARCHES_PER_RUN < len(quick)          # a slice per run, longest-waiting first
 
 
 def test_parse_pwc_and_sled_fields():

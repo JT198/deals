@@ -44,7 +44,8 @@ PHOTO_RECHECKS_PER_RUN = 4    # best-scoring listings whose photo link expired b
 FADING_RECHECKS_PER_RUN = 14  # still on the dashboard but unseen for 2+ days: catch deletions before Jon does
 STALE_RECHECKS_PER_RUN = 2    # long unseen (already hidden from the dashboard): only the records care
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
-FB_BUDGET_RESERVE = 45        # ...of which the long lanes leave this many for the fast lane
+FB_BUDGET_RESERVE = 70        # ...of which the long lanes leave this many for the fast lane (45 until 11/16)
+QUICK_SEARCHES_PER_RUN = 10   # the fast lane's slice of its ~24 buy-box searches per 10-minute run
 QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
 CL_DETAILS_PER_RUN = 40
 PARSES_PER_RUN = 120
@@ -615,6 +616,9 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
     if quick:       # a category scanned once a day doesn't need minute-by-minute news
         searches = [x for x in searches if every[x["category"]] < db.DAILY]
     random.shuffle(searches)
+    if quick:       # the longest-waiting quick searches first, a slice per run (the list is the whole buy box)
+        searches.sort(key=lambda x: x["last_run"] or 0)
+        searches = searches[:QUICK_SEARCHES_PER_RUN]
     t0 = db.now()
     fb_route, fb_until = fb_pick_route(st, t0)
     fb_paused = fb_route is None
@@ -648,7 +652,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         for srch in ([] if sold else searches):
             q = srch["query"]
             try:
-                items = await craigslist.search(http, q, st.get("home_zip", "55446"), radius,
+                items = await craigslist.search(http, q, st.get("home_zip", "55446"), db.search_radius(st, srch["category"]),
                                                 cfg(srch["category"])["cl_cat"])
                 found += len(items)
                 cl_found += len(items)
@@ -695,7 +699,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                         await step_aside(fb_lock, fb_route)
                     q = srch["query"]
                     try:
-                        items = await fb.search(q, st.get("fb_location", "plymouth-mn"), radius,
+                        items = await fb.search(q, st.get("fb_location", "plymouth-mn"), db.search_radius(st, srch["category"]),
                                                 sort="best_match" if (backfill or sold) else "newest",
                                                 scrolls=0 if quick else 3 if sold else None, sold=sold)
                         if sold:     # the Sold filter can include a stray available item - keep only sold ones

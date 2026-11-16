@@ -139,7 +139,7 @@ DEFAULT_SETTINGS = {
     "seed_version": "1",
 }
 
-SEED_VERSION = 6   # bump when categories.py gains default searches
+SEED_VERSION = 7   # bump when categories.py gains default searches
 
 def connect(shared: bool = False) -> sqlite3.Connection:
     """shared=True: the connection may be closed from another thread (the dashboard cleans up after each request)."""
@@ -218,6 +218,8 @@ def init() -> None:
         for cat, c in CATEGORIES.items():
             for q in c["searches"] + c.get("quick", []):
                 con.execute("INSERT OR IGNORE INTO searches(query, category) VALUES (?, ?)", (q, cat))
+            if seeded < 7:      # 11/16: the fast lane is exactly the categories' quick lists (the buy box)
+                con.execute("UPDATE searches SET quick = 0 WHERE category = ?", (cat,))
             for q in c.get("quick", []):
                 con.execute("UPDATE searches SET quick = 1 WHERE query = ?", (q,))
         con.execute("UPDATE settings SET value = ? WHERE key = 'seed_version'", (str(SEED_VERSION),))
@@ -251,6 +253,19 @@ def title_key(title: str | None) -> str:
 
 
 SCAN_CHOICES = (20, 60, 120, 180, 360, 720, 1440)     # minutes; Setup offers these
+
+
+def search_radius(st: dict, category: str | None) -> int:
+    """Miles around home a category's searches cover: the search radius, or farther when the category's buy box
+    reaches farther (11/16: the 4-seat box reaches 150 mi but searches covered 100, so listings 100-150 mi out were
+    only found by the overnight sweep, 1-4 days late)."""
+    radius = int(st.get("radius_mi") or 100)
+    rule = alert_rules(st).get(category or "") or {}
+    try:
+        reach = int(float(rule.get("within_mi") or 0)) if rule.get("enabled") else 0
+    except (TypeError, ValueError):
+        reach = 0
+    return max(radius, min(reach, 300))
 
 
 def scan_every(st: dict) -> dict:

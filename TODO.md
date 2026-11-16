@@ -55,6 +55,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 
 ## Done
 
+- 11/15 (late) Brand clash: a "2023 Can am xt 700" was filed as a Honda Pioneer and shown as Great 81 (also already
+  gone - it was in the new re-check queue, not reached yet, 17 min after that went live). `categories.fix_family`
+  now drops the family when the title names a different brand than the family's (`family_brand` / `title_brands`):
+  no typical price instead of a wrong one. 70 live listings, 2 of them 70+. FAMILY_FIX_VERSION 3. Tests 87.
+
 - 11/15 Two Great cards Jon opened were dead (a 14-hour-old trailer removed, a 23-day-old ATV sold). 177 of 362 Great
   cards had not been confirmed in 3+ days: the old "hot" re-check took the 6 highest scores across all 43k
   listings per scan, after new listings had used the hourly budget (that ATV's page was last read 22 days ago).

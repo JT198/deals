@@ -179,7 +179,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 2        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 3        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -201,11 +201,44 @@ def is_lawn_tractor(title: str | None, model: str | None = None) -> bool:
     return bool(_TRACTOR.search(text)) and not _ZERO_TURN.search(text)
 
 
+# A family belongs to one brand. When the title names a different brand outright, the family is wrong (11/15:
+# "2023 Can am xt 700" filed as a Honda Pioneer and shown as a Great deal; 80 live listings like it). The brand
+# a family belongs to comes from its model names; the title's brand only from the brand's own name.
+_FAMILY_BRAND = {
+    "polaris": r"\brzr\b|\branger\b|\bgeneral\b|sportsman|scrambler|\bindy\b|\brmk\b|titan|polaris",
+    "canam": r"maverick|defender|commander|outlander|renegade|ski-doo|sea-doo|can-am",
+    "honda": r"pioneer|foreman|rubicon|rancher|\btrx\b|\batc\b|talon|honda",
+    "yamaha": r"wolverine|grizzly|kodiak|viking|\bex\b|\bvx\b|\bfx\b|superjet|sidewinder|srviper|venture|tri-z|yamaha",
+    "kawasaki": r"teryx|\bkrx|\bmule\b|brute\s?force|kawasaki|tecate|\bultra\b|stx",
+    "arcticcat": r"arctic\s?cat|alterra|\bzr\b|norseman|bearcat",
+    "johndeere": r"gator|john\s?deere", "cfmoto": r"cfmoto|cforce|zforce|uforce", "suzuki": r"suzuki|kingquad",
+}
+_TITLE_BRAND = {"polaris": r"\bpolaris\b", "canam": r"\bcan[\s-]?am\b|\bcam[\s-]?am\b|\bski[\s-]?doo\b|\bsea[\s-]?doo\b|\bbrp\b",
+                "honda": r"\bhonda\b", "yamaha": r"\byamaha\b", "kawasaki": r"\bkawasaki\b", "arcticcat": r"\barctic\s?cat\b",
+                "johndeere": r"\bjohn\s?deere\b", "cfmoto": r"\bcf\s?moto\b", "suzuki": r"\bsuzuki\b"}
+
+
+def family_brand(family: str | None) -> str | None:
+    if not family or family.startswith(("Other", "Youth", "Vintage")) or family not in FAMILY_CATEGORY:
+        return None
+    if FAMILY_CATEGORY[family] in ("mower", "trailer", "trike"):
+        return None
+    hits = [b for b, rx in _FAMILY_BRAND.items() if re.search(rx, family, re.I)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def title_brands(title: str | None) -> set:
+    return {b for b, rx in _TITLE_BRAND.items() if re.search(rx, title or "", re.I)}
+
+
 def fix_family(family: str | None, year: int | None, title: str | None) -> str | None:
     """The family this listing should be filed under, or None when its model year rules the family out."""
     if not family:
         return family
     t = (title or "").lower()
+    fb, tb = family_brand(family), title_brands(title)
+    if fb and tb and fb not in tb:
+        return None           # the title names another brand: no typical price rather than the wrong one
     if family in ("Maverick X3 MAX", "Maverick X3 (2-seat)") and _MAVERICK_R.search(t) and (not year or year >= 2024):
         family = "Maverick R MAX" if family == "Maverick X3 MAX" else "Maverick R (2-seat)"
     if family == "RZR Pro R 4" and _PRO_S.search(t):

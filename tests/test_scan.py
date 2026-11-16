@@ -717,6 +717,13 @@ def test_round2_reposts_trims_families_series():
     assert fix_family("RZR Turbo R 4", 2019, "2019 rzr turbo s 4") == "RZR XP 4"
     assert fix_family("Maverick MAX (2014-2016, pre-X3)", 2023, "2023 Can Am Max Hd 7") is None
     assert fix_family("Ranger Crew 1000", 2012, "ranger crew 800") == "Ranger Crew 1000"
+    # the title names a different brand than the family (11/15: a Can-Am XT 700 filed as a Honda Pioneer)
+    assert fix_family("Pioneer 1000/700/520 (2-seat)", 2023, "2023 Can am xt 700") is None
+    assert fix_family("Pioneer 700-4", None, "Can Am 700 Maxx") is None
+    assert fix_family("Pioneer 1000/700/520 (2-seat)", 2020, "2020 Honda Pioneer 700") == "Pioneer 1000/700/520 (2-seat)"
+    assert fix_family("Pioneer 1000/700/520 (2-seat)", 2020, "Pioneer 700 deluxe") == "Pioneer 1000/700/520 (2-seat)"
+    assert fix_family("Defender MAX", 2022, "2022 Can-Am Defender MAX Limited") == "Defender MAX"
+    assert fix_family("Other 4-seat UTV", 2021, "2021 Polaris thing") == "Other 4-seat UTV"
     # mower series, jet ski engine class, budget brands
     assert variant(dict(category="mower", family="Scag", title="Scag Cheetah 61")) == "Cheetah"
     assert variant(dict(category="mower", family="Bad Boy", title="Bad Boy MZ Magnum 54")) == "MZ"

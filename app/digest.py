@@ -55,7 +55,8 @@ def build(con) -> str:
         any_deal = True
         lines.append(f"\n{cfg['emoji']} <b>{e(cfg['label'])}</b>")
         for r in rows:
-            typ = f" (typical ${r['expected']:,})" if r["expected"] else ""
+            going = r["expected_sold"] or r["expected"]
+            typ = f" ({'sells for' if r['expected_sold'] else 'typical'} ~${going:,})" if going else ""
             where = f" · {e(r['location'])}" if r["location"] else ""
             lines.append(f"• <a href=\"{e(r['url'])}\">{e(r['title'][:60])}</a> - <b>${r['price']:,}</b>{typ}{where} · score {r['score']}")
     if not any_deal:

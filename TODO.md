@@ -32,9 +32,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
 - [ ] From the 11/14 review, not built: Market tab has no sub-model picker; 1,774 Facebook listings wait for their
       item page while the fast lane re-runs searches every 10 minutes (UTV deals take a median 12.9 days to sell, so
       slowing the fast lane to free page budget is worth a look); 33% of live listings have no saved photo.
-- [ ] Check after a week (~11/21): does the age fade leave real deals on the table? (price cuts restart the clock);
-      are small-issue listings that now reach 75+ (132 on rollout day, all categories) worth having there?
-      On 11/14 they sold as fast as clean ones at the same discount (ATVs 21.1% vs 20.9% in 7 days at 25%+ under).
+- [ ] Check ~11/28: (1) time from posting to first seen for 4-seat box listings, now that ring cities run (11/16-21:
+      n=13, 46% within 1 h, 90th pct 32 h); (2) `settings.miss_recovered` vs `miss_confirmed` - if more than a few
+      percent recover, go back to 3 misses; (3) page loads per lane (`SELECT lane, COUNT(*) FROM fb_loads`) and whether
+      buy-box cards are confirmed within 6 h in the daytime; (4) going-price ratios moving as more sell;
+      (5) small-issue listings at 75+ still selling like clean ones.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
 - [ ] RZR Pro S 4 sits in the Turbo R 4 family (4 same-age comps); give it its own family once ~15 are listed.
@@ -54,6 +56,29 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       kept going). If it blocks again at 220: drop to ~170, or enter the TorGuard proxy in Setup -> Facebook route.
 
 ## Done
+
+- 11/21 Review round ("review this site and make it even better"). Measured first, then built:
+  **Going price.** "Typical" is the middle of every asking price, and most of those are listings that sit: the ones
+  that sold had been asking 6-11% under typical (4-seat UTVs), 19-29% under (ATVs), 26-38% under (trailers); listings
+  still up after a month sat 3-14% over it. Every listing is now measured against what comparable ones sold for:
+  typical asking x the ratio the sold ones of its family asked (`score.sell_ratios`: family with 5+ sold, shrunk
+  toward the category; category needs 15; 11/21 ratios utv4 0.91, utv2 0.83, atv 0.76, trailer 0.68). Scale:
+  50 = priced like the ones that sell, 60 = 8% under, 75 "Great" = 20% under, top 90 at 32%; "too good" past 35%.
+  Listings priced at the going price sell 18-28% of the time in 14 days, 8%+ over it half as often. Cards, table,
+  map, Why panel, digest and Telegram say "going price"; `expected` is still typical asking, `expected_sold` the
+  going price, `deal_pct` is against the going price. The old per-listing sold-comp pricing is gone.
+  **Reach.** Facebook ignores the radius when logged out (150 mi returned the same 24 listings as 100; even 40 did):
+  a search shows what is near the city in its address. Ring-city searches (`settings.fb_ring`: duluth, brainerd-mn,
+  alexandria-mn, willmar-mn, marshall-mn, mankato, rochester-mn, eau-claire-wi, hayward-wi; slugs are "city-st")
+  run each instant category's `ring` queries every 3 h, 6 per full scan, keeping results within the buy box + 25 mi.
+  7 of the 13 new 4-seat box listings since 11/16 were 100-150 mi out and found 6-58 h late.
+  **Page budget.** A pending listing that was then deleted was never marked gone (18 stuck, re-tried every scan,
+  one 532 times): fixed + cleaned up. Each lane has its own hourly share (`LANE_ALLOWANCE` quick 70 / full 115 /
+  sweep 30; sweep 200 at night) - on 11/16 I had left the full scan ~10 loads/h for re-checks. Removal after 2
+  unreadable pages (was 3); `settings.miss_recovered` / `miss_confirmed` keep score. Re-check order: starred, shown
+  cards, then suspects. **Models.** Polaris Xpedition is its own family (5-seat + 2-seat; 143 live), searched and in
+  the buy box. Age fade continues past 2x its span (a "deal" had been up 470 days). Tests 88.
+  Since 11/14: no Facebook pause, 133 dead Great cards removed by the re-checks, trailers found in a median 0.3 h.
 
 - 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
   found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median

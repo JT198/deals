@@ -18,7 +18,18 @@ from .equipment import APPLIES, DOLLAR_BY_CAT, DOLLAR_PRIOR, LABEL, MULT_PRIOR, 
 
 TRIM_CAP = 0.30   # a family's learned trim effect never exceeds +/-30%
 
-TOO_GOOD = 0.40         # discount past which a listing is flagged and the score tapers (11/04)
+# The score measures a listing against what comparable ones SELL for, not the typical asking price (11/21).
+# "Typical" is the middle of every asking price, and most of those are listings that sit: the ones that sold
+# were asking 6-11% under typical for 4-seat UTVs, 19-29% under for ATVs and 26-38% under for trailers, while
+# listings still up after a month sat 3-14% over it. So "30% under typical" on a trailer was just a trailer
+# priced to sell. Scale: NORMAL = priced like the ones that sell; SLOPE points per 100% under that, so
+# 20% under = 75 "Great", 8% under = 60 "Good"; capped at DEAL_CAP (90).
+NORMAL = 50
+SLOPE = 125
+DEAL_CAP = 0.32
+TOO_GOOD = 0.35         # discount past which a listing is flagged and the score tapers (11/04; 0.40 vs asking until 11/21)
+SELL_MIN_CATEGORY, SELL_MIN_FAMILY, SELL_SHRINK = 15, 5, 15     # sold listings needed; weight on the category's ratio
+SELL_CLAMP = (0.55, 1.05)
 PLACEHOLDER_PRICES = {1111, 1234, 11111, 12345, 111111, 123456}
 AUCTION = re.compile(r"\bauction\b|\bbid(s|ding)?\b", re.I)
 AUCTION_TEXT = re.compile(r"\b(online|public|consignment)\s+auction\b|\bauction\s+(ends|closes|starts|date|on\s+\w+day|this|november|december|january)"
@@ -36,7 +47,10 @@ def age_factor(category, days) -> float:
     grace, full, floor = AGE_FADE.get(category, AGE_FADE_DEFAULT)
     if days is None or days <= grace:
         return 1.0
-    return floor if days >= full else 1 - (1 - floor) * (days - grace) / (full - grace)
+    if days < full:
+        return 1 - (1 - floor) * (days - grace) / (full - grace)
+    # still up after two to four times that long (11/21: a "28% under" X3 had been listed 470 days): half as much again
+    return floor if days <= 2 * full else max(floor / 2, floor - (floor / 2) * (days - 2 * full) / (2 * full))
 
 
 # Listings with small known issues ("needs battery", "torn seat" - flags.NOTE) ask less than clean ones, and how
@@ -558,7 +572,8 @@ def _usage_note(use, typical_use, metric, exp, base):
 def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
           sold_typical: int | None = None, new_price: int | None = None,
           mixed: bool = False, days_listed: float | None = None) -> tuple[int, float | None, list[str]]:
-    """50 = a normal listing. 'Great' (75+) needs a real discount plus something else going for it."""
+    """50 = priced like the comparable ones that sell (sold_typical; typical asking when that isn't known).
+    'Great' (75+) = 20% or more under that. deal_pct is the discount against that same yardstick."""
     reasons: list[str] = []
     price = listing["price"]
     deal_pct = None
@@ -571,34 +586,32 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         # 11/16: "November Auction" Rangers at $12,345 scored 78-85 - the listed price is not what it sells for
         return 35, None, ["auction - the listed price isn't the selling price"]
     if expected and price:
-        deal_pct = (expected - price) / expected
-        s = 45 + 100 * max(-0.4, min(0.4, deal_pct))
+        anchor = sold_typical or expected          # what comparable ones sell for, when there are sold ones to go by
+        what = f"what these sell for (~${anchor:,})" if sold_typical else f"typical ${expected:,}"
+        deal_pct = (anchor - price) / anchor
+        s = NORMAL + SLOPE * max(-0.4, min(DEAL_CAP, deal_pct))
         if deal_pct > TOO_GOOD:
-            # far under typical is more often a misread (wrong model, partial price, parts machine) than a
-            # steal: past 40% the score tapers instead of topping out, and the card asks for a sanity check
-            s = max(70.0, 85 - (deal_pct - TOO_GOOD) * 66.7)
+            # far under the selling price is more often a misread (wrong model, partial price, parts machine) than
+            # a steal: past TOO_GOOD the score tapers instead of topping out, and the card asks for a sanity check
+            s = max(70.0, 90 - (deal_pct - TOO_GOOD) * 66.7)
             reasons.append("too good to be true? check the model and price")
-        if sold_typical and price >= sold_typical and deal_pct >= 0.05:
-            # under typical asking, but no cheaper than these actually sell for: less of a deal than it looks
-            s = 45 + (s - 45) * 0.7
-            reasons.append(f"about what similar ones actually sell for (~${sold_typical:,})")
         if comps < 8:   # thin comps: trust the discount less
-            s = 45 + (s - 45) * (0.5 + comps / 16)
+            s = NORMAL + (s - NORMAL) * (0.5 + comps / 16)
         if not listing["year"]:   # compared against every year of the family
-            s = 45 + (s - 45) * 0.6
+            s = NORMAL + (s - NORMAL) * 0.6
             reasons.append("year not stated")
         if mixed:   # a known sub-model priced against bigger and smaller ones: the discount may just be the model
-            s = 45 + (s - 45) * 0.6
+            s = NORMAL + (s - NORMAL) * 0.6
             reasons.append("few comps of this exact model - compared across the family")
-        fade = age_factor(listing["category"], days_listed) if s > 45 else 1.0
+        fade = age_factor(listing["category"], days_listed) if s > NORMAL else 1.0
         if fade < 1:     # still unsold after weeks at this price: the market has passed on it (AGE_FADE)
-            s = 45 + (s - 45) * fade
+            s = NORMAL + (s - NORMAL) * fade
             if fade <= 0.85:
                 reasons.append(f"listed {int(days_listed)} days - a deal that has sat this long rarely is one")
         if deal_pct >= 0.05:
-            reasons.append(f"{deal_pct:.0%} under typical ${expected:,}")
+            reasons.append(f"{deal_pct:.0%} under {what}")
         elif deal_pct <= -0.05:
-            reasons.append(f"{-deal_pct:.0%} over typical ${expected:,}")
+            reasons.append(f"{-deal_pct:.0%} over {what}")
     else:
         s = 40
         reasons.append("new unit - compare to MSRP" if listing["is_new"] == 1
@@ -614,8 +627,6 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
         drop = (was - price) / was
         reasons.append(f"price cut ${was - price:,} ({drop:.0%})")
 
-    if sold_typical and price and price <= 0.95 * sold_typical:
-        reasons.append(f"below what similar ones sold for (~${sold_typical:,})")
 
     if listing["motivated"]:
         s += 3
@@ -797,16 +808,38 @@ def offer(listing, expected, deal_pct, comps, tow_capacity: int | None = None,
     return {"open": open_, "aim": aim, "walk": walk, "notes": notes, "rough": rough}
 
 
-def sold_ratios(con) -> dict[str, tuple[float, int]]:
-    """category -> (median of last price when sold / typical asking at the time, how many). >= 8 sold only."""
-    out: dict[str, list] = {}
-    for r in con.execute("""SELECT category, COALESCE(end_price, price) p, expected FROM listings
-                            WHERE status = 'sold' AND relevant = 1 AND COALESCE(is_new, 0) = 0
-                              AND expected IS NOT NULL AND COALESCE(end_price, price) >= 300"""):
-        q = r["p"] / r["expected"]
-        if 0.4 <= q <= 1.6:                      # ignore mismatches (wrong family, parts, typos)
-            out.setdefault(r["category"], []).append(q)
-    return {c: (min(1.05, max(0.75, statistics.median(v))), len(v)) for c, v in out.items() if len(v) >= 8}
+def sell_ratios(con) -> dict:
+    """How far under their typical asking price the listings that SOLD were asking (their last price):
+    {"cat": {category: (ratio, n)}, "fam": {family: (ratio, n)}}. A family's own ratio is used once it has
+    SELL_MIN_FAMILY sold listings, shrunk toward its category's; a category needs SELL_MIN_CATEGORY. Listings with
+    real problems are left out (a non-runner sells cheap for its own reason)."""
+    cat: dict[str, list] = {}
+    fam: dict[str, list] = {}
+    for r in con.execute("""SELECT category, family, COALESCE(end_price, price) * 1.0 / expected q FROM listings
+                            WHERE status = 'sold' AND relevant = 1 AND COALESCE(is_new, 0) = 0 AND seen_active = 1
+                              AND expected > 0 AND COALESCE(end_price, price) >= 300 AND COALESCE(flag_level, 0) < 2
+                              AND COALESCE(ended_at, last_seen) >= ?""", (int(time.time()) - COMP_WINDOW,)):
+        if 0.4 <= r["q"] <= 1.6:                      # ignore mismatches (wrong family, parts, typos)
+            cat.setdefault(r["category"], []).append(r["q"])
+            if r["family"]:
+                fam.setdefault(r["family"], []).append(r["q"])
+    clamp = lambda x: min(SELL_CLAMP[1], max(SELL_CLAMP[0], x))
+    cats = {c: (clamp(statistics.median(v)), len(v)) for c, v in cat.items() if len(v) >= SELL_MIN_CATEGORY}
+    fams = {}
+    for f, v in fam.items():
+        base = cats.get(FAMILY_CATEGORY.get(f))
+        if base and len(v) >= SELL_MIN_FAMILY:
+            fams[f] = (clamp((len(v) * statistics.median(v) + SELL_SHRINK * base[0]) / (len(v) + SELL_SHRINK)), len(v))
+    return {"cat": cats, "fam": fams}
+
+
+def sell_ratio_for(ratios: dict, category, family) -> tuple[float | None, int, str | None]:
+    """(ratio, sold listings behind it, 'family' | 'category') for one listing; (None, 0, None) with too few sold."""
+    if family in ratios["fam"]:
+        return (*ratios["fam"][family], "family")
+    if category in ratios["cat"]:
+        return (*ratios["cat"][category], "category")
+    return None, 0, None
 
 
 def mark_ended(con) -> None:
@@ -999,9 +1032,8 @@ def rescore_all(con) -> None:
     except (TypeError, ValueError):
         tow = None
     pace = days_to_sell(con)
-    sold_comps = _comps(con, sold=True)
     new_comps = _comps(con, new=True)
-    ratios = sold_ratios(con)
+    sell = sell_ratios(con)
     rows = con.execute(
         "SELECT * FROM listings WHERE parsed = 1 AND relevant = 1 AND status IN ('active', 'pending')").fetchall()
     now = int(time.time())
@@ -1022,26 +1054,19 @@ def rescore_all(con) -> None:
                 base, pre, note = base or ceiling, ceiling, why
         if r["is_new"] == 1:
             exp = base = note = pre = None
-        # Sold listings (Facebook "Sold" filter). Their price is the last listed price, so they mostly tell us
-        # whether things are selling at asking. Only when similar ones sold clearly under typical asking do we
-        # show a separate "typically sells around" number and anchor the offer on it.
+        # What comparable ones sell for: this machine's typical asking price (lined up for year, use, equipment and
+        # sub-model) times how far under typical the sold ones of its family - or category - were asking. Sold
+        # prices are the last asking price before "sold", so the real sale price is a little lower still.
         sold_exp = sold_n = basis = sold_note = None
         if exp:
-            se, sn, _, snote, _ = expected_price(r, sold_comps, effects)
-            if snote and MIXED_NOTE in snote and not (note and MIXED_NOTE in note):
-                se = None     # asking comps are this sub-model, the sold ones would be the whole family: not comparable
-            if se and sn >= 4:
-                if se < 0.97 * exp:
-                    sold_exp, sold_n, basis = int(max(0.75 * exp, se)), sn, "sold"
-                    sold_note = f"Similar ones have sold for about ${sold_exp:,} ({sn} marked sold)."
-                else:
-                    sold_n, basis = sn, "holding"
-                    sold_note = f"Similar ones have been selling at about asking ({sn} marked sold) - sellers are getting their price."
-            elif r["category"] in ratios and 0.8 <= ratios[r["category"]][0] < 0.97:
-                q, qn = ratios[r["category"]]
-                sold_exp, sold_n, basis = int(exp * q), qn, "est"
-                sold_note = (f"Sold prices in this category run about {(1 - q) * 100:.0f}% under asking "
-                             f"({qn} sold), so expect about ${sold_exp:,}.")
+            q, sold_n, basis = sell_ratio_for(sell, r["category"], r["family"])
+            if q:
+                sold_exp = int(exp * q)
+                of = f"{sold_n} sold {r['family']}" if basis == "family" else f"{sold_n} sold in this category"
+                sold_note = (f"The ones that sold were asking about {round((1 - q) * 100)}% under typical asking ({of}): about ${sold_exp:,}."
+                             if q < 0.985 else f"The ones that sold were asking about the typical price ({of}).")
+            else:
+                sold_n = None
         # small known issues (flags.NOTE): 0 = none, 1 = one, 2 = two or more; a real problem is scored instead
         lv = flaglib.of_row(r)
         notes_n = 0 if flaglib.PROBLEM in lv else min(2, lv.count(flaglib.NOTE))

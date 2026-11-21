@@ -290,7 +290,7 @@ td.t { white-space: normal; min-width: 240px; }
         <option value="72h">last 3 days</option><option value="168h">last 7 days</option></select></label>
       <label>Condition <select id="f-cond"><option value="">any</option><option value="used">used only</option>
         <option value="new">new only</option></select></label>
-      <label class="keep">Sort <select id="f-sort"><option value="score">best deal</option><option value="saving">most $ under typical</option>
+      <label class="keep">Sort <select id="f-sort"><option value="score">best deal</option><option value="saving">most $ under the going price</option>
         <option value="newest">newest first</option><option value="price">lowest price</option></select></label>
       <label id="f-fit-wrap"><input id="f-fit" type="checkbox"> Fits a 4-seat UTV</label>
       <label><input id="f-private" type="checkbox"> Private only</label>
@@ -397,11 +397,14 @@ td.t { white-space: normal; min-width: 240px; }
         so a few cheap or loaded listings can't price a 2022 below a 2020 of the same model. Not used for trailers, vintage
         machines, "Other" groups or machines over 12 years old. The grey line says when it happened.</li>
       <li>Trailers with too few same-size comparisons are priced <b>per foot</b> from trailers of the same type.</li>
-      <li><b>Typically sells around</b>: the same calculation run on listings marked <b>sold</b> on Facebook (pulled three times a
-        day with Facebook's Sold filter). When a model has too few sold listings, it's estimated from how far sold prices sit
-        under asking across the category. Offers anchor on this when it's there - it's what similar ones actually went for.
-        Facebook only shows the last listed price of a sold item, so when similar ones sold at about asking the card just
-        says <b>✓ Selling at about asking</b> - a sign sellers are getting their price and there's less room to haggle.</li>
+      <li><b>Going price</b> (the number every card is measured against): what the comparable ones that <b>sold</b>
+        were asking. Most listings on the market at any moment are the ones that have not sold, so the typical asking
+        price runs high - on 11/21 the 4-seat UTVs that sold had been asking 6-11% under typical, ATVs 19-29% under and
+        trailers 26-38% under, while listings still up after a month sat 3-14% over it. The going price is this
+        machine's typical asking price (lined up for year, use, equipment and sub-model as above) less how far under
+        typical the sold ones of its model - or its category, when few of the model have sold - were asking. Sold
+        prices are the last asking price before the listing was marked sold, so the real sale price is a little lower
+        still. With too few sold listings the card says so and uses typical asking.</li>
       <li>"Typical asking" uses <b>asking</b> prices - sold prices aren't public - so "typical" means what these usually list for.
         With few listings of a model the number is rougher; the comps count tells you how many it's based on.</li>
       <li>New/dealer-stock units get no typical price (used comps don't apply); compare those to MSRP.</li>
@@ -409,11 +412,12 @@ td.t { white-space: normal; min-width: 240px; }
 
     <h3>Score (the number on each card)</h3>
     <ul>
-      <li><b>50</b> is a normally priced listing. <b>60-74 "Good"</b>, <b>75+ "Great"</b>.</li>
-      <li>Goes up for being under typical, and a little for signs the seller is motivated (OBO, must sell).
-        Goes down for dealers, new stock, and being over typical. A price cut, low use, or a price under what similar
-        ones sold for show as reasons but add no points: the % under typical already counts the cut price and the use,
-        and on the 10/12 check-in none of them made a listing sell any faster.</li>
+      <li><b>50</b> is a listing priced like the ones that sell (the going price). <b>60-74 "Good"</b> starts at
+        8% under the going price, <b>75+ "Great"</b> at 20% under; a listing at the typical asking price scores
+        below 50, because that is where the ones that sit are priced.</li>
+      <li>Goes up for being under the going price, and a little for signs the seller is motivated (OBO, must sell).
+        Goes down for dealers, new stock, and being over it. A price cut or low use show as reasons but add no
+        points: the discount already counts the cut price and the use.</li>
       <li><b>Red flags come in three kinds.</b> A real <b>problem</b> (doesn't run, engine or transmission work,
         salvage, frame or flood damage, sat for years, scam signs) costs 15 points each and caps the score at 70 -
         never "Great". A <b>small known issue</b> (battery, tires, carb clean, torn seat, cracked windshield) costs
@@ -482,15 +486,15 @@ td.t { white-space: normal; min-width: 240px; }
       <li><b>Filters</b>: min and max price, min and max year, distance, how recently listed. <b>Hide ones I've opened</b>
         leaves out listings you've clicked through to (they're faded otherwise; remembered in this browser).
         With <b>Starred / shortlist</b> ticked, <b>Compare shortlist</b> puts them side by side.</li>
-      <li><b>Way under typical</b>: up to 40% under, the bigger the discount the higher the score. Past 40% the score
-        tapers back down and the card says "too good to be true? check the model and price" - that's usually a misread
-        model, a partial price or a parts machine. A listing under typical asking but no cheaper than similar ones
-        actually sell for also counts for less.</li>
+      <li><b>Way under the going price</b>: up to about a third under, the bigger the discount the higher the score.
+        Past 35% the score tapers back down and the card says "too good to be true? check the model and price" -
+        that's usually a misread model, a partial price or a parts machine.</li>
       <li><b>Best deal order</b>: by score; listings with the same score are ordered by how many comps back the
-        price (more = more trustworthy), then nearest first, then newest. Discounts past 40% all score the same,
+        price (more = more trustworthy), then nearest first, then newest. Discounts past a third all score about the same,
         so that tie-break matters at the top of the list.</li>
-      <li><b>Why $X?</b> on a card opens the comparable listings behind its typical price, each lined up to this
-        machine's year, use and equipment, and the sold listings behind "typically sells around".</li>
+      <li><b>Why $X?</b> on a card opens how its going price was reached: the comparable listings behind the typical
+        asking price, each lined up to this machine's year, use and equipment, how far under it the sold ones asked,
+        and the sold listings themselves.</li>
       <li><b>Fix</b> on a card corrects what the model read - model, year, miles, hours, dealer, red flags, equipment,
         or "not a machine we track". Corrections are kept even when the ad is re-read after the seller edits it;
         the price and score update right away. "Clear corrections" goes back to the model's reading.</li>
@@ -668,15 +672,15 @@ function badge(d) {
   return `<span class="badge ${cls}">${word}${d.score ?? "–"}</span>`;
 }
 function vsTypical(d) {
-  if (!d.expected) return `<span class="typ">Typical: not enough comps yet (${d.comps || 0})</span>`;
-  const pct = d.deal_pct ?? 0, cls = pct >= 0.03 ? "under" : pct <= -0.03 ? "over" : "";
-  const word = pct >= 0.03 ? `${Math.round(pct*100)}% under` : pct <= -0.03 ? `${Math.round(-pct*100)}% over` : "about typical";
+  if (!d.expected) return `<span class="typ">Going price: not enough comps yet (${d.comps || 0})</span>`;
   const fresh = d.new_price ? `<span class="typ">New at dealers about <b>${money(d.new_price)}</b> · ${d.new_comps} listing${d.new_comps === 1 ? "" : "s"}${
     d.price >= 0.9 * d.new_price ? ' · <span class="over">priced like a new one</span>' : ""}</span>` : "";
-  const sold = d.expected_sold ? `<span class="typ">Typically sells around <b>${money(d.expected_sold)}</b> · ${d.sold_basis === "sold"
-    ? `${d.sold_comps} sold` : `est. from ${d.sold_comps} sold in this category`}</span>`
-    : d.sold_basis === "holding" ? `<span class="typ">✓ Selling at about asking (${d.sold_comps} sold)</span>` : "";
-  return `<span class="typ">Typical asking ${money(d.expected)} · <span class="${cls}">${word}</span> · ${d.comps} comps</span>` + fresh + sold +
+  const less = d.expected_sold ? Math.round(100 * (1 - d.expected_sold / d.expected)) : 0;
+  const going = d.expected_sold
+    ? `<span class="typ">Going price about <b>${money(d.expected_sold)}</b>: the ones that sold were asking ${less > 0 ? less + "% under" : "about"} the typical asking price
+        (${d.sold_comps} sold${d.sold_basis === "family" ? " of this model" : " in this category"})</span>`
+    : `<span class="typ">Too few have sold to know the going price - compared with typical asking</span>`;
+  return going + `<span class="typ">Typical asking ${money(d.expected)} · ${d.comps} comps</span>` + fresh +
     (d.usage_note ? `<span class="typ usage">${esc(d.usage_note)}</span>` : "");
 }
 function sellerMessage(d) {
@@ -734,7 +738,7 @@ document.addEventListener("focusout", async e => {
 function whyBox(d) {
   if (!d.expected && !d.comps) return "";
   const id = "why-" + d.id.replace(/[^a-z0-9]/gi, "");
-  return `<details class="offer why" data-why="${esc(d.id)}"><summary>Why ${money(d.expected)}? <span class="hint">${d.comps || 0} comps</span></summary>
+  return `<details class="offer why" data-why="${esc(d.id)}"><summary>Why ${money(goingOf(d))}? <span class="hint">${d.comps || 0} comps</span></summary>
     <div id="${id}" class="whybody"><span class="hint">Loading…</span></div></details>`;
 }
 document.addEventListener("toggle", async e => {     // offer notes load when the Offer box opens
@@ -761,16 +765,18 @@ function whyHtml(w) {
     const rows = s.comps.map(c => `<tr><td class="t"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title.slice(0, 48))}</a>
         <span class="hint">${c.year ?? ""} · ${useOf(c)} · ${esc(c.location || "")}${c.dealer ? " · dealer" : ""}${c.status !== "active" ? " · " + esc(c.status) : ""}${(c.equipment || []).length ? " · " + esc(c.equipment.join(", ")) : ""}</span></td>
         <td>${money(k === "sold" ? c.last_price : c.asked)}</td><td>${c.adjusted != null ? money(c.adjusted) : "—"}</td></tr>`).join("");
-    return `<h4>${title}${s.expected ? `: <b>${money(s.expected)}</b>` : ""}</h4>
+    return `<h4>${title}${s.expected && k !== "sold" ? `: <b>${money(s.expected)}</b>` : ""}</h4>
       <p class="hint">${esc(s.method || "")}${s.typical_use != null ? ` · similar ones average about ${Math.round(s.typical_use).toLocaleString()} ${unit}` : ""}${s.slope ? ` · ${(100 * (Math.exp(s.slope * (unit === "mi" ? 1000 : 100)) - 1)).toFixed(1)}% per ${unit === "mi" ? "1,000 mi" : "100 hrs"}` : ""}${s.units > 1 ? ` · priced per machine ×${s.units}` : ""}</p>
       <div class="tablewrap"><table class="why"><thead><tr><th>Comparable</th><th>${priceHead}</th><th>Lined up to this one</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
   const eff = w.asking.effects || {}, effTxt = Object.keys(eff).filter(f => (L.equipment || []).includes(f) || true).map(f => `${f}: ${eff[f] > 1 ? "$" + Math.round(eff[f]).toLocaleString() : (100 * eff[f]).toFixed(0) + "%"}`).join(", ");
   return `<p class="hint">"Lined up" = that comp's price moved to this machine's model year (~8%/yr), its use (${unit}) and its equipment; the typical price is the median of that column. Asking prices are what sellers want; "sold" prices are the last asking price before the listing was marked sold.</p>
     ${L.usage_doubt ? `<p class="hint">⚠ ${esc(L.usage_doubt)} - use was not adjusted for.</p>` : ""}
+    ${L.expected_sold ? `<p class="hint"><b>Going price ${money(L.expected_sold)}</b> = typical asking ${money(L.expected)} less ${Math.round(100 * (1 - L.expected_sold / L.expected))}%:
+      that is how far under typical the ${L.sold_comps} sold ${L.sold_basis === "family" ? esc(L.family || "") + " listings" : "listings in this category"} were asking.
+      Most listings on the market at any moment are ones that have not sold, so the typical asking price runs high.</p>` : ""}
     ${table("asking", "Typical asking", "Asking")}
-    ${table("sold", "Typically sells around", "Last price")}
-    ${!w.sold.comps.length && L.sold_basis === "est" ? `<p class="hint">Not enough sold ${esc(L.family || "")} listings yet - the sold estimate (${money(L.expected_sold)}) uses this category's typical sold-vs-asking ratio.</p>` : ""}
+    ${table("sold", "Ones like it that sold (their last asking price)", "Last price")}
     ${L.new_price ? `<p class="hint">Capped by what new ones list for at dealers: ${money(L.new_price)} (${L.new_comps} listings) less 15%.</p>` : ""}
     ${effTxt ? `<p class="hint">Equipment values learned from this market: ${esc(effTxt)}.</p>` : ""}`;
 }
@@ -805,7 +811,9 @@ function fitTag(d) {
 // How long a listing has been up, and when that starts to matter (same clocks as the score's fade, score.AGE_FADE)
 const STALE_DAYS = { utv4: 45, utv2: 45, atv: 30, trailer: 21 };
 const daysUp = d => Math.max(0, Math.floor((Date.now() / 1000 - listedAt(d)) / 86400));
-const savingOf = d => d.expected && d.price ? d.expected - d.price : null;
+// What comparable ones sell for (score.sell_ratios), or the typical asking price when too few have sold
+const goingOf = d => d.expected_sold || d.expected || null;
+const savingOf = d => goingOf(d) && d.price ? goingOf(d) - d.price : null;
 function ageChip(d) {
   const days = daysUp(d), cut = d.cut_at && d.cut_at > Date.now() / 1000 - 14 * 86400;
   if (cut) return `<span class="tag plus" title="The seller dropped the price ${ago(d.cut_at)}">price cut ${ago(d.cut_at)}</span>`;
@@ -821,10 +829,11 @@ function confirmChip(d) {
   return `<span class="tag" title="Last time a search or its page showed it still for sale; it's queued for a re-check">last confirmed ${ago(t)}</span>`;
 }
 function dealLine(d) {
-  if (!d.expected) return `<div class="deal">No typical price yet <span class="hint">${d.comps || 0} comps</span></div>`;
-  const save = savingOf(d), pct = d.deal_pct ?? 0;
+  if (!d.expected) return `<div class="deal">No going price yet <span class="hint">${d.comps || 0} comps</span></div>`;
+  const save = savingOf(d), pct = d.deal_pct ?? 0, what = d.expected_sold ? "the going price" : "typical asking";
   const head = pct >= 0.03 ? `<b class="under">${money(save)} under</b>` : pct <= -0.03 ? `<b class="over">${money(-save)} over</b>` : "<b>About</b>";
-  return `<div class="deal">${head} typical ${money(d.expected)}${Math.abs(pct) >= 0.03 ? ` · ${Math.round(Math.abs(pct) * 100)}%` : ""} <span class="hint">${d.comps} comps</span></div>`;
+  return `<div class="deal" title="${d.expected_sold ? "Going price = what the comparable ones that sold were asking" : "Too few have sold to know the going price: this is the typical asking price"}">${head} ${what} ${money(goingOf(d))}${
+    Math.abs(pct) >= 0.03 ? ` · ${Math.round(Math.abs(pct) * 100)}%` : ""}</div>`;
 }
 function facts(d) {      // the short line on the card
   const use = d.usage_doubt ? "miles unclear" : d.miles != null && d.category !== "trailer" ? d.miles.toLocaleString() + " mi"
@@ -1020,7 +1029,7 @@ document.addEventListener("click", e => {
   Object.assign(F, DEFAULTS, { fams: [] }); bindFilters(); famChips(); save();
 });
 function renderDeals() {
-  // equal scores (the 40%+ discount cap makes many 85s): more comps = more trustworthy first, then nearest, then newest
+  // equal scores (the discount cap makes many equal ones): more comps = more trustworthy first, then nearest, then newest
   const by = { score: (a, b) => ((a.detail_misses > 0) - (b.detail_misses > 0)) || (b.score ?? -1) - (a.score ?? -1)
       || (b.comps ?? 0) - (a.comps ?? 0) || (a.distance ?? 1e6) - (b.distance ?? 1e6) || (listedAt(b) - listedAt(a)),
     newest: (a, b) => listedAt(b) - listedAt(a),
@@ -1093,11 +1102,11 @@ let COMPARE = false;
 function compareHtml(rows) {
   const L = rows.slice(0, 40);
   const use = d => d.miles != null ? d.miles.toLocaleString() + " mi" : d.hours != null ? d.hours.toLocaleString() + " hrs" : "—";
-  return `<div class="tablewrap"><table class="compare"><thead><tr><th></th><th>Listing</th><th>Price</th><th>Typical</th><th>Score</th>
+  return `<div class="tablewrap"><table class="compare"><thead><tr><th></th><th>Listing</th><th>Price</th><th>Going price</th><th>Score</th>
       <th>Year</th><th>Use</th><th>Distance</th><th>Seller</th><th>Stage</th><th>Aim to pay / walk</th><th>Notes</th></tr></thead><tbody>
     ${L.map(d => `<tr><td><div class="thumb" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}"></div></td>
       <td class="t"><a data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a><div class="hint">${esc(d.location || "")}</div></td>
-      <td>${money(d.price)}</td><td>${money(d.expected)}${d.deal_pct != null ? `<div class="hint">${Math.round(d.deal_pct * 100)}% ${d.deal_pct >= 0 ? "under" : "over"}</div>` : ""}</td>
+      <td>${money(d.price)}</td><td>${money(goingOf(d))}${d.deal_pct != null ? `<div class="hint">${Math.round(Math.abs(d.deal_pct) * 100)}% ${d.deal_pct >= 0 ? "under" : "over"}</div>` : ""}</td>
       <td>${d.score ?? "–"}</td><td>${d.year ?? "—"}</td><td>${use(d)}</td><td>${d.distance != null ? d.distance + " mi" : "—"}</td>
       <td>${d.dealer ? "dealer" : "private"}</td><td>${esc(STAGE_LABEL[d.stage] || (d.starred ? "watching" : ""))}</td>
       <td>${d.offer_aim ? money(d.offer_aim) + (d.offer_walk ? " / " + money(d.offer_walk) : "") : "—"}</td>
@@ -1213,7 +1222,7 @@ function renderMap(rows) {
     const lat = d.lat + (d.approx ? jitter(d.id, 0) : 0), lon = d.lon + (d.approx ? jitter(d.id, 1) : 0);
     const m = L.circleMarker([lat, lon], { radius: d.score >= 75 ? 8 : 6, color: "#fff", weight: 1, fillColor: dotColor(d.score ?? 0), fillOpacity: 0.9 });
     const fromMe = ME ? Math.round(milesBetween(ME.ll, [d.lat, d.lon])) : null;
-    m.bindPopup(`<b>${esc(d.title)}</b><br>${money(d.price)}${d.expected ? ` · typical ${money(d.expected)}` : ""} · score ${d.score ?? "–"}<br>
+    m.bindPopup(`<b>${esc(d.title)}</b><br>${money(d.price)}${goingOf(d) ? ` · ${d.expected_sold ? "going price" : "typical"} ${money(goingOf(d))}` : ""} · score ${d.score ?? "–"}<br>
       ${esc(d.location || "")}${d.distance != null ? ` (${d.distance} mi from home)` : ""}${d.approx ? " · town only" : ""}<br>
       ${fromMe != null ? `<b>${d.approx ? "~" : ""}${fromMe} mi from you</b> (straight line)<br>` : ""}
       <a href="${esc(d.url)}" target="_blank" rel="noopener">Open listing</a>`);
@@ -1233,23 +1242,23 @@ function fitRadius(group, shown, home) {
 }
 
 let ALL_ROWS = 300;
-const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["expected","Typical"],["deal_pct","vs typical"],["saving","$ under"],["offer_aim","Aim to pay"],
+const COLS = [["score","Score"],["listed","Listed"],["title","Listing"],["price","Price"],["going","Going price"],["deal_pct","vs going"],["saving","$ under"],["offer_aim","Aim to pay"],
   ["year","Year"],["family","Model"],["miles","Miles"],["hours","Hours"],["distance","Dist"],["dealer","Seller"],["first_seen","Found"]];
 function renderAll() {
   const [k, dir] = SORT;
   const all = filtered();
-  all.forEach(d => { d.listed = listedAt(d); d.saving = savingOf(d); });
+  all.forEach(d => { d.listed = listedAt(d); d.saving = savingOf(d); d.going = goingOf(d); });
   all.sort((a, b) => { const x = a[k], y = b[k];
     if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
   const rows = all.slice(0, ALL_ROWS);      // 14k rows would be ~200k table cells: a phone freezes
   $("#tab-all").innerHTML = filterBar(all.length) + `<div class="tablewrap"><table><thead><tr>${COLS.map(([c, n]) =>
     `<th data-k="${c}">${n}${c === k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map(d => `<tr>
     <td>${d.score ?? "–"}</td><td${daysUp(d) >= (STALE_DAYS[d.category] || 30) ? ' class="over" title="Still listed after this long: rarely a deal"' : ""}>${ago(listedAt(d))}</td><td class="t"><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>${d.starred ? " ★" : ""}${d.notes ? ` <span class="hint">📝 ${esc(d.notes.slice(0, 60))}</span>` : ""}</td>
-    <td>${money(d.price)}</td><td>${money(d.expected)}</td>
+    <td>${money(d.price)}</td><td>${money(d.going)}</td>
     <td class="${(d.deal_pct ?? 0) >= .03 ? "under" : (d.deal_pct ?? 0) <= -.03 ? "over" : ""}">${d.deal_pct == null ? "—" : Math.round(d.deal_pct * 100) + "%"}</td><td>${d.saving == null ? "—" : (d.saving < 0 ? "−" : "") + money(Math.abs(d.saving))}</td><td>${money(d.offer_aim)}</td>
     <td>${d.year ?? "—"}</td><td>${esc(d.family ?? "—")}</td><td>${d.miles?.toLocaleString() ?? "—"}</td><td>${d.hours?.toLocaleString() ?? "—"}</td>
     <td>${d.distance ?? "—"}</td><td>${d.dealer ? "dealer" : "private"}</td><td>${ago(d.first_seen)}</td></tr>`).join("")}</tbody></table></div>
-    <p class="hint">${all.length > rows.length ? `Showing the first ${rows.length} of ${all.length} listings <button class="btn" id="morerows">Show ${Math.min(500, all.length - rows.length)} more</button>. ` : `${all.length} listings. `}"Typical" is the median asking price of similar machines we've seen (±1 model year, adjusted ~8%/yr).</p>`;
+    <p class="hint">${all.length > rows.length ? `Showing the first ${rows.length} of ${all.length} listings <button class="btn" id="morerows">Show ${Math.min(500, all.length - rows.length)} more</button>. ` : `${all.length} listings. `}"Going price" is what similar machines that sold were asking; where too few have sold it is the typical asking price.</p>`;
   const more = $("#morerows"); if (more) more.onclick = () => { ALL_ROWS += 500; renderAll(); };
   $("#tab-all thead").onclick = e => { const c = e.target.dataset.k; if (!c) return;
     SORT = [c, SORT[0] === c ? -SORT[1] : (c === "title" || c === "family" ? 1 : -1)]; store.set("sort", SORT); renderAll(); };

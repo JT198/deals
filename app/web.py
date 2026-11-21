@@ -230,7 +230,7 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
 LIGHT = ("id", "source", "category", "family", "model", "year", "price", "score", "comps", "deal_pct", "expected",
          "distance", "lat", "lon", "approx", "location", "title", "url", "dealer", "status", "hidden", "starred",
          "stage", "notes", "feedback", "listed_at", "first_seen", "detail_misses", "is_new", "utv_fit", "miles",
-         "hours", "offer_aim", "alerted_score", "cut_at")
+         "hours", "offer_aim", "alerted_score", "cut_at", "expected_sold")
 
 
 def _card(r, dist) -> dict:

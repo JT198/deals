@@ -393,80 +393,41 @@ def test_sold_search_url():
     assert "availability" not in search_url("plymouth-mn", "ranger crew", 100)
 
 
-def test_typically_sells_around_from_sold_listings():
+def test_going_price_from_what_sold():
+    """11/21: the score measures against what comparable ones sold for, not the typical asking price (which is
+    mostly listings that sit). The sold ones' asking prices are learned per family, shrunk toward the category."""
     from app import score
     con = reset([])
-    _family(con)                                                        # 12 asking comps
+    _family(con)                                                        # 12 asking comps of RZR XP 4
     t = db.now()
-    for i in range(6):                                                  # 6 sold ones, ~10% under asking
-        year, miles = 2021 + i % 3, 2000 + 1000 * i
-        price = int(0.9 * 16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
-        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
-                         status, parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
-                       VALUES (?, 'facebook', ?, 'u', 's', ?, ?, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
-                    (f"facebook:s{i}", f"s{i}", price, price, t, t, t, year, miles))
-    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
-                     category, family, year, miles, is_new, red_flags, reasons, listed_at)
-                   VALUES ('facebook:me', 'facebook', 'me', 'u', 'me', 15500, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 5000,
-                           0, '[]', '[]', ?)""", (t, t, t - 5 * 86400))
-    con.commit()
+    sold = lambda i, fam, q, **k: dict(dict(id=f"facebook:s{fam[:3]}{i}", ext_id=f"s{fam[:3]}{i}", title=f"sold {fam} {i}", status="sold", family=fam, category="utv4",
+                                            price=int(10000 * q), end_price=int(10000 * q), expected=10000, ended_at=t, year=2015), **k)
+    _insert(con, [sold(i, "RZR XP 4", 0.88) for i in range(8)]                    # this family's sold ones asked 12% under typical
+            + [sold(i, "General 4", 0.95) for i in range(12)]                     # the rest of the category 5% under
+            + [sold(i, "Defender MAX", 0.50, flag_level=2, red_flags='["does not run"]') for i in range(5)]   # non-runners don't count
+            + [dict(category="atv", family="Polaris Sportsman", status="sold", price=5000, end_price=5000, expected=10000, ended_at=t,
+                    id=f"facebook:a{i}", ext_id=f"a{i}", title=f"atv {i}") for i in range(8)]                    # too few to judge ATVs
+            + [dict(id="facebook:me", ext_id="me", title="me", category="utv4", family="RZR XP 4", year=2022, miles=5000, price=11000, listed_at=t - 3600),
+               dict(id="facebook:quad", ext_id="quad", title="quad", category="atv", family="Polaris Sportsman", year=2015, price=4000, listed_at=t - 3600)])
+    r = score.sell_ratios(con)
+    assert r["cat"]["utv4"] == (0.95, 20) and "atv" not in r["cat"], r["cat"]
+    fam = (8 * 0.88 + 15 * 0.95) / 23
+    assert abs(r["fam"]["RZR XP 4"][0] - fam) < 1e-9 and r["fam"]["General 4"][1] == 12 and "Defender MAX" not in r["fam"], r["fam"]
+    assert score.sell_ratio_for(r, "utv4", "Teryx4") == (0.95, 20, "category") and score.sell_ratio_for(r, "atv", "x") == (None, 0, None)
     score.rescore_all(con)
-    r = con.execute("SELECT * FROM listings WHERE id = 'facebook:me'").fetchone()
-    assert r["sold_basis"] == "sold" and r["sold_comps"] >= 4, dict(r)
-    assert 0.85 * r["expected"] < r["expected_sold"] < 0.95 * r["expected"], (r["expected"], r["expected_sold"])
-    assert r["offer_walk"] <= r["expected_sold"] and "sold for about" in r["offer_notes"], r["offer_notes"]
-
-
-def test_sold_typical_is_bounded_and_skips_red_flags():
-    from app import score
-    con = reset([])
-    _family(con)
-    t = db.now()
-    for i in range(6):   # "sold" junk: half price, several with red flags
-        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
-                         status, parsed, relevant, category, family, year, is_new, red_flags, reasons)
-                       VALUES (?, 'facebook', ?, 'u', ?, 7000, 7000, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, ?, '[]')""",
-                    (f"facebook:j{i}", f"j{i}", f"sold one {i}", t, t, t, '["doesn\'t run"]' if i < 3 else "[]"))
-    con.commit()
-    assert len(score._comps(con, sold=True)["RZR XP 4"]) == 3            # red-flagged sold ones left out
-    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
-                     category, family, year, is_new, red_flags, reasons) VALUES ('facebook:me', 'facebook', 'me', 'u', 'me',
-                     15000, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 0, '[]', '[]')""", (t, t))
-    # a 4th clean sold one at half price: enough to count, still far under asking
-    con.execute("INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen, status, parsed, relevant, category, family, year, is_new, red_flags, reasons) VALUES ('facebook:j9','facebook','j9','u','j',7000,7000,?,?,?,'sold',1,1,'utv4','RZR XP 4',2022,0,'[]','[]')", (t, t, t))
-    con.commit()
-    score.rescore_all(con)
-    r = con.execute("SELECT expected, expected_sold FROM listings WHERE id = 'facebook:me'").fetchone()
-    assert r["expected_sold"] >= 0.75 * r["expected"] - 1, dict(r)       # clamped, not 45% under
-
-
-def test_sold_at_asking_means_holding_not_a_second_number():
-    from app import score
-    con = reset([])
-    _family(con)
-    t = db.now()
-    for i in range(6):   # sold at the same prices things are asking
-        year, miles = 2021 + i % 3, 2000 + 1000 * i
-        price = int(16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
-        con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, end_price, ended_at, first_seen, last_seen,
-                         status, parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
-                       VALUES (?, 'facebook', ?, 'u', 's', ?, ?, ?, ?, ?, 'sold', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
-                    (f"facebook:h{i}", f"h{i}", price, price, t, t, t, year, miles))
-    con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status, parsed, relevant,
-                     category, family, year, miles, is_new, red_flags, reasons) VALUES ('facebook:me', 'facebook', 'me', 'u',
-                     'me', 15500, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', 2022, 5000, 0, '[]', '[]')""", (t, t))
-    con.commit()
-    score.rescore_all(con)
-    r = con.execute("SELECT * FROM listings WHERE id = 'facebook:me'").fetchone()
-    assert r["sold_basis"] == "holding" and r["expected_sold"] is None, dict(r)
-    assert "selling at about asking" in r["offer_notes"], r["offer_notes"]
-
-
-def test_sold_estimate_from_category_ratio():
-    from app import score
-    con = reset([{"id": f"facebook:q{i}", "ext_id": f"q{i}", "status": "sold", "family": f"F{i}",
-                  "price": 8000, "end_price": 8000, "expected": 10000, "ended_at": db.now()} for i in range(8)])
-    assert score.sold_ratios(con)["utv4"] == (0.8, 8)
+    me = con.execute("SELECT * FROM listings WHERE id = 'facebook:me'").fetchone()
+    assert me["sold_basis"] == "family" and me["sold_comps"] == 8 and me["expected_sold"] == int(me["expected"] * fam), dict(me)
+    assert abs(me["deal_pct"] - (me["expected_sold"] - 11000) / me["expected_sold"]) < 1e-9             # measured against the going price
+    assert "what these sell for" in me["reasons"] and "ones that sold were asking about 7% under" in me["offer_notes"], (me["reasons"], me["offer_notes"])
+    assert me["offer_walk"] <= me["expected_sold"]
+    quad = con.execute("SELECT * FROM listings WHERE id = 'facebook:quad'").fetchone()
+    assert quad["expected_sold"] is None and quad["sold_basis"] is None, dict(quad)                     # too few sold: typical asking is the yardstick
+    # the scale: priced like the ones that sell = 50, 8% under = 60 "Good", 20% under = 75 "Great"; typical asking is below 50
+    row = {"id": "x", "category": "utv4", "family": "RZR XP 4", "year": 2022, "price": 9000, "is_new": 0, "strike_price": None,
+           "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]", "miles": None, "hours": None}
+    sc = lambda price: score.score(dict(row, price=price), 10000, 30, True, sold_typical=9000)[0]
+    assert (sc(9000), sc(8280), sc(7200), sc(10000)) == (50, 60, 75, 36), (sc(9000), sc(8280), sc(7200), sc(10000))
+    assert sc(5400) < sc(6100) and "too good" in score.score(dict(row, price=5400), 10000, 30, True, sold_typical=9000)[2][0]
 
 
 def test_recheck_order_what_jon_sees_then_suspects():
@@ -604,7 +565,7 @@ def test_digest_builds():
                   "status": "gone", "watch_status": "active"}])
     text = digest.build(con)
     assert "Told Sold Sled" not in text and "Untold Gone Quad" in text and "removed" in text, text
-    assert "4-seat UTVs" in text and "$12,000" in text and "typical $16,000" in text, text
+    assert "4-seat UTVs" in text and "$12,000" in text and "typical ~$16,000" in text, text
     assert "Watching (2)" in text and "(was $10,000)" in text and "PENDING" in text, text
     assert "facebook:d" not in text and "$5,000" not in text            # dealers don't make the digest
 
@@ -834,15 +795,16 @@ def test_review_1114_age_flags_alert_age_and_tractors():
     assert flags.heavy_trailer({"category": "trailer", "gvwr_lb": None, "axles": None, "len_ft": 18})
     assert not flags.heavy_trailer({"category": "atv", "gvwr_lb": 9000, "axles": 2, "len_ft": 20})
     # --- score: only problems cost points and cap; the part above "normal" fades with weeks on the market
-    row = {"id": "x", "category": "utv4", "family": "RZR XP 4", "year": 2022, "price": 14000, "is_new": 0, "strike_price": None,
+    row = {"id": "x", "category": "utv4", "family": "RZR XP 4", "year": 2022, "price": 16000, "is_new": 0, "strike_price": None,
            "first_price": None, "motivated": 0, "is_dealer": 0, "seller_type": None, "red_flags": "[]", "miles": None, "hours": None}
     fresh = score.score(row, 20000, 30, True, days_listed=3)[0]
-    assert fresh == 75
+    assert fresh == 75                                                                    # 20% under = Great
     assert score.score(dict(row, red_flags='["sold as-is", "needs new battery"]'), 20000, 30, True, days_listed=3)[0] == fresh
     bad = score.score(dict(row, red_flags='["does not run"]'), 20000, 30, True, days_listed=3)
     assert bad[0] == fresh - 15 and "red flags: does not run" in bad[2], bad
     old = score.score(row, 20000, 30, True, days_listed=120)
-    assert old[0] == 63 and any("listed 120 days" in r for r in old[2]), old            # 45 + 30 * 0.6
+    assert old[0] == 65 and any("listed 120 days" in r for r in old[2]), old            # 50 + 25 * 0.6
+    assert score.age_factor("utv4", 180) == 0.6 and score.age_factor("utv4", 470) < 0.4   # many months up: fades further
     assert score.score(row, 20000, 30, True, days_listed=21)[0] == fresh                  # inside the grace period
     assert score.score(dict(row, price=22000), 20000, 30, True, days_listed=200)[0] == score.score(dict(row, price=22000), 20000, 30, True)[0]
     assert score.age_factor("trailer", 45) == 0.4 and score.age_factor("trailer", 7) == 1.0 and 0.4 < score.age_factor("trailer", 20) < 1
@@ -2288,15 +2250,16 @@ def test_scan_cadence_ranking_digest_cuts_and_trips():
     every = db.scan_every(db.settings(con))
     assert every["mower"] == 1440 and every["utv4"] == 60 and c.get("/api/settings").json()["scan_every"]["utv2"] == 1440
 
-    # ranking: past 40% under the score tapers and asks for a check; at-or-above sold price counts for less
+    # ranking: past about a third under the score tapers and asks for a check; the yardstick is what these sell
+    # for when that is known (11/21), so a price under typical asking but above the going price is no deal
     row = {"price": 5000, "is_new": 0, "year": 2022, "strike_price": None, "first_price": 5000, "motivated": 0,
            "miles": None, "hours": None, "category": "utv4", "is_dealer": 0, "seller_type": None, "red_flags": "[]"}
-    s40, _, _ = score.score(row, 8333, comps=20)            # 40% under
+    s32, _, _ = score.score(row, 7353, comps=20)            # 32% under: the top of the scale
     s60, _, why60 = score.score(row, 12500, comps=20)       # 60% under
-    assert s40 == 85 and s60 < s40 and any("too good" in w for w in why60), (s40, s60)
-    s_sold, _, why = score.score(dict(row, price=8000), 10000, comps=20, sold_typical=7800)
+    assert s32 == 90 and s60 < s32 and any("too good" in w for w in why60), (s32, s60)
+    s_sold, pct, why = score.score(dict(row, price=8000), 10000, comps=20, sold_typical=7000)
     s_plain, _, _ = score.score(dict(row, price=8000), 10000, comps=20)
-    assert s_sold < s_plain and any("actually sell for" in w for w in why)
+    assert s_sold < 50 < s_plain and pct < 0 and any("over what these sell for" in w for w in why), (s_sold, s_plain, why)
 
     # digest: a listing cut into deal range yesterday shows under price cuts
     con = reset([{"title": "cut one", "price": 9000, "score": 80, "first_seen": now - 5 * 86400, "listed_at": now - 5 * 86400}])

@@ -52,11 +52,19 @@ def buttons(r) -> dict:
                                  {"text": "👎 Not for me", "callback_data": f"fb:-:{r['id']}"}]]}
 
 
+def _has(r, key) -> bool:
+    try:
+        return bool(r[key])
+    except (KeyError, IndexError):
+        return False
+
+
 def listing_caption(r, header: str | None = None) -> str:
     e = html.escape
     price = f"${r['price']:,}" if r["price"] else "no price listed"
     bits = ([header] if header else []) + [f"{cfg(r['category'])['emoji']} <b>{e(r['title'][:120])}</b>",
-            f"<b>{price}</b>" + (f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
+            f"<b>{price}</b>" + (f"  ·  these sell for ~${r['expected_sold']:,}" if _has(r, "expected_sold")
+                                 else f"  ·  typical ${r['expected']:,}" if r["expected"] else "")
             + (f"  ·  score {r['score']}" if r["score"] is not None else "")]
     facts = [x for x in (
         trailer_size(r),

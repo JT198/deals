@@ -170,7 +170,7 @@ async def run() -> None:
         came_back_empty: list[int] = []
         walled = False
         try:
-            budget = scan.FBBudget(con, reserve=scan.FB_BUDGET_RESERVE)
+            budget = scan.FBBudget(con, lane="sweep", allowance=scan.SWEEP_NIGHT_ALLOWANCE if night else None)
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if route == "proxy" else None,
                                                           on_load=budget.record) as fb:
                 for j in jobs:

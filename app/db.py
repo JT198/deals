@@ -88,6 +88,8 @@ CREATE INDEX IF NOT EXISTS alert_activity_ts ON alert_activity(ts);
 
 -- one row per Facebook page load, any lane: the shared hourly budget (scan.fb_budget) reads it
 CREATE TABLE IF NOT EXISTS fb_loads (ts INTEGER NOT NULL);
+-- searches run from neighbouring cities, to reach the 100-150 mile ring (scan.ring_due)
+CREATE TABLE IF NOT EXISTS ring_runs (location TEXT NOT NULL, query TEXT NOT NULL, last_run INTEGER, PRIMARY KEY (location, query));
 CREATE INDEX IF NOT EXISTS fb_loads_ts ON fb_loads(ts);
 
 -- the deep sweep's work list: one row per (search, asking-price band) per round (see sweep.py)
@@ -135,11 +137,15 @@ DEFAULT_SETTINGS = {
     "fresh_min_score": "50",       # ...and not overpriced / not red-flagged
     "alert_min_pct": "0",          # deal alerts also need at least this % under typical (or sold) price...
     "alert_min_usd": "0",          # ...and at least this many dollars of savings (a flip needs margin)
-    "alert_max_age_days": "7",     # instant alerts only for listings posted (or price-cut) this recently; 0 = any age
+    "alert_max_age_days": "7",
+    # Facebook ignores the radius when logged out: a search shows listings near the city in its address (11/21:
+    # 150 mi returned the same 24 listings as 100 mi). These cities ring the home area, so searching from them
+    # reaches listings 100-150 miles out - more than half of the 4-seat buy box's new listings.
+    "fb_ring": "duluth,brainerd-mn,alexandria-mn,willmar-mn,marshall-mn,mankato,rochester-mn,eau-claire-wi,hayward-wi",     # instant alerts only for listings posted (or price-cut) this recently; 0 = any age
     "seed_version": "1",
 }
 
-SEED_VERSION = 7   # bump when categories.py gains default searches
+SEED_VERSION = 8   # bump when categories.py gains default searches
 
 def connect(shared: bool = False) -> sqlite3.Connection:
     """shared=True: the connection may be closed from another thread (the dashboard cleans up after each request)."""
@@ -201,6 +207,11 @@ def init() -> None:
         "cut_at": "INTEGER",                                     # when the seller last cut the price by 3%+
     })
     con.execute("CREATE INDEX IF NOT EXISTS listings_category ON listings(category)")
+    _add_columns(con, "fb_loads", {"lane": "TEXT"})          # which scan lane loaded the page (per-lane allowances)
+    # 11/21: a "pending" Facebook listing that was then deleted was never marked gone (record_miss only handled
+    # "active"): 18 of them were re-tried every scan - one had failed 532 times - and still showed as Pending
+    con.execute("""UPDATE listings SET status = 'gone', last_checked = COALESCE(last_checked, last_seen)
+                   WHERE source = 'facebook' AND status = 'pending' AND detail_misses >= 3""")
     if con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 0:
         # seed history from listings alerted before the log existed
         for r in con.execute("""SELECT id, title, COALESCE(alerted_price, price) p, first_seen FROM listings

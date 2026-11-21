@@ -24,7 +24,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 from . import buybox, db, geo, images, notify, parse, score
-from .categories import cfg
+from .categories import CATEGORIES, cfg
 from .sources import craigslist
 from .sources.facebook import Facebook, pause
 
@@ -44,7 +44,13 @@ PHOTO_RECHECKS_PER_RUN = 4    # best-scoring listings whose photo link expired b
 FADING_RECHECKS_PER_RUN = 14  # still on the dashboard but unseen for 2+ days: catch deletions before Jon does
 STALE_RECHECKS_PER_RUN = 2    # long unseen (already hidden from the dashboard): only the records care
 FB_HOURLY_BUDGET = 220        # Facebook page loads per hour across every lane (blocked at ~410 on 10/01, at the 300 cap on 10/11)
-FB_BUDGET_RESERVE = 70        # ...of which the long lanes leave this many for the fast lane (45 until 11/16)
+# ...split into a share per lane. Until 11/21 the long lanes shared "whatever the fast lane left": once the fast
+# lane grew (11/16) the full scan was left ~10 loads an hour for re-checks, and cards were confirmed mostly at night.
+LANE_ALLOWANCE = {"quick": 70, "all": 115, "sweep": 30, "sold": 200}
+SWEEP_NIGHT_ALLOWANCE = 200   # outside scan hours the sweep has Facebook to itself
+RING_EVERY_MIN = 180          # how often each ring-city search runs (categories "ring" x settings.fb_ring)
+RING_SEARCHES_PER_RUN = 6
+RING_MARGIN_MI = 25           # ring results this far beyond a category's buy box are not kept
 QUICK_SEARCHES_PER_RUN = 10   # the fast lane's slice of its ~24 buy-box searches per 10-minute run
 QUICK_LOCK_WAIT = 180         # the fast lane outwaits a daytime sweep slice (~2 min) instead of skipping its run
 CL_DETAILS_PER_RUN = 40
@@ -110,7 +116,15 @@ def set_price(con, lid, old, new):
         con.execute("INSERT INTO price_history VALUES (?,?,?)", (lid, db.now(), new))
 
 
-MAX_DETAIL_MISSES = 3
+# Unreadable pages before a Facebook listing is taken as removed. 2 since 11/21 (3 before): batches that end in
+# failures are checked against known-live listings first (the wall check), so a miss in a healthy batch is almost
+# always a removal - and each extra confirmation costs a page load on ~50-110 removals a day. A wrongly removed
+# listing comes back the next time a search shows it. settings.miss_recovered / miss_confirmed keep score.
+MAX_DETAIL_MISSES = 2
+
+
+def _count(con, key: str) -> None:
+    con.execute("INSERT INTO settings(key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", (key,))
 
 
 def apply_detail(con, lid, d: dict | None, old_price):
@@ -121,6 +135,8 @@ def apply_detail(con, lid, d: dict | None, old_price):
     if d.get("status") == "gone":
         con.execute("UPDATE listings SET status='gone', detail_fetched=1, last_checked=? WHERE id=?", (t, lid))
         return
+    if con.execute("SELECT detail_misses FROM listings WHERE id = ?", (lid,)).fetchone()[0]:
+        _count(con, "miss_recovered")       # it failed to load before and reads now: that miss was not a removal
     # a listing that waited over an hour for its page was parsed from the title alone:
     # read it again now that the description is in
     con.execute(
@@ -175,9 +191,9 @@ def shown_candidates(con, limit: int) -> list:
 
 def recheck_candidates(con) -> list:
     """Facebook item pages to re-open this full scan, to notice price cuts, pending, sold and removed:
-      1. suspects - failed to load last time; retried every scan so a removed listing is confirmed in ~an hour
-      2. starred listings, every scan (watch alerts)
-      3. what the dashboard shows: buy box and Great cards not confirmed lately (shown_candidates)
+      1. starred listings, every scan (watch alerts)
+      2. what the dashboard shows: buy box and Great cards not confirmed lately (shown_candidates)
+      3. suspects - failed to load last time; one more failure and they are taken as removed
       4. fading - still on the dashboard, unseen 2+ days (instant-alert categories first)
       5. photos - top scores whose photo link expired before we saved a copy
       6. stale - not seen by any search or sweep in stale_after() (already hidden): the page says if it's gone
@@ -185,10 +201,10 @@ def recheck_candidates(con) -> list:
     live = "source='facebook' AND detail_fetched=1 AND status IN ('active','pending')"
     now = db.now()
     groups = [
-        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0
-                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT 20""").fetchall(),
         con.execute(f"SELECT id, ext_id, price FROM listings WHERE {live} AND starred = 1").fetchall(),
         shown_candidates(con, SHOWN_RECHECKS_PER_RUN),
+        con.execute(f"""SELECT id, ext_id, price FROM listings WHERE {live} AND detail_misses > 0
+                        ORDER BY COALESCE(last_checked, 0) ASC LIMIT 12""").fetchall(),
         fading_candidates(con, FADING_RECHECKS_PER_RUN),
         photo_candidates(con, PHOTO_RECHECKS_PER_RUN),
         stale_candidates(con, STALE_RECHECKS_PER_RUN),
@@ -250,22 +266,28 @@ def title_only_candidates(con, limit: int) -> list:
 
 
 class FBBudget:
-    """One hourly budget of Facebook page loads shared by every lane (table fb_loads). The full scan,
-    the sweep and the sold pull stop when the hour is nearly spent; the fast lane may use the rest."""
+    """Facebook page loads per rolling hour (table fb_loads): one cap across every lane (FB_HOURLY_BUDGET) and,
+    inside it, a share per lane (LANE_ALLOWANCE) so no lane can starve another. reserve: loads kept back from
+    the cap (tests)."""
 
-    def __init__(self, con, reserve: int = 0):
-        self.con, self.reserve = con, reserve
+    def __init__(self, con, reserve: int = 0, lane: str | None = None, allowance: int | None = None):
+        self.con, self.reserve, self.lane = con, reserve, lane
+        self.allowance = allowance if allowance is not None else LANE_ALLOWANCE.get(lane) if lane else None
 
     def record(self) -> None:
-        self.con.execute("INSERT INTO fb_loads(ts) VALUES (?)", (db.now(),))
+        self.con.execute("INSERT INTO fb_loads(ts, lane) VALUES (?, ?)", (db.now(), self.lane))
         self.con.execute("DELETE FROM fb_loads WHERE ts < ?", (db.now() - 7200,))
         self.con.commit()
 
     def used(self) -> int:
         return self.con.execute("SELECT COUNT(*) FROM fb_loads WHERE ts >= ?", (db.now() - 3600,)).fetchone()[0]
 
+    def lane_used(self) -> int:
+        return self.con.execute("SELECT COUNT(*) FROM fb_loads WHERE ts >= ? AND lane = ?", (db.now() - 3600, self.lane)).fetchone()[0]
+
     def left(self) -> int:
-        return FB_HOURLY_BUDGET - self.reserve - self.used()
+        total = FB_HOURLY_BUDGET - self.reserve - self.used()
+        return total if self.allowance is None else min(total, self.allowance - self.lane_used())
 
 
 class BudgetSpent(Exception):
@@ -395,6 +417,18 @@ def fb_backoff(con, st, walled: bool, fb_found: int, route: str = "home") -> str
         con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, '0')", (f"fb_backoff_level:{route}",))
         con.commit()
     return None
+
+
+def ring_due(con, st) -> list:
+    """(city, query, category) searches to run from the ring cities now, longest-waiting first: the "ring" queries
+    of every category with instant alerts on, each city every RING_EVERY_MIN."""
+    cities = [c.strip() for c in (st.get("fb_ring") or "").split(",") if c.strip()]
+    rules = db.alert_rules(st)
+    last = {(r["location"], r["query"]): r["last_run"] or 0 for r in con.execute("SELECT * FROM ring_runs")}
+    want = [(city, q, cat) for cat, c in CATEGORIES.items() if (rules.get(cat) or {}).get("enabled")
+            for q in c.get("ring", []) for city in cities]
+    cut = db.now() - RING_EVERY_MIN * 60
+    return sorted((x for x in want if last.get((x[0], x[1]), 0) <= cut), key=lambda x: last.get((x[0], x[1]), 0))
 
 
 def pending_details(con, limit: int, where: str = "status='active'") -> list:
@@ -584,11 +618,15 @@ def record_miss(con, lid):
     """An item page we couldn't read. Retry; after a few misses stop waiting for the description
     (parse from the title) and, for FB, treat it as removed - deleted listings redirect to login."""
     con.execute("UPDATE listings SET detail_misses = detail_misses + 1, last_checked = ? WHERE id = ?", (db.now(), lid))
-    con.execute("""UPDATE listings SET
-                     status = CASE WHEN source = 'facebook' AND detail_fetched = 1 AND status = 'active'
+    # (pending counts too: until 11/21 a pending listing that was then deleted stayed "Pending" for good and
+    # was re-tried every scan - 18 of them, one 532 times)
+    cur = con.execute("""UPDATE listings SET
+                     status = CASE WHEN source = 'facebook' AND detail_fetched = 1 AND status IN ('active', 'pending')
                                    THEN 'gone' ELSE status END,
                      detail_fetched = 1
                    WHERE id = ? AND detail_misses >= ?""", (lid, MAX_DETAIL_MISSES))
+    if cur.rowcount and con.execute("SELECT status FROM listings WHERE id = ?", (lid,)).fetchone()[0] == "gone":
+        _count(con, "miss_confirmed")
 
 
 def in_active_hours(st) -> bool:
@@ -681,7 +719,7 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
         try:
             if fb_paused or fb_lock is None:
                 raise SkipFacebook
-            budget = FBBudget(con, reserve=0 if quick else FB_BUDGET_RESERVE)
+            budget = FBBudget(con, lane=mode)
             async with async_playwright() as pw, Facebook(pw, st.get("fb_proxy") if fb_route == "proxy" else None,
                                                           on_load=budget.record) as fb:
                 empty = failures = 0
@@ -722,6 +760,30 @@ async def run(force=False, backfill=False, search=True, quick=False, quiet=False
                     # a short list of thin searches can all be empty honestly: ask one that never is
                     if len(due) >= 3 or not await fb.search(CANARY, st.get("fb_location", "plymouth-mn"), radius, scrolls=0):
                         errors.append("facebook returned nothing for every search (login wall?)")
+
+                if search and not (quick or sold or backfill):
+                    # the 100-150 mile ring: the buy-box categories' broad searches, run from the cities around us
+                    reach = {c: buybox.reach(r, radius) for c, r in db.alert_rules(st).items()}
+                    dist = buybox.distance_fn(con, st)
+                    for city, q, cat in ring_due(con, st)[:RING_SEARCHES_PER_RUN]:
+                        if budget.left() <= 0:
+                            break
+                        await step_aside(fb_lock, fb_route)
+                        try:
+                            items = await fb.search(q, city, radius, scrolls=0)
+                            near = [i for i in items if (d := dist({"lat": None, "lon": None, "location": i.get("location")})) is None
+                                    or d <= reach.get(cat, radius) + RING_MARGIN_MI]
+                            found += len(near)
+                            fb_found += len(items)
+                            # a ring find already more than a day old is old news: stored and scored, read after the fresh ones
+                            new += sum(upsert(con, "facebook", i, backlog=True) for i in near)
+                            con.execute("INSERT OR REPLACE INTO ring_runs(location, query, last_run) VALUES (?, ?, ?)", (city, q, db.now()))
+                            con.commit()
+                        except SkipFacebook:
+                            raise
+                        except Exception as e:
+                            errors.append(f"fb '{q}' @{city}: {e}")
+                        await pause()
 
                 todo = pending_details(con, (SOLD_DETAILS_PER_RUN if sold else FB_DETAILS_PER_RUN) * boost,
                                        fb_status + ("" if sold else only_new))

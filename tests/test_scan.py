@@ -39,7 +39,7 @@ def reset(rows, **settings):
     db.init()
     con = db.connect()
     con.executescript("DELETE FROM listings; DELETE FROM settings; DELETE FROM alert_log; DELETE FROM scorecard_log; "
-                      "DELETE FROM alert_activity; DELETE FROM corrections;")   # every test starts clean
+                      "DELETE FROM alert_activity; DELETE FROM corrections; DELETE FROM fb_loads; DELETE FROM ring_runs;")   # every test starts clean
     con.commit()
     db.init()
     con.execute("DELETE FROM listings")
@@ -469,7 +469,7 @@ def test_sold_estimate_from_category_ratio():
     assert score.sold_ratios(con)["utv4"] == (0.8, 8)
 
 
-def test_recheck_order_suspects_first_then_what_jon_sees():
+def test_recheck_order_what_jon_sees_then_suspects():
     """11/15: two Great cards Jon opened were gone (removed / sold). Buy-box and Great cards whose last
     confirmation (search sighting or page read) is getting old are re-checked first, oldest first."""
     t = db.now()
@@ -486,7 +486,8 @@ def test_recheck_order_suspects_first_then_what_jon_sees():
     # the buy box first; then Great cards anywhere, oldest confirmation first; a search 10 min ago is confirmation
     assert shown == ["facebook:box", "facebook:great-older", "facebook:great"], shown
     ids = [r["id"] for r in scan.recheck_candidates(con)]
-    assert ids[:4] == ["facebook:suspect", "facebook:box", "facebook:great-older", "facebook:great"], ids
+    # 11/21: what Jon sees goes first; listings that failed to load once follow (they used to take 20 slots a scan)
+    assert ids[:4] == ["facebook:box", "facebook:great-older", "facebook:great", "facebook:suspect"], ids
 
 
 def test_gone_button():
@@ -945,6 +946,13 @@ RESOLVE_CASES = [
     (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki Mule PRO-FXT LE 820 EPS", "Mule PRO-FXT LE 820 EPS", "", 2), ("utv4", "Mule Pro-FXT")),
     (("utv2", "Ranger 570/500 (2-seat)", 2020, "Polaris Crew Cab 570", "Ranger 570", "", 2), ("utv4", "Ranger Crew 570")),
     (("utv2", "Maverick X3 (2-seat)", 2015, "2015 Can Am Maverick", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    # 11/21: the Polaris Xpedition is its own model (two were found 1-2 days late and priced as Rangers)
+    (("utv4", "Ranger Crew 1000", 2024, "2024 Polaris Xpedition 1000 ADV with plow", "Xpedition ADV", "", 5), ("utv4", "Xpedition 5 (XP 5 / ADV 5)")),
+    (("utv4", "Ranger Crew 1000", 2024, "2024 NEW motor!  Polaris xpedition xp5", "Xpedition XP5", "", 5), ("utv4", "Xpedition 5 (XP 5 / ADV 5)")),
+    (("sled", "Ski-Doo Expedition/Skandic/Grand Touring (utility/touring)", 2027, "2027 POLARIS Xpedition XP Northstar", "Xpedition XP", "", None),
+     ("utv2", "Xpedition (2-seat)")),
+    (("utv2", "Ranger XP 1000/1500 (2-seat)", 2024, "2024 Polaris xpedition xp  northstar ultimate 1000", "Xpedition XP", "", 2), ("utv2", "Xpedition (2-seat)")),
+    (("atv", "Polaris Sportsman", 2001, "2001 Polaris Xpedition 425", "Xpedition 425", "", None), ("atv", "Polaris Sportsman")),
     # 11/16 late finds: a NorthStar filed as a RZR, a General as a Ranger
     (("utv4", "RZR XP 4", 2022, "2022 Polaris xp 1000 northstar ultimate", "XP 1000 Northstar Ultimate", "", 4), ("utv4", "Ranger Crew 1000")),
     (("utv4", "Ranger Crew 1000", 2023, "2023 Polaris General XP 1000 Sport", "General XP 1000 Sport", "", 4), ("utv4", "General 4")),
@@ -992,6 +1000,51 @@ def test_fast_lane_covers_the_buy_box_and_searches_reach_it():
     assert quick == set(CATEGORIES["utv4"]["quick"]) | set(CATEGORIES["trailer"]["quick"]) | set(CATEGORIES["mower"].get("quick", [])), quick
     assert {"ranger northstar", "can am defender max", "car hauler trailer"} <= quick and "kawasaki teryx4" not in quick
     assert scan.QUICK_SEARCHES_PER_RUN < len(quick)          # a slice per run, longest-waiting first
+
+
+def test_review_1121_budget_removals_and_ring():
+    from unittest.mock import AsyncMock, patch
+    from app.categories import CATEGORIES
+    t = db.now()
+    # --- each lane has its own share of the hourly page budget; one lane's loads don't use up another's
+    con = reset([])
+    quick, full = scan.FBBudget(con, lane="quick"), scan.FBBudget(con, lane="all")
+    for _ in range(scan.LANE_ALLOWANCE["quick"]):
+        quick.record()
+    assert quick.left() == 0 and full.left() == scan.LANE_ALLOWANCE["all"], (quick.left(), full.left())
+    assert sum(scan.LANE_ALLOWANCE[k] for k in ("quick", "all", "sweep")) <= scan.FB_HOURLY_BUDGET
+    for _ in range(scan.FB_HOURLY_BUDGET):        # ...but the cap across all lanes still holds
+        full.record()
+    assert scan.FBBudget(con, lane="sweep").left() <= 0
+    # --- a pending listing that was then deleted is taken as removed after two unreadable pages (it used to stay
+    #     "Pending" forever and be re-tried every scan); a page that reads again clears the count and is counted
+    con = reset([{"id": "facebook:p", "ext_id": "p", "status": "pending", "detail_fetched": 1},
+                 {"id": "facebook:a", "ext_id": "a", "status": "active", "detail_fetched": 1},
+                 {"id": "facebook:back", "ext_id": "back", "status": "active", "detail_fetched": 1, "detail_misses": 1},
+                 {"id": "facebook:zombie", "ext_id": "zombie", "status": "pending", "detail_fetched": 1, "detail_misses": 532}])
+    assert con.execute("SELECT status FROM listings WHERE id = 'facebook:zombie'").fetchone()[0] == "pending"
+    db.init()                                                                  # the one-off clean-up of stuck ones
+    assert db.connect().execute("SELECT status FROM listings WHERE id = 'facebook:zombie'").fetchone()[0] == "gone"
+    for lid in ("facebook:p", "facebook:a"):
+        scan.record_miss(con, lid)
+        assert con.execute("SELECT status FROM listings WHERE id = ?", (lid,)).fetchone()[0] in ("pending", "active")
+        scan.record_miss(con, lid)
+        assert con.execute("SELECT status FROM listings WHERE id = ?", (lid,)).fetchone()[0] == "gone", lid
+    scan.apply_detail(con, "facebook:back", {"status": "active", "price": 10000}, 10000); con.commit()
+    got = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM settings WHERE key LIKE 'miss_%'")}
+    assert got == {"miss_confirmed": "2", "miss_recovered": "1"}, got
+    assert con.execute("SELECT detail_misses FROM listings WHERE id = 'facebook:back'").fetchone()[0] == 0
+    # --- ring cities: each instant-alert category's broad searches, from every ring city, longest-waiting first
+    con = reset([])
+    con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'", (json.dumps({"utv4": {"enabled": True}, "trailer": {"enabled": False}}),))
+    con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('fb_ring', 'duluth, mankato')"); con.commit()
+    due = scan.ring_due(con, db.settings(con))
+    assert len(due) == 2 * len(CATEGORIES["utv4"]["ring"]) and {d[2] for d in due} == {"utv4"}, due
+    con.execute("INSERT INTO ring_runs VALUES ('duluth', 'ranger crew', ?)", (t,))                       # just ran
+    con.execute("INSERT INTO ring_runs VALUES ('mankato', 'ranger crew', ?)", (t - 4 * 3600,)); con.commit()   # due again
+    due = scan.ring_due(con, db.settings(con))
+    assert ("duluth", "ranger crew", "utv4") not in due and due[-1] == ("mankato", "ranger crew", "utv4"), due
+    assert "polaris xpedition" in {r[0] for r in con.execute("SELECT query FROM searches WHERE quick = 1")}
 
 
 def test_parse_pwc_and_sled_fields():

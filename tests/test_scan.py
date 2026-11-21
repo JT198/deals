@@ -908,6 +908,15 @@ RESOLVE_CASES = [
     (("utv2", "Mule (2-seat)", 2022, "2022 Kawasaki Mule PRO-FXT LE 820 EPS", "Mule PRO-FXT LE 820 EPS", "", 2), ("utv4", "Mule Pro-FXT")),
     (("utv2", "Ranger 570/500 (2-seat)", 2020, "Polaris Crew Cab 570", "Ranger 570", "", 2), ("utv4", "Ranger Crew 570")),
     (("utv2", "Maverick X3 (2-seat)", 2015, "2015 Can Am Maverick", "Maverick 1000R", "", 2), ("utv2", "Maverick (2013-2018, pre-X3, 2-seat)")),
+    # 11/21: the seller's title beats the AI's own model text ("Ranger General XP")
+    (("utv4", "Ranger Crew 1000", 2022, "2022 Polaris General XP", "Ranger General XP", "", 4), ("utv4", "General 4")),
+    (("utv4", "Ranger Crew 1000", 2022, "2022 Polaris General XP4 Deluxe", "Ranger XP4 Deluxe", "", 4), ("utv4", "General 4")),
+    (("utv2", "Ranger XP 1000/1500 (2-seat)", 2022, "2022 Polaris General XP1000", "Ranger XP 1000", "", 2), ("utv2", "General 1000 (2-seat)")),
+    (("atv", "Polaris Sportsman", 2005, "Kids atv", "Predator 50", "", None), ("atv", "Youth ATV (under 150cc)")),
+    (("utv2", "RZR XP 1000/Turbo (2-seat)", 2021, "2021 Polaris  Razor XP100 Highlifter Edition", "RZR XP 1000 High Lifter", "", 2), ("utv2", "RZR XP 1000/Turbo (2-seat)")),
+    (("sled", "Polaris RMK/Khaos (mountain)", 2017, "2017 Polaris khoas sks 800 155", "RMK Khaos 800", "", None), ("sled", "Polaris RMK/Khaos (mountain)")),
+    (("atv", "Honda Foreman/Rubicon", 1987, "1987 Honda fourtrax foremen 4x4", "Fourtrax Foreman", "", None), ("atv", "Honda Foreman/Rubicon")),
+    (("utv4", "Xpedition 5 (XP 5 / ADV 5)", 2024, "2024 Polaris expedition adv 1000 northstar", "Xpedition ADV 5", "", 5), ("utv4", "Xpedition 5 (XP 5 / ADV 5)")),
     # 11/21: the Polaris Xpedition is its own model (two were found 1-2 days late and priced as Rangers)
     (("utv4", "Ranger Crew 1000", 2024, "2024 Polaris Xpedition 1000 ADV with plow", "Xpedition ADV", "", 5), ("utv4", "Xpedition 5 (XP 5 / ADV 5)")),
     (("utv4", "Ranger Crew 1000", 2024, "2024 NEW motor!  Polaris xpedition xp5", "Xpedition XP5", "", 5), ("utv4", "Xpedition 5 (XP 5 / ADV 5)")),
@@ -915,6 +924,7 @@ RESOLVE_CASES = [
      ("utv2", "Xpedition (2-seat)")),
     (("utv2", "Ranger XP 1000/1500 (2-seat)", 2024, "2024 Polaris xpedition xp  northstar ultimate 1000", "Xpedition XP", "", 2), ("utv2", "Xpedition (2-seat)")),
     (("atv", "Polaris Sportsman", 2001, "2001 Polaris Xpedition 425", "Xpedition 425", "", None), ("atv", "Polaris Sportsman")),
+    (("atv", "Polaris Sportsman", 2000, "2000 polaris expedition", "Xpedition", "", None), ("atv", "Polaris Sportsman")),
     # 11/16 late finds: a NorthStar filed as a RZR, a General as a Ranger
     (("utv4", "RZR XP 4", 2022, "2022 Polaris xp 1000 northstar ultimate", "XP 1000 Northstar Ultimate", "", 4), ("utv4", "Ranger Crew 1000")),
     (("utv4", "Ranger Crew 1000", 2023, "2023 Polaris General XP 1000 Sport", "General XP 1000 Sport", "", 4), ("utv4", "General 4")),

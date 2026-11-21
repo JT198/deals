@@ -189,7 +189,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 8        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 9        # bump when the rules change: every listing is re-checked once (score.rescore_all)
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Xpedition 5 (XP 5 / ADV 5)": 2024, "Xpedition (2-seat)": 2024, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -307,22 +307,22 @@ SIGNATURES = (
     # Yamaha utility ATVs that are not Grizzlies / Kodiaks, and not sport quads
     ("atv", "Other ATV", r"\b(bruin|big\s?bear|wolverine\s+(350|400|450)|moto-?4)\b", "yamaha", None),
     # Honda FourTrax / Recon without Foreman / Rubicon / Rancher in the ad
-    ("atv", "Other ATV", r"^(?!.*\b(foreman|rubicon|rancher)\b).*\b(fourtrax|four\s?trax|recon)\b", "honda", None),
+    ("atv", "Other ATV", r"^(?!.*\b(forem[ae]n|rubicon|rancher)\b).*\b(fourtrax|four\s?trax|recon)\b", "honda", None),
     # UTVs
     ("utv2", None, r"\bace\s?\d{3}\b|\bpolaris\s+ace\b", "polaris", ("utv2", "utv4")),        # one seat: no family we track
     # the Polaris Xpedition (2024+) is its own model: not a Ranger, a General or - by its name - a Ski-Doo Expedition
-    ("utv4", "Xpedition 5 (XP 5 / ADV 5)", r"^(?!.*\b[34]25\b).*\bx?pedition\b.*\b((xp|adv)\s?-?5|5[\s-]?(seat|pass))|^(?!.*\b[34]25\b).*\b(xp|adv)\s?-?5\b.*\bx?pedition\b",
+    ("utv4", "Xpedition 5 (XP 5 / ADV 5)", r"^(?!.*\b[34]25\b).*\be?xpedition\b.*\b((xp|adv)\s?-?5|5[\s-]?(seat|pass))|^(?!.*\b[34]25\b).*\b(xp|adv)\s?-?5\b.*\be?xpedition\b",
      "polaris", ("utv4", "utv2", "sled", "atv")),
-    ("utv4", "Xpedition 5 (XP 5 / ADV 5)", r"^(?!.*\b[34]25\b).*\bxpedition\b", "polaris", ("utv4",)),
-    ("utv2", "Xpedition (2-seat)", r"^(?!.*\b[34]25\b).*\bxpedition\b", "polaris", ("utv2", "sled", "atv")),
+    ("utv4", "Xpedition 5 (XP 5 / ADV 5)", r"^(?!.*\b[34]25\b).*\be?xpedition\b", "polaris", ("utv4",)),
+    ("utv2", "Xpedition (2-seat)", r"^(?!.*\b[34]25\b).*\be?xpedition\b", "polaris", ("utv2", "sled", "atv")),
     # NorthStar is a Ranger edition; a General is a General (11/16: "xp 1000 northstar ultimate" filed as a RZR XP 4,
     # "General XP 1000 Sport" as a Ranger Crew)
-    ("utv4", "Ranger Crew 1000", r"^(?!.*\b(rzr|general|razor|x?pedition)\b).*\bnorth\s?star\b", "polaris", ("utv4",)),
-    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\b(rzr|general|razor|x?pedition)\b).*\bnorth\s?star\b", "polaris", ("utv2",)),
+    ("utv4", "Ranger Crew 1000", r"^(?!.*\b(rzr|general|razor|e?xpedition)\b).*\bnorth\s?star\b", "polaris", ("utv4",)),
+    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\b(rzr|general|razor|e?xpedition)\b).*\bnorth\s?star\b", "polaris", ("utv2",)),
     ("utv4", "General 4", r"^(?!.*\b(ranger|rzr|razor)\b).*\bgeneral\b", "polaris", ("utv4",)),
     ("utv2", "General 1000 (2-seat)", r"^(?!.*\b(ranger|rzr|razor)\b).*\bgeneral\b", "polaris", ("utv2",)),
-    ("utv4", "Ranger Crew 1000", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b.*\bcrew\b|^(?!.*\brzr\b).*\bcrew\b.*\bhigh\s?lifter\b", "polaris", ("utv2", "utv4")),
-    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\brzr\b).*\bhigh\s?lifter\b", "polaris", ("utv2",)),
+    ("utv4", "Ranger Crew 1000", r"^(?!.*\b(rzr|razor)\b).*\bhigh\s?lifter\b.*\bcrew\b|^(?!.*\b(rzr|razor)\b).*\bcrew\b.*\bhigh\s?lifter\b", "polaris", ("utv2", "utv4")),
+    ("utv2", "Ranger XP 1000/1500 (2-seat)", r"^(?!.*\b(rzr|razor)\b).*\bhigh\s?lifter\b", "polaris", ("utv2",)),
     # jet skis
     ("pwc", "Sea-Doo Spark", r"\btrixx?\b(?!.*\b(rxp|gti|gts)\b)", None, ("pwc",)),
     # Polaris trail sleds the AI filed as utility / touring
@@ -336,16 +336,27 @@ def resolve(category: str | None, family: str | None, year: int | None, title: s
     """(category, family) after checking what the AI read against what the ad says outright."""
     head = f"{title or ''} {model or ''}"
     brands = title_brands(f"{title or ''} {model or ''}") or ({family_brand(family)} if family_brand(family) else set())
-    for cat, fam, rx, brand, only in SIGNATURES:
-        if only and category not in only:
-            continue
-        if fam and (family or "").startswith(("Vintage", "Youth")):
-            continue          # an old or kids' machine stays in its own family; only a category fix applies
-        if brand and brand not in brands:
-            continue
-        if rx.search(head):
-            if fam != family or cat != category:
-                category, family = cat, fam
+    # The seller's title first; the AI's model text only when the title names no model we know (11/21: a
+    # "2022 Polaris General XP" stayed a Ranger because the AI's own text read "Ranger General XP").
+    for text_ in (title or "", model or ""):
+        hit = False
+        for cat, fam, rx, brand, only in SIGNATURES:
+            if only and category not in only:
+                continue
+            if fam and (family or "").startswith(("Vintage", "Youth")):
+                continue          # an old or kids' machine stays in its own family; only a category fix applies
+            if fam and fam.startswith("Xpedition") and year and year < 2024:
+                continue          # the 2000-2002 Xpedition was an ATV
+            if fam == "Polaris Indy/Switchback/Rush (trail/crossover)" and family == "Polaris RMK/Khaos (mountain)":
+                continue          # a mountain sled the AI recognised stays one ("khoas sks", "Rocky Mountain King ... edge")
+            if brand and brand not in brands:
+                continue
+            if rx.search(text_):
+                if fam != family or cat != category:
+                    category, family = cat, fam
+                hit = True
+                break
+        if hit:
             break
     # seats: a "4-seat" machine the ad (or the AI's own seat count) says is a 2-3 seater, and nothing says 4
     said = _WANTS.sub(" ", f"{title or ''} {(description or '')[:1500]}")      # what the seller wrote

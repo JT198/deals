@@ -271,6 +271,24 @@ def test_trailer_utv_fit():
     assert utv_fit(t(len_ft=16, width_ft=7, axles=2, trailer_type="dump")) == "no"
     assert utv_fit(t()) == "unknown"
     assert utv_fit({"category": "utv4"}) is None
+    # 11/21: the top "fits a UTV" card was a 53 ft semi van; a 26,000 lb air-brake trailer and a hay wagon followed
+    assert utv_fit(t(len_ft=53, width_ft=8.5, axles=2, trailer_type="enclosed", height_ft=8.5, title="2017 Utility vs2dk #6330")) == "big"
+    assert utv_fit(t(len_ft=21.5, width_ft=8.5, gvwr_lb=26000, title="Redi-Haul 26k Equipment Trailer")) == "big"
+    assert utv_fit(t(len_ft=19, width_ft=8, title="HD flatbed", description="HD flat bed on 10 ton westendorf gear. Extendable hitch")) == "big"
+    assert utv_fit(t(len_ft=20, width_ft=8, axles=2, title="Flatbed", description="Air brakes, pintle hitch")) == "big"
+    assert utv_fit(t(title="48' dry van storage trailer")) == "big"
+    assert utv_fit(t(len_ft=18, width_ft=7, axles=2, title="Hay wagon with running gear")) == "big"
+    # ... while ordinary big-ish pickup trailers still fit
+    assert utv_fit(t(len_ft=24, width_ft=8.5, axles=2, gvwr_lb=14000, title="24 ft enclosed car hauler", trailer_type="enclosed", height_ft=7)) == "yes"
+    assert utv_fit(t(len_ft=20, width_ft=7, axles=2, gvwr_lb=10000, title="Covered Wagon 20 ft car hauler, semi-gloss black")) == "yes"
+    assert utv_fit(t(len_ft=16, width_ft=7, axles=2, title="16 ft utility", description="Hauled my 53 hp tractor. Brakes on both axles.")) == "yes"
+    # the first wording list also caught these (preview on live data, 11/21): hundreds of ordinary trailers
+    assert utv_fit(t(len_ft=24, width_ft=8.5, axles=2, title="2026 Rock Solid Cargo 8.5 X 24 TA", trailer_type="enclosed", height_ft=7,
+                     description=".080 exterior siding, providing a smooth finish with semi-screwless seams")) == "yes"
+    assert utv_fit(t(len_ft=20, width_ft=6.9, axles=2, gvwr_lb=14000, title="2026 BIG TEX 14EB-20 83x20 14k equipment trailer",
+                     description="RUNNING GEAR: 14,000# GVWR Tandem 7,000# Spring Cambered Axles Electric brakes")) == "yes"
+    assert utv_fit(t(len_ft=22, width_ft=8, axles=2, gvwr_lb=9995, title="2024 Triton lowboy hd 22' x 8' electric brakes enclosed trailer",
+                     trailer_type="enclosed", height_ft=7)) == "yes"
 
 
 def test_trailer_alerts_gate_on_fit():

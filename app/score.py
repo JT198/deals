@@ -680,13 +680,28 @@ def score(listing, expected, comps: int = 0, usage_adjusted: bool = False,
     return max(0, min(100, round(s))), deal_pct, reasons
 
 
+# Not a trailer to pull behind a pickup with a UTV on it. 11/21: the top "fits a UTV" card was a 53 ft semi van
+# (2017 Utility VS2DK), with a 26,000 lb air-brake equipment trailer and a hay-wagon running gear close behind -
+# the fit check had a smallest size and no largest.
+MAX_UTV_TRAILER_FT = 30
+MAX_UTV_TRAILER_GVWR = 16000
+_NOT_PICKUP = re.compile(      # only unambiguous wording: "semi-screwless siding" and a spec sheet's "RUNNING GEAR:" are ordinary trailers
+    r"\bsemi[\s-]?(?:trailer|tractor|truck)\b|\bdry\s?van\b|\breefer\b|\bking\s?pin\b|\bair\s?brakes?\b|\btractor[\s-]trailer\b"
+    r"|\b(?:hay|bale)\s?(?:wagon|rack)\b|\bgravity\s?(?:box|wagon)\b|\b(?:farm\s?wagon|wagon\s?gear)\b"
+    r"|\bwagon\b[^.]{0,30}\brunning\s?gear\b|\brunning\s?gear\b[^.]{0,30}\bwagon\b|\bwestendorf\b|\b\d+\s?ton\b[^.]{0,24}\bgear\b", re.I)
+
+
 def utv_fit(r) -> str | None:
     """Can this trailer carry a 4-seat UTV (~11.5-13.5 ft long, 62-64 in wide, 2,000-2,500 lb)?
-    yes / maybe / no / unknown; None for anything that isn't a trailer."""
+    yes / maybe / no (too small) / big (a semi, farm wagon or heavy-equipment trailer) / unknown;
+    None for anything that isn't a trailer."""
     if _v(r, "category") != "trailer":
         return None
     length, width, height = _v(r, "len_ft"), _v(r, "width_ft"), _v(r, "height_ft")
     axles, gvwr, kind = _v(r, "axles"), _v(r, "gvwr_lb"), _v(r, "trailer_type")
+    if ((length or 0) > MAX_UTV_TRAILER_FT or (gvwr or 0) > MAX_UTV_TRAILER_GVWR
+            or _NOT_PICKUP.search(f"{_v(r, 'title') or ''} {(_v(r, 'description') or '')[:600]}")):
+        return "big"
     if kind == "dump":
         return "no"
     if length is None or width is None:
@@ -704,6 +719,8 @@ FIT_NOTE = {"yes": "Fits a 4-seat UTV (14 ft+ deck, 7 ft wide class, tandem/5,00
             "maybe": "Might fit a 4-seat UTV - check deck length (14 ft+), width between fenders (~80 in), "
                      "capacity (5,000 lb+ GVWR){height}.",
             "no": "Too small or light for a 4-seat UTV - only worth it as a general-purpose trailer.",
+            "big": "A semi, farm-wagon or heavy-equipment trailer (over 30 ft, over 16,000 lb, or air brakes) - "
+                   "not one to pull behind a pickup with a UTV on it.",
             "unknown": "Size not stated - ask for deck length, width between fenders and GVWR."}
 
 

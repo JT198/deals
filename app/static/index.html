@@ -320,7 +320,8 @@ td.t { white-space: normal; min-width: 240px; }
     <ul>
       <li>Every trailer gets a <b>fits a 4-seat UTV</b> check: open deck 14 ft+ (16 ideal), 7 ft wide class
         (~80 in between fenders; UTVs are 62-64 in), tandem axle or 5,000 lb+ GVWR, and ~7 ft inside if enclosed.
-        "May fit" means one of those isn't stated or is borderline - ask the seller.</li>
+        "May fit" means one of those isn't stated or is borderline - ask the seller. Semi trailers, farm wagons
+        and heavy-equipment trailers (over 30 ft, over 16,000 lb, or air brakes) are left out of the buy box.</li>
       <li><b>New-price check (trailers):</b> the finder knows what new trailers of the same type, size and weight class
         list for at dealers. A used one's typical price is capped at 85% of that, and a used trailer priced within 10% of
         new is flagged <b>priced like a new one</b> and can't score above 50. It only sees dealers who post on Marketplace
@@ -806,7 +807,8 @@ function fitTag(d) {
   if (d.category !== "trailer") return "";
   const over = d.gvwr_lb && TOW && d.gvwr_lb > TOW ? `<span class="tag flag">Over truck's ${TOW.toLocaleString()} lb rating if fully loaded</span>` : "";
   const t = { yes: ["plus", "✓ Fits a 4-seat UTV"], maybe: ["", "? May fit a UTV - check size"],
-              no: ["", "Too small for a UTV"], unknown: ["", "Size not stated"] }[d.utv_fit];
+              no: ["", "Too small for a UTV"], big: ["", "Semi / farm / heavy trailer - not for a pickup"],
+              unknown: ["", "Size not stated"] }[d.utv_fit];
   return (t ? `<span class="tag ${t[0]}">${t[1]}</span>` : "") + over;
 }
 // How long a listing has been up, and when that starts to matter (same clocks as the score's fade, score.AGE_FADE)

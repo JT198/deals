@@ -25,7 +25,8 @@ def trailer_size(r) -> str | None:
     bits = [(f"{w:g}x{l:g}" if w and l else f"{l:g} ft" if l else "") + (f" {kind}" if kind else ""),
             {1: "single axle", 2: "tandem"}.get(r["axles"], f"{r['axles']} axles" if r["axles"] else ""),
             f"{r['gvwr_lb']:,} lb" if r["gvwr_lb"] else "", "brakes" if r["brakes"] == 1 else "",
-            {"yes": "✅ fits a 4-seat UTV", "maybe": "may fit a UTV", "no": "too small for a UTV"}.get(r["utv_fit"], "")]
+            {"yes": "✅ fits a 4-seat UTV", "maybe": "may fit a UTV", "no": "too small for a UTV",
+             "big": "semi / farm / heavy trailer"}.get(r["utv_fit"], "")]
     return " · ".join(b.strip() for b in bits if b.strip()) or None
 
 

@@ -39,6 +39,7 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       (5) small-issue listings at 75+ still selling like clean ones.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
+- [ ] Show one card for a cross-posted / reposted listing (alerts and comps already treat them as one machine).
 - [ ] Seat rule follow-ups (11/21): listings re-priced as the 2-seat model still sit in the 4-seat family for the
       sold ratio and the Market tab; "Mule (2-seat)" is one family for small Mules and the full-size Pro-FX / FXR
       (those look 30%+ overpriced); a few typos still slip ("ranger grew"). Re-read the re-priced list ~11/28
@@ -103,6 +104,15 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
   10.6 h ago (20 of 27 past the 6 h target), UTV-fit trailer cards 37 h (all 13 past it), 232 shown cards due. The
   queue's first slots were going to listings the dashboard already hides as long unseen (two trailers unseen 25-30
   days): `shown_candidates` now skips those (`stale_candidates` has them).
+  **Trailers too big (the hand audit, trailer box: all 13 cards at 60+).** The top card (80) was a 53 ft semi van
+  ("2017 Utility VS2DK"), with a 26,000 lb air-brake equipment trailer (70) and a hay-wagon running gear (69)
+  behind it: the UTV-fit check had a smallest size and no largest. `score.utv_fit` now returns "big" (not in the
+  buy box, alerts or digest) over 30 ft, over 16,000 lb GVWR, or on unambiguous wording (semi trailer, dry van,
+  reefer, kingpin, air brakes, hay / gravity wagon). 125 used trailers move out of "fits" (32-34 ft goosenecks,
+  17-24k equipment trailers, semis). The first wording list was wrong and was caught by reading the preview:
+  "semi" matched "semi-screwless siding" on 372 ordinary enclosed trailers and "running gear" matched dealer spec
+  sheets. Also seen, not fixed: the same trailer cross-posted shows as two cards; two reposts of one trailer
+  (128 and 166 days up) both sit in the box at 60.
 
 - 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
   found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median

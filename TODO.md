@@ -39,6 +39,10 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       (5) small-issue listings at 75+ still selling like clean ones.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
+- [ ] Seat rule follow-ups (11/21): listings re-priced as the 2-seat model still sit in the 4-seat family for the
+      sold ratio and the Market tab; "Mule (2-seat)" is one family for small Mules and the full-size Pro-FX / FXR
+      (those look 30%+ overpriced); a few typos still slip ("ranger grew"). Re-read the re-priced list ~11/28
+      (`reasons LIKE '%priced as the 2-seat model%'`) for real 4-seaters.
 - [ ] RZR Pro S 4 sits in the Turbo R 4 family (4 same-age comps); give it its own family once ~15 are listed.
 - [ ] Newly promoted listings (bigger engines that used to look overpriced) showed no faster selling in the
       11/11 outcome check (n=28) - re-check with the next scoring review.
@@ -79,6 +83,22 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
   cards, then suspects. **Models.** Polaris Xpedition is its own family (5-seat + 2-seat; 143 live), searched and in
   the buy box. Age fade continues past 2x its span (a "deal" had been up 470 days). Tests 88.
   Since 11/14: no Facebook pause, 133 dead Great cards removed by the re-checks, trailers found in a median 0.3 h.
+  **Title before the AI's text.** A "2022 Polaris General XP" stayed a Ranger because the AI's own model text read
+  "Ranger General XP": the model check now reads the seller's title first and the AI's text only when the title
+  names no model we know. Also "expedition" spelling, Razor High Lifter, mountain sleds, "foremen".
+  **Seat count (the second hand audit, 4-seat box).** That same General XP then scored 90 at $13,000 against the
+  4-seat going price of $19,000 - the ad never says 4 seats and $13,000 is the 2-seat price. Rule: a listing in a
+  4-seat family whose title + description never say so is priced as the cheaper of the two models, is a comp for
+  the 2-seat family (not the 4-seat one), stays in the 4-seat box, and the card / Telegram lead with "ad doesn't say
+  4 seats - priced as the 2-seat model". First version caught 211 of 4,269 live - a read of all 211 found about
+  half were real 4-seaters saying it in ways the pattern missed ("maxx", "Seats 6", "1000xp4", "Pioneer 1000-5D",
+  "RZR Pro S 4", "turbo 4r", "Z10-4", "6 passengers", "NO TRADES 4 seater"), so it was NOT deployed like that.
+  `categories.says_four` now covers those (+ "rear seats" / "back row" as weak signs that only keep the AI's
+  reading), "Teryx 4x4" is no longer a Teryx4, and what the seller wants or bought ("looking to get into a 2
+  seater") is not what they are selling. Final: ~120 live listings re-priced, nearly all Commander XT, General XP
+  1000, Defender Limited / HD, Mule Pro-FX / FXR, Kawasaki Ridge, 2-seat Xpedition and non-Crew Rangers; 4-seat
+  box 60+ went 144 -> 129; 26 listings changed group (18 CFMoto "XL" 6-seaters into the 4-seat group). Every real
+  title from the audit is in the tests. Lesson: preview on a copy AND read the list before a rule like this ships.
 
 - 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
   found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median

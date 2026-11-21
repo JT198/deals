@@ -189,7 +189,7 @@ FAMILY_CATEGORY = {f: c for c, cfg in CATEGORIES.items() for f in cfg["families"
 # $33k Pro R 4, Maverick R under X3 MAX, 2019 "Turbo S 4" under the 2022+ Turbo R 4, a 2023 Defender under the
 # 2014-2016 Maverick). fix_family() repairs what the title settles and drops the family (no typical price, not a
 # comp) when the model year rules it out.
-FAMILY_FIX_VERSION = 9        # bump when the rules change: every listing is re-checked once (score.rescore_all)
+FAMILY_FIX_VERSION = 10
 _FIRST_YEAR = {"Maverick X3 MAX": 2017, "Maverick X3 (2-seat)": 2017, "Maverick R MAX": 2024, "Maverick R (2-seat)": 2024,
                "Defender MAX": 2016, "Defender (2-seat)": 2016, "RZR Pro XP 4": 2020, "RZR Pro R 4": 2022,
                "RZR Turbo R 4": 2022, "Xpedition 5 (XP 5 / ADV 5)": 2024, "Xpedition (2-seat)": 2024, "Teryx KRX4": 2023, "Wolverine RMAX4": 2021, "Talon 4": 2020, "General 4": 2017}
@@ -284,15 +284,58 @@ TWO_SEAT = {
 }
 FOUR_SEAT = {two: four for four, two in TWO_SEAT.items() if two and four not in ("Pioneer 700-4", "Wolverine RMAX4", "RZR Pro R 4",
                                                                                     "RZR Turbo R 4", "Maverick Trail/Sport MAX", "Teryx KRX4")}
+# Does the seller's text say the machine has 4 or more seats? (11/21 audit of 211 "4-seat" listings whose ads
+# seemed not to say so: about half did, in ways the first pattern missed - "maxx", "Seats 6", "1000xp4",
+# "Pioneer 1000-5D", "RZR Pro S 4", "turbo 4r", "Z10-4", "6 passengers", "NO TRADES 4 seater".)
+_N4 = r"(?:4|four|5|five|6|six)"
+# a bare "4" after an engine size is the model ("RZR 800 4", "Pioneer 1000 5") unless it counts something
+_COUNTED = r"(?!\s*(?:new|brand|good|extra|more|tires?|wheels?|rims?|speakers?|years?|yrs?|months?|days?|hours?|hrs?|miles?|owners?|ply|inch|in\b|x\b))"
 _SEAT4 = re.compile(
-    r"(?<!\br\s)(?<!\br-)\bmax\b(?!\s?-?[23]\b)|\bcrew\b|\bxp\s?-?4\b|\bpro\s?xp\s?-?4|\b(rzr|general|teryx|krx|talon|rmax|wolverine)\s?(xp\s?|pro\s?xp\s?|pro\s?r\s?|turbo\s?r?\s?)?(1000\s?)?-?\s?x?4\b"
-    r"|\bx-?4\b|\b(4|four|5|five|6|six)[\s-]?(seat|seater|seats|passenger|pass|door|person|place|up)\b|\b1000\s?-?[56]\b|\b700\s?-?4\b"
-    r"|\b1000\s?x\s?-?4\b|teryx\s?4|krx\s?4|\bviking\s?vi\b|\bfxt\b|\bs4\b|\b(xp|adv)\s?-?5\b", re.I)
-# "cash for 4 seat ranger", "looking to trade for a crew": what the seller wants, not what they're selling
-_WANTS = re.compile(r"\b(for|want\w*|looking|trade\w*|swap\w*)\s+(for\s+)?(a\s+|an\s+)?[\w-]*\s*[\w-]*\s*(4|four|crew|max)\b[\w\s-]{0,12}", re.I)
+    # the model names
+    r"(?<!\br\s)(?<!\br-)\bmaxx?(?:\b|(?=\d{3,4}\b))(?!\s?-?[23]\b)|\b(?:ranger)?crew\b|\b(?:fxt|dxt)\b|\bmule\b.{0,20}\btrans\b"
+    r"|(?:\b|(?<=\d)|(?<=rzr))xp\s?[ts]?\s?-?4(?:\b|(?=1000\b))|\b4\s?xp\b|\b(?:rxp|xpt|xps)\s?-?4\b"
+    r"|\b(?:rzr|razor|rxr)\s?-?(?:s\s?)?4\b|\b(?:rzr|razor|800|900|700)\s?-?4\s?s\b|\bs4\b"
+    r"|\b(?:rzr|razor|rxr)\s+\w{1,6}\s+4\b" + _COUNTED +
+    r"|\bpro\s?(?:xp|r|s)?\s?-?4\b|\bturbo\s?(?:r|s)?\s?-?4\b|\bturbo\s?4r\b"
+    r"|\bgeneral\s?(?:xp\s?)?(?:1000\s?)?(?:xp\s?)?-?4\b"
+    r"|\b(?:1000|900|800|700)\s?-\s?[456](?:[sdpr]|se|le)?\b|\b(?:1000|900|800|700)\s[456]\b" + _COUNTED +
+    r"|\b1000\s?[xr]s?\s?-?4\b" + _COUNTED + r"|\btalon\s?(?:1000\s?)?[xr]?\s?-?4\b"
+    r"|\bpioneer\s?(?:1000|700)?\s?-?\s?(?:deluxe\s?|flip\s?-?|le\s?|limited\s?|trail\s?|forest\s?)?(?:[456]|100[56]|7004s?)\b"
+    r"|\bdeluxe\s?-?[456]\b|\b(?:1000|700)\s?-?m[456]\b|\bsxs\d{2,3}m[456]"
+    r"|\b(?:teryx|krx|rmax|wolverine|wildcat)\s?-?(?:x\s?|trail\s?|sport\s?)?4(?:s|es|se|le)?\b|\br[\s-]?max\s?-?4\b|\b4\s?max\b|\bx-?4(?:se|xtr|le)?\b|\bviking\s?vi\b"
+    r"|\bz(?:force)?\s?-?(?:10|950|1000)\s?-?4\b|\b(?:sport|trail)\s?-?\s?4d?\b" + _COUNTED + r"|\b(?:uforce|u10|u1000)\b.{0,14}\bxl\b|\bxl\b.{0,14}\b(?:uforce|u10|u1000)\b"
+    r"|\b(?:xp|adv)\s?-?5\b|\bxpedition\s?(?:xp\s?|adv\s?)?5\b"
+    # said outright
+    r"|\b" + _N4 + r"[\s-]*(?:seat|seater|seats|seated|passengers?|passangers?|pass|doors?|person|people|place|up|adults?|bucket\s+seats|seat\s?belts)\b"
+    r"|\bseats?\s+(?:up\s+to\s+)?" + _N4 + r"\b|\bseating\s+for\s+(?:up\s+to\s+)?" + _N4 + r"\b|\brides\s+" + _N4 + r"\b", re.I)
+# a Can-Am "Turbo R MAX" / "Maverick R MAX" is a 4-seater; a Yamaha "R-Max" is the model name of both sizes
+_R_MAX = re.compile(r"\br[\s-]maxx?\b", re.I)
+_YAMAHA = re.compile(r"\b(yamaha|wolverine)\b", re.I)
+# weaker signs: enough to keep the AI's "4-seat" reading, not enough to move a 2-seat listing
+_SEAT4_SOFT = re.compile(r"\b(?:rear|back|second|2nd)\s+(?:flip[\s-]?up\s+)?(?:seats?|seating|row|bench)\b", re.I)
+# numbers that are not a seat count or a model: "4x4", "6x6", "4wd", "4 wheel drive", "4 stroke", "4 point harness"
+_NOT_SEATS = re.compile(r"\b[46]\s?x\s?[46]\b|\b4\s?-?(?:wd|wheel\w*|stroke|ply|speed|point|pt|link|cyl\w*|valve)\b", re.I)
+# what the seller wants or bought instead, not what they're selling: "cash for 4 seat ranger", "looking to trade
+# for a crew", "selling because we bought a 4 seater", "looking to get into a 2 seater". Not "for sale ... crew",
+# "seating for 4", "NO TRADES 4 seater", "don't need a 4 seater" (that one is what they have).
+_WANTS = re.compile(
+    r"\b(?:(?:cash|trad\w+|swap\w*)\s+(?:it\s+)?(?:in\s+)?(?:for|on|towards?)|looking\s+(?:for|at|into)|want\w*|wtb|iso|in\s+search\s+of"
+    r"|upgrad\w+(?:\s+to)?|downsiz\w+\s+to|mov\w+\s+(?:up\s+|down\s+)?to|going\s+to|went\s+(?:to|with)|switch\w*\s+to|get(?:ting)?\s+into"
+    r"|(?:bought|buying|purchas\w+|got|getting|ordered|(?<!n't\s)(?<!n’t\s)(?<!dont\s)(?<!not\s)(?<!longer\s)need\w*)(?=\s+(?:a|an|another)\b))"
+    r"\s+(?:a\s+|an\s+|another\s+)?(?:new\s+|bigger\s+|larger\s+|smaller\s+)?[\w-]*\s*[\w-]*\s*(?:[2-6]|two|three|four|five|six|crew|max)\b[\w\s-]{0,12}", re.I)
+
+
+def says_four(text: str | None, soft: bool = False) -> bool:
+    """The text names a 4-plus-seat model or says so outright. soft: also count "rear seats", "back row"."""
+    c = _NOT_SEATS.sub(" ", text or "")
+    if _SEAT4.search(c) or (_R_MAX.search(c) and not _YAMAHA.search(c)):
+        return True
+    return bool(soft and _SEAT4_SOFT.search(c))
+
+
 _OLD_MAVERICK = re.compile(r"^(?!.*\b(x3|sport|trail|max|r\s?max)\b).*\bmaverick\b", re.I)
 _MAVERICK_1000R = re.compile(r"\b1000\s?r\b", re.I)
-_SEAT2 = re.compile(r"\b(2|two|3|three)[\s-]?(seat|seater|seats|passenger|person)\b", re.I)
+_SEAT2 = re.compile(r"\b(2|two|3|three)[\s-]?(seat|seater|seats|passenger|person)\b|\br[\s-]?max\s?-?2\b|\bwolverine\s?x-?2\b", re.I)
 
 # Model names that settle the family (title + the AI's model text). (category, family or None, pattern, brand).
 # None = no family we track: no typical price rather than a wrong one. Checked in order; first match wins.
@@ -331,6 +374,11 @@ SIGNATURES = (
 SIGNATURES = tuple((cat, fam, re.compile(rx, re.I), brand, only) for cat, fam, rx, brand, only in SIGNATURES)
 
 
+def seats_stated(title: str | None, description: str | None) -> bool:
+    """Does the seller's own text say it is the 4-plus-seat model (MAX, Crew, XP 4, "4 seater", ...)?"""
+    return says_four(_WANTS.sub(" ", f"{title or ''} {(description or '')[:1500]}"), soft=True)
+
+
 def resolve(category: str | None, family: str | None, year: int | None, title: str | None, model: str | None = None,
             description: str | None = None, seats: int | None = None) -> tuple[str | None, str | None]:
     """(category, family) after checking what the AI read against what the ad says outright."""
@@ -361,11 +409,11 @@ def resolve(category: str | None, family: str | None, year: int | None, title: s
     # seats: a "4-seat" machine the ad (or the AI's own seat count) says is a 2-3 seater, and nothing says 4
     said = _WANTS.sub(" ", f"{title or ''} {(description or '')[:1500]}")      # what the seller wrote
     text = f"{model or ''} {said}"
-    if family in TWO_SEAT and not _SEAT4.search(text) and ((seats and seats <= 3) or _SEAT2.search(said)):
+    if family in TWO_SEAT and not says_four(text, soft=True) and ((seats and seats <= 3) or _SEAT2.search(said)):
         family = TWO_SEAT[family]
         category = FAMILY_CATEGORY.get(family, "utv2") if family else "utv2"
     # ...and a "2-seat" one whose title says MAX / Crew / XP 4 / 4-seater
-    elif family in FOUR_SEAT and _SEAT4.search(_WANTS.sub(" ", title or "")) and not _SEAT2.search(said):
+    elif family in FOUR_SEAT and says_four(_WANTS.sub(" ", title or "")) and not _SEAT2.search(said):
         family = FOUR_SEAT[family]
         category = "utv4"
     # a 2-seat Maverick from before the X3 (until 11/16 there was no family for it, so the AI left it blank)

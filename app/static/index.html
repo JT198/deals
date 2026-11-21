@@ -435,7 +435,8 @@ td.t { white-space: normal; min-width: 240px; }
         a title naming another brand drops the model (no typical price rather than a wrong one); a "4-seat" machine
         whose ad says 2-3 seats, and nothing about MAX / Crew / 4 seats, is moved to the 2-seat list (and the reverse);
         model names that settle it (Predator, Fusion, Bruin, Big Bear, FourTrax, High Lifter, Trixx, ...) and snowmobile
-        names in an ATV ad win over the AI's guess.</li>
+        names in an ATV ad win over the AI's guess. When a "4-seat" machine's ad never says it has four seats
+        (no MAX, Crew, XP 4, "4 seater"), it is priced as the cheaper 2-seat model and the card says so.</li>
       <li>Few comps or no model year pull the score toward the middle, because the typical price is less certain.</li>
       <li><b>Instant alerts are for fresh news</b>: a listing posted in the last 7 days (Setup), or one whose seller
         just cut the price. An older listing that drifts over the bar shows on the dashboard without a Telegram.</li>
@@ -873,7 +874,7 @@ function card(d) {
 function cardHtml(d) {
   const was = Math.max(d.strike_price || 0, d.first_price || 0);
   // cautions first: "too good to be true?", "about what similar ones actually sell for", a thin comparison
-  const caution = (d.reasons || []).filter(r => /too good|actually sell for|exact model|year not stated/.test(r));
+  const caution = (d.reasons || []).filter(r => /too good|4 seats|exact model|year not stated/.test(r));
   const safe = d.id.replace(/[^a-z0-9]/gi, ""), open = MORE.has(d.id);
   return `<article class="card">
     <a class="img" data-seen="${esc(d.id)}" href="${esc(d.url)}" target="_blank" rel="noopener" style="${d.image && /^(https?:\/\/|\/img\/)[^'"()\s]+$/.test(d.image) ? `background-image:url('${esc(d.image)}')` : ""}">${d._full && !d.image ? '<span class="nophoto">📷 no photo saved</span>' : ""}

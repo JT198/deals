@@ -10,7 +10,7 @@ from collections import namedtuple
 import statistics
 import time
 
-from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, cfg, is_lawn_tractor, resolve
+from .categories import FAMILY_CATEGORY, FAMILY_FIX_VERSION, TWO_SEAT, cfg, is_lawn_tractor, resolve, seats_stated
 from . import flags as flaglib
 from . import db, usage
 from .variant import min_comps, variant
@@ -195,7 +195,8 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
         """SELECT id, title, family, year, COALESCE(end_price, price) * 1.0 / MAX(1, COALESCE(units, 1)) price,
                   deck_in, CASE WHEN usage_doubt IS NULL THEN miles END miles,
                   CASE WHEN usage_doubt IS NULL THEN hours END hours, len_ft, axles, equipment, track_in, cc,
-                  gvwr_lb, width_ft, category, model, trim, engine, make, location, usage_doubt
+                  gvwr_lb, width_ft, category, model, trim, engine, make, location, usage_doubt,
+                  CASE WHEN category = 'utv4' THEN substr(description, 1, 1500) END said
            FROM listings WHERE relevant = 1 AND family IS NOT NULL
              AND COALESCE(is_new, 0) = """ + ("1" if new else "0") + """ AND COALESCE(end_price, price) >= 300 AND """ +
         # sold comps skip listings with known problems: non-runners and parts machines sell cheap and get marked sold
@@ -208,10 +209,14 @@ def _comps(con, sold: bool = False, new: bool = False) -> dict[str, list[Comp]]:
     reposts = set()
     for r in dedupe_cross_posts(rows):
         mk = machine_key(r)
-        if mk and (r["family"], mk) in reposts:
+        fam = r["family"]
+        # a "4-seat" listing whose ad never says 4 seats is a comp for the 2-seat model, as it is priced (rescore_all)
+        if r["category"] == "utv4" and TWO_SEAT.get(fam) and not seats_stated(r["title"], r["said"]):
+            fam = TWO_SEAT[fam]
+        if mk and (fam, mk) in reposts:
             continue
-        reposts.add((r["family"], mk))
-        by_fam.setdefault(r["family"], []).append(
+        reposts.add((fam, mk))
+        by_fam.setdefault(fam, []).append(
             Comp((r["id"], r["year"], int(r["price"]), r["deck_in"], r["miles"], r["hours"], r["len_ft"], r["axles"],
                   frozenset(json.loads(r["equipment"] or "[]")), r["track_in"], r["cc"], r["gvwr_lb"], r["width_ft"],
                   (db.title_key(r["title"]), int(r["price"])), variant(r), mk)))
@@ -1043,6 +1048,22 @@ def rescore_all(con) -> None:
             r = dict(r)
             r["miles"] = r["hours"] = None
         exp, n, base, note, pre = expected_price(r, comps, effects)
+        price_as = (r["category"], r["family"])
+        # A "4-seat" machine whose ad never says so (no MAX / Crew / XP 4 / "4 seater" in the seller's text): the AI may
+        # be right, but if it is the 2-seat model its price is thousands lower. Priced as whichever is cheaper.
+        # (11/21: a "2022 Polaris General XP" at $13,000 scored 90 against the 4-seat going price of $19,000 -
+        # and $13,000 is what the 2-seat General XP goes for.)
+        two = TWO_SEAT.get(r["family"]) if r["category"] == "utv4" else None
+        unsure_seats = None
+        if two and exp and not seats_stated(r["title"], r["description"]):
+            alt = dict(r)
+            alt.update(family=two, category="utv2")
+            e2, n2, b2, note2, p2 = expected_price(alt, comps, effects)
+            if e2 and e2 < exp:
+                exp, n, base, pre = e2, n2, b2, p2
+                unsure_seats = f"the ad doesn't say it has 4 seats - priced as the 2-seat model ({two})"
+                note = f"{note2}; {unsure_seats}" if note2 else unsure_seats
+                price_as = ("utv2", two)
         new_price, n_new = new_price_for(r, new_comps) if r["is_new"] != 1 else (None, 0)
         if new_price:     # a used one can't be typically worth more than a discount off new
             age = max(0, NOW_YEAR - (r["year"] or NOW_YEAR))
@@ -1059,10 +1080,10 @@ def rescore_all(con) -> None:
         # prices are the last asking price before "sold", so the real sale price is a little lower still.
         sold_exp = sold_n = basis = sold_note = None
         if exp:
-            q, sold_n, basis = sell_ratio_for(sell, r["category"], r["family"])
+            q, sold_n, basis = sell_ratio_for(sell, *price_as)
             if q:
                 sold_exp = int(exp * q)
-                of = f"{sold_n} sold {r['family']}" if basis == "family" else f"{sold_n} sold in this category"
+                of = f"{sold_n} sold {price_as[1]}" if basis == "family" else f"{sold_n} sold in this category"
                 sold_note = (f"The ones that sold were asking about {round((1 - q) * 100)}% under typical asking ({of}): about ${sold_exp:,}."
                              if q < 0.985 else f"The ones that sold were asking about the typical price ({of}).")
             else:
@@ -1070,12 +1091,12 @@ def rescore_all(con) -> None:
         # small known issues (flags.NOTE): 0 = none, 1 = one, 2 = two or more; a real problem is scored instead
         lv = flaglib.of_row(r)
         notes_n = 0 if flaglib.PROBLEM in lv else min(2, lv.count(flaglib.NOTE))
-        staged.append((r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n))
+        staged.append((r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n, unsure_seats))
         if (exp and r["price"] and r["price"] >= 300 and r["year"] and (r["units"] or 1) == 1 and r["is_new"] != 1
                 and flaglib.PROBLEM not in lv and 0.3 <= r["price"] / exp <= 2.5):
             ratios_by.setdefault(_issue_group(r["category"]), {}).setdefault(notes_n, []).append(math.log(r["price"] / exp))
     issue = issue_effects(ratios_by)
-    for r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n in staged:
+    for r, exp, n, base, note, pre, new_price, n_new, sold_exp, sold_n, basis, sold_note, notes_n, unsure_seats in staged:
         if exp and notes_n:
             e = issue.get(_issue_group(r["category"]), NOTE_PRIOR)["one" if notes_n == 1 else "two"]
             adj = int(exp * (1 + e))
@@ -1090,6 +1111,8 @@ def rescore_all(con) -> None:
         s, pct, reasons = score(r, exp, n, usage_adjusted=bool(note and "for use" in note), sold_typical=sold_exp,
                                 new_price=new_price, mixed=bool(note and MIXED_NOTE in note),
                                 days_listed=max(0.0, (now - born) / 86400))
+        if unsure_seats:
+            reasons.insert(0, "ad doesn't say 4 seats - priced as the 2-seat model")
         o = offer(r, exp, pct, n, tow, pace.get(r["family"]), sold_exp, sold_note, new_price)
         fit = utv_fit(r)
         con.execute(

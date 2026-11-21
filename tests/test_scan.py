@@ -35,6 +35,13 @@ notify.send_listing = fake_send_listing
 notify.send_text = fake_send_text
 
 
+def _says_4_seats(row):
+    """Fixture 4-seat machines say so, as real ads do: a "4-seat" listing whose ad never says it has 4 seats is
+    priced, and used as a comp, as the 2-seat model (11/21). A test that wants a silent ad gives a description."""
+    if row.get("category") == "utv4" and "description" not in row:
+        row["description"] = "4 seater"
+
+
 def reset(rows, **settings):
     db.init()
     con = db.connect()
@@ -52,6 +59,7 @@ def reset(rows, **settings):
                     relevant=1, category="utv4", family="RZR XP 4", year=2022, score=80, red_flags="[]",
                     is_dealer=0, is_new=0, reasons="[]")
         base.update(r)
+        _says_4_seats(base)
         cols = ",".join(base)
         con.execute(f"INSERT INTO listings({cols}) VALUES ({','.join('?' * len(base))})", list(base.values()))
     con.commit()
@@ -212,8 +220,8 @@ def _family(con, n=12):
         year, miles = 2021 + i % 3, 1000 + 1000 * i
         price = int(16000 * 1.08 ** (year - 2022) * (1 - 0.025 * miles / 1000))
         con.execute("""INSERT INTO listings(id, source, ext_id, url, title, price, first_seen, last_seen, status,
-                         parsed, relevant, category, family, year, miles, is_new, red_flags, reasons)
-                       VALUES (?, 'facebook', ?, 'u', 'c', ?, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]')""",
+                         parsed, relevant, category, family, year, miles, is_new, red_flags, reasons, description)
+                       VALUES (?, 'facebook', ?, 'u', 'c', ?, ?, ?, 'active', 1, 1, 'utv4', 'RZR XP 4', ?, ?, 0, '[]', '[]', '4 seater')""",
                     (f"facebook:c{i}", f"c{i}", price, t, t, year, miles))
     con.commit()
 
@@ -576,6 +584,7 @@ def _insert(con, rows):
         base = dict(id=f"facebook:k{i}", source="facebook", ext_id=f"k{i}", url="u", title=f"c{i}", first_seen=t, last_seen=t,
                     status="active", parsed=1, relevant=1, is_new=0, red_flags="[]", reasons="[]")
         base.update(r)
+        _says_4_seats(base)
         con.execute(f"INSERT INTO listings({','.join(base)}) VALUES ({','.join('?' * len(base))})", list(base.values()))
     con.commit()
 
@@ -864,6 +873,14 @@ def test_review_1114_age_flags_alert_age_and_tractors():
 # Real titles from the 11/16 hand audit of the 220 best-scoring machines: (category, family the AI chose, year,
 # title, AI model text, description, AI seat count) -> (category, family) after categories.resolve.
 RESOLVE_CASES = [
+    # 11/21 seat audit: "Teryx 4x4" is not a Teryx4; a seller who wants a 2-seater is selling a 4-seater; RMAX2; CFMoto XL; Mule DXT
+    (("utv4", "Teryx4", 2012, "Kawasaki Teryx 4x4", "Teryx", "Runs great, new battery.", 2), ("utv2", "Teryx/KRX 1000 (2-seat)")),
+    (("utv4", "RZR XP 4", 2024, "2024 Polaris 1000 turbo 181 hp", "RZR Sport 1000",
+      "I am just looking to get into a 2 seater as i don't need a 4 seater.", 4), ("utv4", "RZR XP 4")),
+    (("utv4", "Wolverine RMAX4", 2023, "2023 Yamaha RMAX2 1000 limited edition", "RMAX 1000", "2380 miles", 4), ("utv2", "Wolverine X2/RMAX2")),
+    (("utv2", "CFMoto ZForce/UForce (2-seat)", 2024, "2024 CFMoto uforce 1000 xl", "UForce 1000 XL", "", None), ("utv4", "CFMoto ZForce/UForce 4-seat")),
+    (("utv2", "Mule (2-seat)", 2024, "2024 Kawasaki mule pro-dxt diesel utv", "Mule Pro-DXT", "", None), ("utv4", "Mule Pro-FXT")),
+    (("utv2", "RZR XP 1000/Turbo (2-seat)", 2016, "2016 Polaris  RZRXP4 turbo", "RZR XP Turbo", "", None), ("utv4", "RZR XP 4")),
     (("atv", "Polaris Sportsman", 2003, "2003 Polaris predator 500cc", "Predator 500", "", None), ("atv", "Other ATV")),
     (("atv", "Polaris Sportsman", 2007, "2007 Polaris fusion 700", "Fusion 700", "", None), ("atv", "Other ATV")),
     (("atv", "Polaris Sportsman", 2000, "2000 Polaris x90", "x90", "", None), ("atv", "Youth ATV (under 150cc)")),
@@ -1017,6 +1034,62 @@ def test_review_1121_budget_removals_and_ring():
     due = scan.ring_due(con, db.settings(con))
     assert ("duluth", "ranger crew", "utv4") not in due and due[-1] == ("mankato", "ranger crew", "utv4"), due
     assert "polaris xpedition" in {r[0] for r in con.execute("SELECT query FROM searches WHERE quick = 1")}
+
+
+def test_silent_four_seater_is_priced_as_the_two_seat_model():
+    """11/21: a "2022 Polaris General XP" at $13,000 scored 90 in the 4-seat box; the ad never says 4 seats and
+    $13,000 is the 2-seat General's price. Without the seller saying so, the cheaper model is the yardstick."""
+    from app import score
+    from app.categories import seats_stated
+    assert seats_stated("2022 Polaris General XP 4 1000", "") and seats_stated("2022 General XP", "great 4 seater for the family")
+    assert seats_stated("2021 Can-Am Defender MAX", None) and seats_stated("2020 Ranger crew", None)
+    assert not seats_stated("2022 Polaris General XP", "Runs good, no issues. Around 2000 miles.")
+    assert not seats_stated("2022 Polaris General XP 4x4", "looking to trade for a 4 seater")
+    # the 11/21 hand audit: every way a real 4-seater's ad said so that the first pattern missed ...
+    for title in ("2027 CFMOTO ZFORCE Z10-4", "2026 CFmoto u10 pro xl highland", "2015 can am maverick maxx xrs dps",
+                  "2021 CAN AM MAVERICK DS TURBO R MAX", "2022 Can Am Maverick X3 Turbo Maxx1000", "2025 Kawasaki Mule Pro-DXT Diesel",
+                  "2026 Venom EV Stealth 4 - Seater Non-Lifted", "2026 HONDA SXS10M5DT used", "2026 Honda Pioneer 1000-5D Deluxe",
+                  "2022 Honda Pioneer 5 1000", "2016 Honda Pioneer 1005", "Honda Pioneer Deluxe5", "2019 honda pioneer 7004s",
+                  "2013 Polaris rzr 800 4 s", "2025 Polaris pro 4 s sport", "2022 Polaris Pro R4 Launch Edition", "2022 Polaris RZR Pro 4",
+                  "2025 Polairs rzr pro s 4", "2024 Polaris turbo 4r premium", "2022 Polaris RZR 4xp 1000", "2018 Polaris 1000xp4",
+                  "2019 Polaris  Xp41000", "2018 RZR  XPT4 ESP dynamics", "2021 Polaris rzr xp turbo 4", "2016 Polaris  RZRXP4 turbo",
+                  "2020 Polaris  Rzr cp 4 1000", "2023 Polaris RangerCrew XP1000 Northstar Ult.", "2024 Yamaha wolverine 4max",
+                  "2024 Kawasaki krx4es", "Kawasaki Teryx 4S 800", "2026 POLARIS XPEDITION 5 NORTHSTAR", "2024 Polaris Razor 4 XP1000 Sport",
+                  "2026 CFMOTO ZForce 950 Sport-4 Lifetime Engine Warranty", "2026 CF MOTO       Z FORCE 950 SPORT - 4"):
+        assert seats_stated(title, ""), title
+    for said in ("Seats 6 or 4 comfortably!", "with seating for six.", "4 bucket seats. Front brush guard", "Can seat up to 4",
+                 "NO TRADES 4 seater side by side.", "Seats 6 passengers 3 year warranty", "Diesel Cushman with back row seating.",
+                 "5 passanger utv with many extras", "Have the rear seats also", "For sale ranger crew 1000",
+                 "looking to get into a 2 seater as i don't need a 4 seater"):
+        assert seats_stated("2020 Polaris utv", said), said
+    # ... and the 2- and 3-seat models that must stay "not stated"
+    for title in ("2022 Polaris General 1000 XP", "2023 Polaris General XP 1000 Premium EX-L", "2026 Can Am commander xt 1000r",
+                  "2014 Can Am Commander 1000 Limited 4x4", "2026 CAN-AM defender  6x6 limited cab hd10", "2021 CAN-AM Maverick X3 DS Turbo R",
+                  "2024 Kawasaki Mule Pro-Fx 1000 HD Edition", "Kawasaki Teryx 4x4", "2016 Honda Pioneer 1000", "2014 Polaris rzr",
+                  "2021 Polaris northstar xp 1000", "2024 Polaris Xpedition XP NorthStar", "2022 Yamaha Wolverine rmax 1000 limited edition",
+                  "2022 Polaris Ranger 1000 4 new tires", "2019 Polaris RZR XP 1000 4 point harnesses",
+                  "2022 Maverick Sport 1000r 4 new tires", "2023 Can-Am Maverick Sport 4x4"):
+        assert not seats_stated(title, ""), title
+    for said in ("Selling because we bought a 4 seater", "upgrading to a crew", "cash for 4 seat ranger", "need a 6 seater for the family now",
+                 "Third seat in front row. 5k miles.", "heated seats, 4500 lb winch", "Wet sounds 4 speaker sound bar"):
+        assert not seats_stated("2020 Polaris utv", said), said
+    con = reset([])
+    t = db.now()
+    _insert(con, [dict(category="utv4", family="General 4", year=2022, price=19000 + 50 * i, title=f"general xp 4 {i}", listed_at=t - 3600) for i in range(9)]
+            + [dict(category="utv2", family="General 1000 (2-seat)", year=2022, price=14000 + 50 * i, title=f"general xp 1000 {i}", listed_at=t - 3600) for i in range(9)]
+            + [dict(id="facebook:silent", ext_id="silent", category="utv4", family="General 4", year=2022, price=13000,
+                    title="2022 Polaris General XP", description="Runs good, no issues.", listed_at=t - 3600),
+               dict(id="facebook:said", ext_id="said", category="utv4", family="General 4", year=2022, price=13000,
+                    title="2022 Polaris General XP 4", description="Runs good, no issues.", listed_at=t - 3600)])
+    score.rescore_all(con)
+    got = {r["id"]: r for r in con.execute("SELECT id, expected, score, reasons, usage_note, family, category FROM listings")}
+    silent, said = got["facebook:silent"], got["facebook:said"]
+    assert said["expected"] > 18500 and said["score"] >= 85, dict(said)
+    assert silent["expected"] < 15000 and silent["score"] < 65 and "priced as the 2-seat model" in silent["reasons"], dict(silent)
+    assert "2-seat model (General 1000 (2-seat))" in silent["usage_note"] and (silent["family"], silent["category"]) == ("General 4", "utv4")
+    comps = score._comps(con)
+    assert "facebook:silent" in {c.id for c in comps["General 1000 (2-seat)"]} and "facebook:silent" not in {c.id for c in comps["General 4"]}
+    assert "facebook:said" in {c.id for c in comps["General 4"]}
 
 
 def test_parse_pwc_and_sled_fields():

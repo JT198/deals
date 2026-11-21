@@ -890,7 +890,7 @@ function cardHtml(d) {
       ${dealLine(d)}
       <div class="facts">${facts(d)}</div>
       <div class="tags">${d.stage ? `<span class="tag plus">${esc(STAGE_LABEL[d.stage] || d.stage)}${d.stage_ts ? " " + ago(d.stage_ts) : ""}</span>` : ""}${
-        ageChip(d)}${confirmChip(d)}${caution.map(r => `<span class="tag warn">⚠ ${esc(r.replace(/ - compared across the family/, ""))}</span>`).join("")}${
+        ageChip(d)}${confirmChip(d)}${d.copies > 1 ? `<span class="tag" title="The same ad is posted ${d.copies} times (another site, a repost or a duplicate); shown once">Posted ${d.copies}×</span>` : ""}${caution.map(r => `<span class="tag warn">⚠ ${esc(r.replace(/ - compared across the family/, ""))}</span>`).join("")}${
         flagChips(d)}${fitTag(d)}${d.alerted_score != null ? `<span class="tag" title="Sent to Telegram at score ${d.alerted_score}">🔔 alerted</span>` : ""}${
         d.notes ? `<span class="tag note" title="${esc(d.notes)}">📝 note</span>` : ""}</div>
       <div class="actions">

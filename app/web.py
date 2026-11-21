@@ -205,15 +205,16 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
         hit = _LISTINGS_CACHE.get(where_sql)
         if not hit or hit["key"] != key:
             dist = _geo(con)
-            out = []
+            shown = []
             for r in con.execute(f"SELECT {LIST_COLS} FROM listings WHERE {where_sql}").fetchall():
                 d = _card(r, dist)
                 if max_mi and d.get("distance") is not None and d["distance"] > max_mi and not d.get("starred"):
                     continue        # too far to drive for; still a comp for pricing nearby ones
                 if d.get("source") == "facebook" and (d.get("last_seen") or 0) < unseen_before and not d.get("starred"):
                     continue        # probably deleted (see above)
-                # only what the filters, table and map need; a card's details come from /api/cards when shown
-                out.append({k: d[k] for k in LIGHT if k in d})
+                shown.append(d)
+            # only what the filters, table and map need; a card's details come from /api/cards when shown
+            out = [{k: d[k] for k in LIGHT if k in d} for d in one_card_per_machine(shown)]
             body = json.dumps(out, separators=(",", ":")).encode()
             hit = _LISTINGS_CACHE[where_sql] = {"key": key, "gz": gzip.compress(body, 5),
                                                 "etag": '"' + hashlib.md5(body).hexdigest() + '"',
@@ -230,7 +231,35 @@ def listings(request: Request, include_gone: int = 0, include_irrelevant: int = 
 LIGHT = ("id", "source", "category", "family", "model", "year", "price", "score", "comps", "deal_pct", "expected",
          "distance", "lat", "lon", "approx", "location", "title", "url", "dealer", "status", "hidden", "starred",
          "stage", "notes", "feedback", "listed_at", "first_seen", "detail_misses", "is_new", "utv_fit", "miles",
-         "hours", "offer_aim", "alerted_score", "cut_at", "expected_sold")
+         "hours", "offer_aim", "alerted_score", "cut_at", "expected_sold", "copies")
+
+
+def one_card_per_machine(cards: list[dict]) -> list[dict]:
+    """The same machine posted more than once (both sites, a repost, a dealer's duplicate ads) is one card with
+    "posted N times" - 11/21: one trailer filled two of the 13 cards in the trailer box. Same rule as the alerts
+    (scan.first_copy): same title + price, and the other site or the same town; plus the same year and length.
+    Kept: the one Jon starred, staged or wrote a note on, else the one confirmed most recently. A copy he has
+    touched is never dropped."""
+    groups: dict[tuple, list[dict]] = {}
+    for d in cards:
+        groups.setdefault((db.title_key(d.get("title")), d.get("price"), d.get("year"), d.get("len_ft")), []).append(d)
+    out = []
+    for key, group in groups.items():
+        if len(group) == 1 or not key[0] or not key[1]:
+            out.extend(group)
+            continue
+        touched = lambda d: bool(d.get("starred") or d.get("stage") or d.get("notes"))
+        group.sort(key=lambda d: (touched(d), d.get("status") == "active", max(d.get("last_seen") or 0, d.get("last_checked") or 0)), reverse=True)
+        kept = []
+        for d in group:
+            same = [k for k in kept if k.get("source") != d.get("source")
+                    or (k.get("location") or "").lower() == (d.get("location") or "").lower()]
+            if same and not touched(d):
+                same[0]["copies"] = same[0].get("copies", 1) + 1
+            else:
+                kept.append(d)
+        out.extend(kept)
+    return out
 
 
 def _card(r, dist) -> dict:

@@ -39,7 +39,8 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
       (5) small-issue listings at 75+ still selling like clean ones.
 - [ ] Mowers: 54% of ads give no model year, so they are compared across all years (score already damped).
       Series matching (11/11) cut false "Great"s 61 -> 32; a year guess from the model number would be next.
-- [ ] Show one card for a cross-posted / reposted listing (alerts and comps already treat them as one machine).
+- [ ] Reposts under a different title (the same trailer as "Trailer" and "2013 Tandem Axle cargo/utility trailer",
+      128 and 166 days up) still show as two cards; `score.machine_key` could fold those too.
 - [ ] Seat rule follow-ups (11/21): listings re-priced as the 2-seat model still sit in the 4-seat family for the
       sold ratio and the Market tab; "Mule (2-seat)" is one family for small Mules and the full-size Pro-FX / FXR
       (those look 30%+ overpriced); a few typos still slip ("ranger grew"). Re-read the re-priced list ~11/28
@@ -111,8 +112,11 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
   reefer, kingpin, air brakes, hay / gravity wagon). 125 used trailers move out of "fits" (32-34 ft goosenecks,
   17-24k equipment trailers, semis). The first wording list was wrong and was caught by reading the preview:
   "semi" matched "semi-screwless siding" on 372 ordinary enclosed trailers and "running gear" matched dealer spec
-  sheets. Also seen, not fixed: the same trailer cross-posted shows as two cards; two reposts of one trailer
-  (128 and 166 days up) both sit in the box at 60.
+  sheets.
+  **One card per listing.** The same ad posted more than once (other site, repost, a dealer's duplicates) is one
+  card with a "Posted N×" chip (`web.one_card_per_machine`: same title + price + year + length, and the other site
+  or the same town - the alerts' rule; a copy Jon starred / staged / noted always stays). 1,149 of 26,016 cards
+  fold away, 883 of them new dealer stock (one trailer SKU was up 16 times). Tests 90.
 
 - 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
   found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median

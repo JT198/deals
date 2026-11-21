@@ -485,6 +485,28 @@ def test_recheck_order_what_jon_sees_then_suspects():
     assert ids[:4] == ["facebook:box", "facebook:great-older", "facebook:great", "facebook:suspect"], ids
 
 
+def test_one_card_for_a_listing_posted_twice():
+    """11/21: one trailer, cross-posted, filled two of the 13 cards in the trailer box. Same title + price + year +
+    length and (the other site or the same town) is one card with "Posted 2x"; a copy Jon touched always stays."""
+    base = dict(category="trailer", family="Open utility (rails / mesh sides)", title="Heavy-Duty Dual-Axle Flatbed Utility Trailer",
+                price=1000, len_ft=14, score=73, location="Mora, MN", year=None)
+    con = reset([dict(base, id="facebook:a", ext_id="a"),
+                 dict(base, id="facebook:b", ext_id="b", last_seen=db.now() + 5),                 # same town: the same ad again
+                 dict(base, id="craigslist:c", ext_id="c", source="craigslist", location="Hinckley"),  # the other site
+                 dict(base, id="facebook:d", ext_id="d", location="Duluth, MN"),                   # another town: another trailer
+                 dict(base, id="facebook:e", ext_id="e", price=1100),                               # another price
+                 dict(base, id="facebook:f", ext_id="f", starred=1),                                # Jon starred this copy
+                 dict(base, id="facebook:g", ext_id="g", len_ft=18)])                               # another size
+    got = {d["id"]: d for d in client().get("/api/listings").json()}
+    assert set(got) == {"facebook:f", "facebook:d", "facebook:e", "facebook:g"}, sorted(got)
+    assert got["facebook:f"]["copies"] == 4 and "copies" not in got["facebook:d"], got["facebook:f"]
+    con.execute("UPDATE listings SET starred = 0 WHERE id = 'facebook:f'")
+    con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('listings_rev', 'unstarred')")       # the feed is cached per revision
+    con.commit()
+    got = {d["id"]: d for d in client().get("/api/listings").json()}
+    assert "facebook:b" in got and got["facebook:b"]["copies"] == 4 and "facebook:f" not in got, sorted(got)   # the freshest sighting
+
+
 def test_gone_button():
     from fastapi.testclient import TestClient
     from app import web

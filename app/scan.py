@@ -166,7 +166,9 @@ GREAT_SCORE = 75
 
 def shown_candidates(con, limit: int) -> list:
     """Listings on screen whose last confirmation is getting old: the buy box first, then Great cards anywhere,
-    oldest confirmation first within each, so nothing starves behind the top scores."""
+    oldest confirmation first within each, so nothing starves behind the top scores. Not the ones the dashboard
+    already hides as long unseen (stale_candidates has those): on 11/21 two trailers unseen for 25-30 days were
+    first in line, ahead of every card on screen."""
     st = db.settings(con)
     rules = db.alert_rules(st)
     radius = int(st.get("radius_mi") or 100)
@@ -174,8 +176,9 @@ def shown_candidates(con, limit: int) -> list:
     now = db.now()
     rows = con.execute(
         """SELECT * FROM listings WHERE source='facebook' AND detail_fetched=1 AND status IN ('active','pending')
-             AND relevant = 1 AND hidden = 0 AND score >= ? AND MAX(last_seen, COALESCE(last_checked, 0)) < ?""",
-        (min(BOX_SCORE, GREAT_SCORE), now - min(BOX_CONFIRM_SECS, GREAT_CONFIRM_SECS))).fetchall()
+             AND relevant = 1 AND hidden = 0 AND score >= ? AND MAX(last_seen, COALESCE(last_checked, 0)) < ?
+             AND (last_seen >= ? OR starred = 1)""",
+        (min(BOX_SCORE, GREAT_SCORE), now - min(BOX_CONFIRM_SECS, GREAT_CONFIRM_SECS), now - stale_after(st))).fetchall()
     box, great = [], []
     for r in rows:
         rule = rules.get(r["category"]) or {}

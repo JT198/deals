@@ -449,13 +449,21 @@ def test_recheck_order_what_jon_sees_then_suspects():
                  dict(base, id="facebook:box", ext_id="box", score=65, category="utv4", family="RZR XP 4"),
                  dict(base, id="facebook:box-seen", ext_id="box-seen", score=95, category="utv4", family="RZR XP 4", last_seen=t - 600),
                  dict(base, id="facebook:sled-good", ext_id="sled-good", score=65, category="sled"),
-                 dict(base, id="facebook:suspect", ext_id="suspect", score=30, detail_misses=1)])
+                 dict(base, id="facebook:suspect", ext_id="suspect", score=30, detail_misses=1),
+                 # unseen for 30 days: the dashboard already hides it, so it does not go ahead of cards on screen
+                 dict(base, id="facebook:box-hidden", ext_id="box-hidden", score=70, category="utv4", family="RZR XP 4",
+                      last_seen=t - 30 * 86400, last_checked=t - 30 * 86400),
+                 dict(base, id="facebook:box-hidden-starred", ext_id="box-hidden-starred", score=70, category="utv4", family="RZR XP 4",
+                      last_seen=t - 30 * 86400, last_checked=t - 20 * 3600, starred=1)])
     con.execute("UPDATE settings SET value = ? WHERE key = 'alert_rules'", (json.dumps({"utv4": {"enabled": True}, "sled": {"enabled": False}}),)); con.commit()
     shown = [r["id"] for r in scan.shown_candidates(con, 10)]
+    assert "facebook:box-hidden" not in shown and "facebook:box-hidden-starred" in shown, shown
+    shown.remove("facebook:box-hidden-starred")
     # the buy box first; then Great cards anywhere, oldest confirmation first; a search 10 min ago is confirmation
     assert shown == ["facebook:box", "facebook:great-older", "facebook:great"], shown
     ids = [r["id"] for r in scan.recheck_candidates(con)]
     # 11/21: what Jon sees goes first; listings that failed to load once follow (they used to take 20 slots a scan)
+    ids = [i for i in ids if i != "facebook:box-hidden-starred"]       # starred ones are re-checked every scan anyway
     assert ids[:4] == ["facebook:box", "facebook:great-older", "facebook:great", "facebook:suspect"], ids
 
 

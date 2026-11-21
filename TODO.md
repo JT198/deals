@@ -99,6 +99,10 @@ Live site: https://deals.alerolabs.ai · code on .76 at /home/jon/dev/deals · `
   1000, Defender Limited / HD, Mule Pro-FX / FXR, Kawasaki Ridge, 2-seat Xpedition and non-Crew Rangers; 4-seat
   box 60+ went 144 -> 129; 26 listings changed group (18 CFMoto "XL" 6-seaters into the 4-seat group). Every real
   title from the audit is in the tests. Lesson: preview on a copy AND read the list before a rule like this ships.
+  **Re-check queue.** Measured 35 min after the page-share fix went live: 4-seat box cards last confirmed a median
+  10.6 h ago (20 of 27 past the 6 h target), UTV-fit trailer cards 37 h (all 13 past it), 232 shown cards due. The
+  queue's first slots were going to listings the dashboard already hides as long unseen (two trailers unseen 25-30
+  days): `shown_candidates` now skips those (`stale_candidates` has them).
 
 - 11/16 Find buy-box listings faster. Baseline (Facebook, private, posted in the 21 days to 11/16): 4-seat box n=66,
   found a median 0.8 h after posting, 75th pct 14.8 h, 90th 43 h (23 within 30 min); UTV-fit trailers n=99, median
